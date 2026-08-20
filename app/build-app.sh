@@ -34,10 +34,28 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key><string>MortalShell2MacFix</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
 </dict></plist>
 PLIST
+
+echo "==> icon"
+if [ -f "$HERE/AppIcon.icns" ]; then
+  cp "$HERE/AppIcon.icns" "$RES/AppIcon.icns"
+elif command -v rsvg-convert >/dev/null && [ -f "$HERE/icon.svg" ]; then
+  # Regenerate from source if the prebuilt icns is missing.
+  SET="${TMPDIR:-/tmp}/ms2-icon.iconset"
+  rm -rf "$SET"; mkdir -p "$SET"
+  for s in 16 32 128 256 512; do
+    rsvg-convert -w "$s" -h "$s" "$HERE/icon.svg" -o "$SET/icon_${s}x${s}.png"
+    rsvg-convert -w "$((s*2))" -h "$((s*2))" "$HERE/icon.svg" -o "$SET/icon_${s}x${s}@2x.png"
+  done
+  iconutil -c icns "$SET" -o "$RES/AppIcon.icns"
+  rm -rf "$SET"
+else
+  echo "    note: no icon (install librsvg, or keep AppIcon.icns in app/)"
+fi
 
 echo "==> bundling scripts"
 cp "$ROOT/scripts/transcode-movies.sh" "$ROOT/scripts/pak-hide-videos.py" "$RES/"

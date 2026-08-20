@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- MortalShell2MacFix app icon.
+       Original artwork: a weathered helm split by a repaired amber seam.
+       The seam is the fix; the ochre eye is the itsomax mark.
+       SPDX-License-Identifier: GPL-3.0-or-later -->
+  <defs>
+    <linearGradient id="ground" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0"    stop-color="#343A40"/>
+      <stop offset="0.5"  stop-color="#1D2126"/>
+      <stop offset="1"    stop-color="#0D1013"/>
+    </linearGradient>
+
+    <linearGradient id="stoneL" x1="0" y1="0" x2="1" y2="0.9">
+      <stop offset="0"   stop-color="#D6CFC0"/>
+      <stop offset="0.6" stop-color="#A79E8B"/>
+      <stop offset="1"   stop-color="#6B6454"/>
+    </linearGradient>
+    <linearGradient id="stoneR" x1="1" y1="0" x2="0" y2="0.9">
+      <stop offset="0"   stop-color="#BDB6A6"/>
+      <stop offset="0.6" stop-color="#8E8674"/>
+      <stop offset="1"   stop-color="#585243"/>
+    </linearGradient>
+
+    <linearGradient id="seam" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"   stop-color="#FFD37A"/>
+      <stop offset="0.45" stop-color="#F0A028"/>
+      <stop offset="1"   stop-color="#B4530F"/>
+    </linearGradient>
+
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0"   stop-color="#F0A028" stop-opacity="0.34"/>
+      <stop offset="0.55" stop-color="#E08A18" stop-opacity="0.08"/>
+      <stop offset="1"   stop-color="#E08A18" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- macOS icon plate: 824x824 inset, corner radius ~185 -->
+    <clipPath id="plate">
+      <rect x="100" y="100" width="824" height="824" rx="185" ry="185"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#plate)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#ground)"/>
+    <ellipse cx="512" cy="530" rx="330" ry="360" fill="url(#glow)"/>
+
+    <!-- Helm, left half: flat crown, angular cheek, tapered chin -->
+    <path d="M500 226
+             L 360 268
+             L 300 400
+             L 296 560
+             L 340 700
+             L 428 790
+             L 500 812
+             Z"
+          fill="url(#stoneL)"/>
+
+    <!-- Helm, right half -->
+    <path d="M524 226
+             L 664 268
+             L 724 400
+             L 728 560
+             L 684 700
+             L 596 790
+             L 524 812
+             Z"
+          fill="url(#stoneR)"/>
+
+    <!-- Brow shadow -->
+    <path d="M300 400 L 500 356 L 524 356 L 724 400 L 724 436 L 524 396 L 500 396 L 300 436 Z"
+          fill="#0D1013" opacity="0.42"/>
+
+    <!-- Eye slits -->
+    <path d="M338 486 L 470 462 L 470 528 L 348 540 Z" fill="#0B0E11"/>
+    <path d="M686 486 L 554 462 L 554 528 L 676 540 Z" fill="#0B0E11"/>
+
+    <!-- Weathering -->
+    <g stroke="#3E3A31" stroke-width="10" stroke-linecap="round" opacity="0.5" fill="none">
+      <path d="M352 300 L 392 342"/>
+      <path d="M318 596 L 356 648"/>
+      <path d="M672 306 L 634 350"/>
+      <path d="M706 604 L 668 654"/>
+    </g>
+
+    <!-- The seam: the repair -->
+    <path d="M512 208 L 486 340 L 534 452 L 480 596 L 528 706 L 512 830"
+          stroke="#0B0E11" stroke-width="46" stroke-linejoin="round" stroke-linecap="round" fill="none" opacity="0.55"/>
+    <path d="M512 208 L 486 340 L 534 452 L 480 596 L 528 706 L 512 830"
+          stroke="url(#seam)" stroke-width="30" stroke-linejoin="round" stroke-linecap="round" fill="none"/>
+    <path d="M512 208 L 486 340 L 534 452 L 480 596 L 528 706 L 512 830"
+          stroke="#FFE7B4" stroke-width="9" stroke-linejoin="round" stroke-linecap="round" fill="none" opacity="0.8"/>
+
+    <!-- itsomax mark: the lit core -->
+    <circle cx="512" cy="452" r="62" fill="#0B0E11"/>
+    <circle cx="512" cy="452" r="42" fill="url(#seam)"/>
+    <circle cx="512" cy="452" r="18" fill="#FFF0CE"/>
+  </g>
+</svg>
