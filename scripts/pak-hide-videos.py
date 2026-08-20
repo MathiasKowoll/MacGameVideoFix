@@ -186,8 +186,18 @@ def apply(pak, exts, dry_run):
         f.flush()
         os.fsync(f.fileno())
 
+    # Record enough to prove, on restore, that this is still the file we
+    # patched. A game update replaces the pak in place: without these checks a
+    # later --restore would truncate the *new* pak to the *old* size and
+    # destroy it.
+    patched_size = os.path.getsize(pak)
     with open(meta, "w") as fh:
-        json.dump({"original_size": original_size, "removed": len(removed)}, fh)
+        json.dump({
+            "original_size": original_size,
+            "patched_size": patched_size,
+            "footer_sha1": hashlib.sha1(bytes(new_footer)).hexdigest(),
+            "removed": len(removed),
+        }, fh)
     print(f"\ndone: {original_size} -> {os.path.getsize(pak)} bytes")
     print("the engine will now read the loose files in Content/Movies")
 
@@ -196,10 +206,62 @@ def restore(pak):
     meta = meta_path(pak)
     if not os.path.exists(meta):
         raise PakError("no record of a previous patch for this pak")
+
     with open(meta) as fh:
-        original_size = json.load(fh)["original_size"]
+        record = json.load(fh)
+    original_size = record["original_size"]
+    current_size = os.path.getsize(pak)
+
+    # Records written before this check existed only had original_size. Treat a
+    # missing patched_size as "unverifiable" rather than trusting it.
+    patched_size = record.get("patched_size")
+    footer_sha1 = record.get("footer_sha1")
+
+    replaced_hint = (
+        "The pak is not the one this tool patched -- a game update or a Steam "
+        "file verification most likely replaced it.\n"
+        "Nothing was changed. Delete the stale record and re-apply if you want "
+        "the fix back:\n"
+        f"  rm {meta}"
+    )
+
+    if patched_size is None or footer_sha1 is None:
+        # Old record. Fall back to structural checks: the file must still carry
+        # the index we appended, and the original footer must sit exactly where
+        # we would truncate to.
+        if current_size <= original_size:
+            raise PakError(
+                f"this pak is {current_size} bytes, not larger than the "
+                f"recorded original of {original_size}.\n" + replaced_hint)
+    else:
+        if current_size != patched_size:
+            raise PakError(
+                f"this pak is {current_size} bytes; the patch left it at "
+                f"{patched_size}.\n" + replaced_hint)
+        with open(pak, "rb") as f:
+            f.seek(current_size - FOOTER_SIZE)
+            if hashlib.sha1(f.read(FOOTER_SIZE)).hexdigest() != footer_sha1:
+                raise PakError("the pak's footer is not the one we wrote.\n"
+                               + replaced_hint)
+
+    # Whatever the record said, only truncate if a valid original footer is
+    # actually sitting at that offset. This is the check that would have
+    # prevented cutting a replaced pak short.
+    with open(pak, "rb") as f:
+        try:
+            read_footer(f, original_size)
+        except PakError as err:
+            raise PakError(
+                f"truncating to {original_size} would not leave a valid pak "
+                f"({err}).\n" + replaced_hint)
+
     with open(pak, "r+b") as f:
         f.truncate(original_size)
+
+    # Confirm the result really is a working pak before dropping the record.
+    with open(pak, "rb") as f:
+        read_footer(f, original_size)
+
     os.remove(meta)
     print(f"restored to {original_size} bytes")
 

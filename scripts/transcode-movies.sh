@@ -45,11 +45,30 @@ fi
 command -v ffmpeg  >/dev/null || { echo "error: ffmpeg not found. brew install ffmpeg" >&2; exit 1; }
 command -v ffprobe >/dev/null || { echo "error: ffprobe not found. brew install ffmpeg" >&2; exit 1; }
 
-# Back up once. If the backup exists we assume a previous run made it.
-if [ ! -d "$BACKUP" ]; then
-  echo "backing up originals to Movies_VP9_backup/ ..."
-  cp -R "$MOVIES" "$BACKUP"
-fi
+# Refresh the backup from whatever is currently an original.
+#
+# A game update replaces Content/Movies with fresh VP9 files and can change
+# their contents, so "back up once and never again" would leave us transcoding
+# a stale copy. The codec tells us which is which: VP9/VP8 in Movies/ means an
+# untouched original worth backing up, H.264 means our own earlier output,
+# which must never overwrite the backup.
+mkdir -p "$BACKUP"
+refreshed=0
+while IFS= read -r -d '' f; do
+  rel="${f#"$MOVIES"/}"
+  codec=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name \
+                  -of csv=p=0 "$f" 2>/dev/null || true)
+  case "$codec" in
+    vp9|vp8) ;;
+    *) continue ;;
+  esac
+  if [ ! -f "$BACKUP/$rel" ] || ! cmp -s "$f" "$BACKUP/$rel"; then
+    mkdir -p "$BACKUP/$(dirname "$rel")"
+    cp "$f" "$BACKUP/$rel"
+    refreshed=$((refreshed + 1))
+  fi
+done < <(find "$MOVIES" -name '*.mp4' -print0)
+[ "$refreshed" -gt 0 ] && echo "backed up $refreshed original(s) to Movies_VP9_backup/"
 
 total=$(find "$BACKUP" -name '*.mp4' | wc -l | tr -d ' ')
 n=0
