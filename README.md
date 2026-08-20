@@ -82,7 +82,42 @@ the cutscenes onto a path that is equally broken, just in a different way.
 1. Download `MortalShell2MacFix.app` from
    [Releases](../../releases), or build it yourself with `app/build-app.sh`.
 2. Create the user `Engine.ini` described below.
-3. Open the app, drop your game folder on it, and press **Apply Fix**.
+3. Open the app, drop the game folder on it, and press **Apply Fix**.
+
+### Which folder to pick
+
+Pick the folder that **contains `Content`** — not `Content/Movies`, and not
+your Steam library root.
+
+For Mortal Shell 2 that is `MortalShell2`, the folder inside Steam's `Sparta`
+directory:
+
+```
+…/steamapps/common/Sparta/MortalShell2      ← drop this one
+├── Binaries/
+└── Content/
+    ├── Movies/          ← the cutscenes
+    │   ├── Movie_MortalShellII_OpeningCutscene.mp4
+    │   ├── Shells/
+    │   └── Tutorials/
+    └── Paks/            ← pakchunk0-Windows.pak lives here
+```
+
+The tell is simple: the folder you choose must have **both `Content/Movies` and
+`Content/Paks`** underneath it. The app needs Movies to transcode and Paks to
+patch, so either one alone is not enough.
+
+You can also drop `Content` itself, or the folder one level above — the app
+looks one level down for a `Content` directory. What it cannot do is guess from
+`Movies` alone, and it will tell you so rather than touch anything:
+
+> That folder has no Content/Movies and Content/Paks inside.
+
+Note that Steam names the install directory after the project, not the game.
+Mortal Shell 2 ships under `Sparta`, so browse by path rather than by the name
+on the store page.
+
+### While it runs
 
 The app backs everything up first and has a **Revert** button. It shows a
 progress bar and streams the underlying scripts' output live, so you can see
