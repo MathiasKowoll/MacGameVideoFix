@@ -29,11 +29,15 @@ BACKUP="$CONTENT/Movies_VP9_backup"
 
 if [ "$RESTORE" = "--restore" ]; then
   [ -d "$BACKUP" ] || { echo "error: no backup at $BACKUP" >&2; exit 1; }
-  ( cd "$BACKUP" && find . -name '*.mp4' -print0 |
-    while IFS= read -r -d '' f; do
-      mkdir -p "$MOVIES/$(dirname "$f")"
-      cp "$f" "$MOVIES/$f"
-    done )
+  total=$(find "$BACKUP" -name '*.mp4' | wc -l | tr -d ' ')
+  n=0
+  while IFS= read -r -d '' f; do
+    rel="${f#"$BACKUP"/}"
+    n=$((n + 1))
+    mkdir -p "$MOVIES/$(dirname "$rel")"
+    cp "$f" "$MOVIES/$rel"
+    echo "[$n/$total] restored $rel"
+  done < <(find "$BACKUP" -name '*.mp4' -print0)
   echo "originals restored from Movies_VP9_backup"
   exit 0
 fi
@@ -63,6 +67,10 @@ while IFS= read -r -d '' f; do
   fi
 
   mkdir -p "$MOVIES/$(dirname "$rel")"
+
+  # A plain line (no [n/total] prefix) so the GUI shows activity while ffmpeg
+  # works on a long file without advancing the bar early.
+  echo "        encoding $rel"
 
   # -write_tmcd 0 matters: the mp4 muxer otherwise re-creates the timecode
   # track from the source, and a third track is enough to stop Electra from

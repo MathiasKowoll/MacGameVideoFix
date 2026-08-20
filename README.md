@@ -84,7 +84,13 @@ the cutscenes onto a path that is equally broken, just in a different way.
 2. Create the user `Engine.ini` described below.
 3. Open the app, drop your game folder on it, and press **Apply Fix**.
 
-The app backs everything up first and has a **Revert** button.
+The app backs everything up first and has a **Revert** button. It shows a
+progress bar and streams the underlying scripts' output live, so you can see
+which file it is working on rather than staring at a frozen window.
+
+Once the fix is applied, **Apply Fix** is disabled until you revert. Running it
+twice would transcode already-transcoded files and overwrite the backup with
+H.264 instead of the originals.
 
 Because the app is signed ad-hoc rather than notarised, macOS will refuse the
 first launch. Right click it and choose **Open**, then confirm.
