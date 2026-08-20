@@ -1,0 +1,4 @@
+# Built app — distributed as a release asset, not tracked
+app/MortalShell2MacFix.app/
+*.zip
+.DS_Store
