@@ -526,6 +526,34 @@ static LONG mf_startups;
  * which API to watch next costs a launch each time. The return address costs
  * nothing and says exactly which function to disassemble.
  */
+/*
+ * Every Media Foundation answer is correct -- NV12 at 2560x1440, 30000/1001,
+ * duration 10.01s -- and the game still tears the player down and starts
+ * over. So whatever decides that is the game's own code, and the only useful
+ * question left is where it lives.
+ *
+ * A return address gives one frame. RtlCaptureStackBackTrace gives the chain,
+ * using the unwind tables, which is reliable on x64 where frame pointers are
+ * not. Printed as offsets, so they go straight into llvm-objdump.
+ */
+static void log_stack(const char *what)
+{
+    void *frames[10];
+    BYTE *base = (BYTE *)GetModuleHandleA(NULL);
+    USHORT n, i;
+
+    n = RtlCaptureStackBackTrace(1, (ULONG)ARRAY_COUNT(frames), frames, NULL);
+    logf_("  call stack for %s:", what);
+    for (i = 0; i < n; ++i)
+    {
+        BYTE *addr = frames[i];
+        if (addr > base && addr - base < 0x10000000)
+            logf_("    +0x%llx", (unsigned long long)(addr - base));
+        else
+            logf_("    %p  (outside the exe)", addr);
+    }
+}
+
 static void log_caller(const char *what, void *ret)
 {
     BYTE *base = (BYTE *)GetModuleHandleA(NULL);
@@ -869,14 +897,18 @@ static void hook_source_reader(void *reader)
     logf_("  source reader hooks: %s", real_read_sample ? "installed" : "COULD NOT PATCH");
 }
 
+static LONG open_calls;
+
 static HRESULT WINAPI my_MFCreateSourceReaderFromByteStream(IMFByteStream *stream,
                                                             IMFAttributes *attrs,
                                                             IMFSourceReader **reader)
 {
     HRESULT hr;
     UINT32 count = 0;
+    BOOL first = InterlockedIncrement(&open_calls) == 1;
 
     logf_("MFCreateSourceReaderFromByteStream");
+    if (first) log_stack("the video player");
     log_bytestream_tags(stream);
 
     if (attrs)
