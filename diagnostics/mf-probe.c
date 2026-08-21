@@ -32,6 +32,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <shlwapi.h>
 
 #define LOGFILE "C:\\mf-probe.log"
 
@@ -1325,8 +1326,18 @@ static FARPROC WINAPI my_GetProcAddress(HMODULE module, LPCSTR name)
 {
     FARPROC proc = real_GetProcAddress(module, name);
 
-    if ((ULONG_PTR)name > 0xFFFF &&
-        (name[0] == 'M' && name[1] == 'F'))
+    if ((ULONG_PTR)name <= 0xFFFF)
+    {
+        /* By ordinal. Worth seeing for d3d12, which the game imports that way. */
+        char path[MAX_PATH] = "?";
+        GetModuleFileNameA(module, path, sizeof(path) - 1);
+        if (StrStrIA(path, "d3d12") || StrStrIA(path, "d3d11"))
+            logf_("GetProcAddress(#%u) from %s -> %s",
+                  (unsigned)(ULONG_PTR)name, path, proc ? "ok" : "NOT FOUND");
+    }
+    else if ((name[0] == 'M' && name[1] == 'F')
+             || StrStrIA(name, "D3D12") || StrStrIA(name, "D3D11")
+             || StrStrIA(name, "DXGI"))
     {
         char path[MAX_PATH] = "?";
         GetModuleFileNameA(module, path, sizeof(path) - 1);
@@ -2075,6 +2086,56 @@ static void defeat_abort_branches(void)
     }
 }
 
+/*
+ * Say what the d3d12 import slot really holds.
+ *
+ * The hook goes in from DllMain and D3D12CreateDevice is still never called,
+ * so one of three things is true: the game resolves it dynamically instead,
+ * something replaced the entry after us -- this title ships NVIDIA
+ * Streamline, whose interposer exists to wrap exactly this call -- or ordinal
+ * 101 of the module actually loaded is not the function it is in the copy on
+ * disk. Comparing the slot against both our hook and the module's own export
+ * distinguishes all three.
+ */
+static void report_d3d12_import(void)
+{
+    HMODULE d3d12 = GetModuleHandleA("d3d12.dll");
+    BYTE *base = (BYTE *)GetModuleHandleA(NULL);
+    IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;
+    IMAGE_NT_HEADERS *nt;
+    IMAGE_IMPORT_DESCRIPTOR *desc;
+    void *exported = d3d12 ? (void *)GetProcAddress(d3d12, MAKEINTRESOURCEA(101)) : NULL;
+    DWORD rva;
+
+    logf_("  d3d12.dll loaded at %p, its ordinal 101 is %p", (void *)d3d12, exported);
+    logf_("  our hook is %p, the original we saved is %p",
+          (void *)my_D3D12CreateDevice, (void *)real_D3D12CreateDevice);
+
+    if (!base || dos->e_magic != IMAGE_DOS_SIGNATURE) return;
+    nt = (IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
+    rva = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+    if (!rva) return;
+
+    for (desc = (IMAGE_IMPORT_DESCRIPTOR *)(base + rva); desc->Name; ++desc)
+    {
+        IMAGE_THUNK_DATA *names, *addrs;
+        if (lstrcmpiA((const char *)(base + desc->Name), "d3d12.dll")) continue;
+        if (!desc->OriginalFirstThunk) continue;
+        names = (IMAGE_THUNK_DATA *)(base + desc->OriginalFirstThunk);
+        addrs = (IMAGE_THUNK_DATA *)(base + desc->FirstThunk);
+        for (; names->u1.AddressOfData; ++names, ++addrs)
+        {
+            if (!IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal)) continue;
+            logf_("  import slot for #%u now holds %p%s",
+                  (unsigned)IMAGE_ORDINAL(names->u1.Ordinal),
+                  (void *)(ULONG_PTR)addrs->u1.Function,
+                  (void *)(ULONG_PTR)addrs->u1.Function == (void *)my_D3D12CreateDevice
+                      ? "  (still ours)" : "  <- REPLACED");
+        }
+        return;
+    }
+}
+
 static DWORD WINAPI worker(LPVOID unused)
 {
     (void)unused;
@@ -2082,6 +2143,7 @@ static DWORD WINAPI worker(LPVOID unused)
     logf_("=== mf-probe attached ===");
     logf_("  %-40s %s", "D3D12CreateDevice (ordinal 101)",
           real_D3D12CreateDevice ? "hooked in DllMain" : "not imported");
+    report_d3d12_import();
     HOOK("d3d11.dll", D3D11CreateDevice);
     HOOK("KERNEL32.dll", GetProcAddress);
     HOOK("KERNEL32.dll", CreateFileW);
