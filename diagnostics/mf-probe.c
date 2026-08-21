@@ -290,6 +290,8 @@ static void upload_frame(IMFSample *sample);
 static ID3D11Device *video_device;
 static ID3D11DeviceContext *video_context;
 static ID3D11Texture2D *frame_texture;
+static ID3D11Texture2D *game_render_target;
+static ID3D11Texture2D *game_shared_texture;
 static UINT frame_width, frame_height, frame_stride;
 static BYTE *frame_scratch;
 static CRITICAL_SECTION frame_lock;
@@ -525,9 +527,27 @@ static HRESULT WINAPI vc_VideoProcessorBlt(void *self, void *processor, void *ou
      * processor would do is already done: copy.
      */
     EnterCriticalSection(&frame_lock);
-    if (frame_texture && output_view_resource && video_context)
-        ID3D11DeviceContext_CopyResource(video_context,
-                (ID3D11Resource *)output_view_resource, (ID3D11Resource *)frame_texture);
+    if (frame_texture && video_context)
+    {
+        if (output_view_resource)
+            ID3D11DeviceContext_CopyResource(video_context,
+                    (ID3D11Resource *)output_view_resource, (ID3D11Resource *)frame_texture);
+
+        /*
+         * And into the shared one. TYPELESS and UNORM of the same base format
+         * are copy-compatible, and that texture is what the D3D12 side reads;
+         * the render target above is only where the real processor would have
+         * left the frame for someone else to move.
+         */
+        if (game_shared_texture && (ID3D11Resource *)game_shared_texture
+                                   != (ID3D11Resource *)output_view_resource)
+        {
+            ID3D11DeviceContext_CopyResource(video_context,
+                    (ID3D11Resource *)game_shared_texture, (ID3D11Resource *)frame_texture);
+            if (blit_calls <= 3) logf_("    also copied into the shared texture");
+        }
+        ID3D11DeviceContext_Flush(video_context);
+    }
     else if (blit_calls <= 3)
         logf_("    nothing to copy (texture %p, output %p)",
               (void *)frame_texture, output_view_resource);
@@ -620,6 +640,17 @@ static const char *dxgi_format_name(UINT f)
  */
 static LONG texture_calls;
 
+/*
+ * The game makes two textures per video: one BGRA render target, which is
+ * where the video processor is asked to write, and one BGRA TYPELESS carrying
+ * D3D11_RESOURCE_MISC_SHARED, which is the one its D3D12 renderer opens by
+ * handle and samples. Something has to move the frame from the first to the
+ * second, and with a stubbed processor nothing does.
+ *
+ * Remember both, so the blit can fill the one that is actually read.
+ */
+
+
 static HRESULT WINAPI device_create_texture2d(void *self, const void *desc,
                                               const void *initial, void **texture)
 {
@@ -636,7 +667,32 @@ static HRESULT WINAPI device_create_texture2d(void *self, const void *desc,
         if (d[10] & 2) logf_("    MiscFlags carries D3D11_RESOURCE_MISC_SHARED");
         if (FAILED(hr)) log_hr("    result", hr);
     }
+
+    if (SUCCEEDED(hr) && d && texture && *texture && d[0] > 64 && d[1] > 64)
+    {
+        if (d[10] & 2)      game_shared_texture = (ID3D11Texture2D *)*texture;
+        else if (d[8] & 0x20) game_render_target = (ID3D11Texture2D *)*texture;
+    }
     return hr;
+}
+
+/*
+ * What the game copies on its own. ID3D11DeviceContext slot 47 is
+ * CopyResource and slot 46 CopySubresourceRegion; if it ever moves the frame
+ * from the render target to the shared texture itself, it shows up here.
+ */
+static void (WINAPI *real_ctx_copy_resource)(void *, void *, void *);
+
+static void WINAPI ctx_copy_resource(void *self, void *dst, void *src)
+{
+    static LONG seen;
+    if (InterlockedIncrement(&seen) <= 6)
+    {
+        logf_("ID3D11DeviceContext::CopyResource");
+        describe_resource("dst", dst);
+        describe_resource("src", src);
+    }
+    real_ctx_copy_resource(self, dst, src);
 }
 
 /* The views built on those textures, so a failure one step later is visible
@@ -901,6 +957,8 @@ static void install_video_stubs(void *device, void *context)
     {
         real_context_qi = patch_vtable_slot(context, 0, context_qi);
         logf_("  video context stub: %s", real_context_qi ? "installed" : "COULD NOT PATCH");
+        real_ctx_copy_resource = patch_vtable_slot(context, 47, ctx_copy_resource);
+        logf_("  CopyResource watch: %s", real_ctx_copy_resource ? "installed" : "COULD NOT PATCH");
     }
 }
 
