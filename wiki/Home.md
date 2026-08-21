@@ -18,10 +18,12 @@ out through configuration.
 → Fixed. See [Games](Games.md) for which titles this applies to.
 
 **The black screen.** The game reaches the cutscene, shows nothing, and does
-not crash. Something in the media stack returned an error the game swallowed.
-There is no crash log to read, so it has to be traced.
+not crash. Nothing returns an error, so there is no crash log and nothing to
+grep for — the failure has to be traced through the code.
 
-→ Under investigation on DYNASTY WARRIORS: ORIGINS.
+→ Fixed on DYNASTY WARRIORS: ORIGINS, where it turned out to be five separate
+faults in a row, ending in a frame that decoded correctly and had no way to
+reach the renderer that draws it. See [Games](Games.md).
 
 ## Is my game affected?
 
