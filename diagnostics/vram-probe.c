@@ -160,6 +160,8 @@ struct vram_cache
 };
 static struct vram_cache cache[2];          /* one per memory segment group */
 static const BOOL serve_from_cache = TRUE;
+static const BOOL fix_reservations = TRUE;
+static UINT64 requested_reservation[2];
 static LONG served, measured;
 static ULONGLONG total_call_us;
 
@@ -224,6 +226,29 @@ static HRESULT WINAPI my_query_vram(void *self, UINT node,
          * passed through untouched, so nothing is invented while the game is
          * behaving.
          */
+        /*
+         * Make the reservation fields mean what they mean on Windows.
+         *
+         * D3DMetal fills all four with the same number except CurrentUsage:
+         * budget 76677 MB, reservable 76677 MB, reserved 76677 MB. On Windows
+         * CurrentReservation is what the application asked for through
+         * SetVideoMemoryReservation and is zero until it does, and
+         * AvailableForReservation is a fraction of the budget rather than all
+         * of it.
+         *
+         * That matters because the caller is in a genuine tight loop -- two
+         * hundred million calls a second once answers are cheap -- so it is
+         * not waiting on cost, it is waiting on a value. A reservation that
+         * reads as the whole budget, and never moves however much is asked
+         * for, is a value nothing can satisfy.
+         */
+        if (fix_reservations)
+        {
+            info->CurrentReservation = requested_reservation[slot];
+            if (info->AvailableForReservation > info->Budget / 2)
+                info->AvailableForReservation = info->Budget / 2;
+        }
+
         if (over && grant_headroom)
         {
             UINT64 raised = info->CurrentUsage + HEADROOM_BYTES;
@@ -260,6 +285,27 @@ static HRESULT WINAPI my_query_vram(void *self, UINT node,
     return hr;
 }
 
+/*
+ * Remember what was reserved, so CurrentReservation can report it back. Slot
+ * 15 of IDXGIAdapter3 is SetVideoMemoryReservation, immediately after
+ * QueryVideoMemoryInfo.
+ */
+static HRESULT (WINAPI *real_set_reservation)(void *, UINT, DXGI_MEMORY_SEGMENT_GROUP, UINT64);
+
+static HRESULT WINAPI my_set_reservation(void *self, UINT node,
+                                         DXGI_MEMORY_SEGMENT_GROUP group, UINT64 bytes)
+{
+    HRESULT hr = real_set_reservation(self, node, group, bytes);
+    unsigned slot = (group == DXGI_MEMORY_SEGMENT_GROUP_LOCAL) ? 0 : 1;
+    static LONG seen;
+
+    if (slot < 2) requested_reservation[slot] = bytes;
+    if (InterlockedIncrement(&seen) <= 6)
+        logf_("SetVideoMemoryReservation(group %u, %llu MB) -> %#lx",
+              (unsigned)group, (unsigned long long)(bytes / 1048576), (unsigned long)hr);
+    return hr;
+}
+
 static void watch_adapter(void *adapter)
 {
     IDXGIAdapter3 *a3 = NULL;
@@ -274,7 +320,10 @@ static void watch_adapter(void *adapter)
      * IDXGIObject, three IDXGIAdapter, GetDesc1, GetDesc2, then two content
      * protection entries. */
     real_query_vram = patch_vtable_slot(a3, 14, my_query_vram);
-    logf_("QueryVideoMemoryInfo watch: %s", real_query_vram ? "installed" : "COULD NOT PATCH");
+    real_set_reservation = patch_vtable_slot(a3, 15, my_set_reservation);
+    logf_("QueryVideoMemoryInfo watch: %s, SetVideoMemoryReservation: %s",
+          real_query_vram ? "installed" : "COULD NOT PATCH",
+          real_set_reservation ? "installed" : "COULD NOT PATCH");
     IDXGIAdapter3_Release(a3);
 }
 
