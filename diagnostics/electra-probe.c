@@ -190,6 +190,44 @@ static HRESULT (WINAPI *real_GetOutputAvailableType)(void *, DWORD, DWORD, void 
 static HRESULT (WINAPI *real_GetOutputStreamInfo)(void *, DWORD, void *);
 static LONG frames_out, output_calls, input_calls;
 
+/* Put NV12 back on the menu.
+ *
+ * CrossOver's winegstreamer censors NV12 from transform_GetOutputAvailableType
+ * whenever it detects macOS -- the strings sit adjacent in the binary:
+ *
+ *     transform_GetOutputAvailableType / Skipping NV12 output format / Darwin
+ *
+ * Electra's H.264 decoder accepts NV12 and nothing else. It walks the offered
+ * types looking for it, never finds it, reports "Failed to set video decoder
+ * output type to NV12" and destroys the decoder. That is why SetInputType
+ * succeeds here and SetOutputType is never reached, and why every earlier
+ * lever did nothing: they all act downstream of a decoder that never starts.
+ *
+ * The censoring is only in the getter. SetOutputType validates against the
+ * decoder's own output_types array, which still contains NV12 and carries no
+ * macOS check -- so asking for NV12 is honoured. Re-labelling the offered type
+ * hands Electra the name it is looking for and the format the MFT can really
+ * produce.
+ *
+ * Set BEAST_NO_NV12=1 to watch without intervening. */
+static BOOL restore_nv12 = TRUE;
+
+static const GUID guid_MFVideoFormat_NV12 =
+    { 0x3231564e, 0x0000, 0x0010, { 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71 } };
+static const GUID guid_MF_MT_SUBTYPE =
+    { 0xf7e34c9a, 0x42e8, 0x4714, { 0xb7, 0x4b, 0xcb, 0x29, 0xd7, 0x2c, 0x35, 0xe5 } };
+
+/* IMFAttributes vtable: GetGUID 10, SetGUID 24. */
+static BOOL type_set_subtype(void *type, const GUID *sub)
+{
+    HRESULT (WINAPI *set_guid)(void *, const GUID *, const GUID *);
+    void **vt;
+    if (!type) return FALSE;
+    vt = *(void ***)type;
+    set_guid = (HRESULT (WINAPI *)(void *, const GUID *, const GUID *))vt[24];
+    return SUCCEEDED(set_guid(type, &guid_MF_MT_SUBTYPE, sub));
+}
+
 /* IMFMediaType is an IMFAttributes: GetGUID is slot 3 + 7 = 10. */
 static BOOL type_subtype(void *type, GUID *out)
 {
@@ -215,6 +253,19 @@ static HRESULT WINAPI my_GetOutputAvailableType(void *self, DWORD stream,
             char label[32];
             snprintf(label, sizeof(label), "offers type %lu", index);
             describe_subtype(label, &sub);
+
+            if (restore_nv12 && !IsEqualGUID(&sub, &guid_MFVideoFormat_NV12))
+            {
+                static LONG said;
+                if (type_set_subtype(*type, &guid_MFVideoFormat_NV12))
+                {
+                    if (InterlockedIncrement(&said) == 1)
+                        logf_("  -> relabelled as NV12, which is what Electra "
+                              "requires and what winegstreamer censored");
+                }
+                else if (InterlockedIncrement(&said) == 1)
+                    logf_("  -> could NOT relabel to NV12");
+            }
         }
         else
             logf_("  offers type %lu (subtype unreadable)", index);
@@ -518,9 +569,13 @@ static DWORD WINAPI worker(LPVOID unused)
         char v[8] = {0};
         if (GetEnvironmentVariableA("BEAST_REFUSE_D3D_MANAGER", v, sizeof(v)) && v[0] == '1')
             refuse_d3d_manager = TRUE;
+        v[0] = 0;
+        if (GetEnvironmentVariableA("BEAST_NO_NV12", v, sizeof(v)) && v[0] == '1')
+            restore_nv12 = FALSE;
     }
-    logf_("---- armed: DXGI device manager %s ----",
-          refuse_d3d_manager ? "REFUSED (forcing software decode)" : "allowed (watching only)");
+    logf_("---- armed: NV12 %s | DXGI device manager %s ----",
+          restore_nv12 ? "RESTORED" : "left censored",
+          refuse_d3d_manager ? "refused" : "allowed");
     return 0;
 }
 
