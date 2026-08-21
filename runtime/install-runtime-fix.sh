@@ -40,13 +40,15 @@ usage() { sed -n '3,25p' "$0" >&2; exit 1; }
 CONTENT="$1"
 MODE="${2:---install}"
 
-# Content is .../<Game>/Content; Engine/ sits beside <Game>. Walk up rather
-# than assume a depth, because not every title nests the same way.
+# Accepts either the game folder or something below it, usually Content. Walk
+# up rather than assume a depth, because not every title nests the same way --
+# and test the folder we were handed before ascending, or being given the game
+# folder itself, the obvious thing to pass, fails.
 ROOT=""
 probe="$CONTENT"
-for _ in 1 2 3 4; do
-  probe="$(dirname "$probe")"
+for _ in 1 2 3 4 5; do
   if [ -d "$probe/Engine/Binaries/ThirdParty/Ogg/Win64" ]; then ROOT="$probe"; break; fi
+  probe="$(dirname "$probe")"
 done
 [ -n "$ROOT" ] || {
   echo "error: could not find Engine/Binaries/ThirdParty/Ogg/Win64 above" >&2

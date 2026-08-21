@@ -2,18 +2,33 @@
 
 Makes Windows games show their cutscenes under CrossOver on Apple Silicon.
 
-Two games are fixed so far, and they fail for entirely different reasons. Both
-fixes install the same way: point the app at the game's folder, pick a fix,
-press Apply.
+Four games so far, failing for reasons that have almost nothing in common.
+They install the same way: open the app, pick the game from the list, drop its
+folder on it, press Apply.
 
-| Game | Symptom | Fix |
-| --- | --- | --- |
-| **Mortal Shell 2** and other UE5 titles with VP9 cutscenes | Crash on the first cutscene | Runtime patch, or re-encode |
-| **DYNASTY WARRIORS: ORIGINS** | Cutscene plays with sound, picture black | Video bridge |
+| Game | Symptom | Fix | winevideo |
+| --- | --- | --- | --- |
+| [**Mortal Shell 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Mortal-Shell-2) | Crash on the first cutscene | Runtime patch | no <sup>1</sup> |
+| [**Life is Strange: Reunion**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Reunion) | Runs, then freezes after a while | Runtime patch | no |
+| [**Life is Strange: Double Exposure**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Double-Exposure) | Runs, then freezes after a while | Runtime patch | no |
+| [**DYNASTY WARRIORS: ORIGINS**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Dynasty-Warriors-Origins) | Cutscene plays with sound, picture black | Video bridge | **yes** |
 
-Both need CrossOver patched with
-[winevideo](https://github.com/Jfishin/winevideo). Neither fix decodes
-anything: they get an already-decoded frame to where the game can use it.
+Each row links to a page in the [wiki](https://github.com/MathiasKowoll/MacGameVideoFix/wiki) with that game's findings and fix.
+
+**Only DYNASTY WARRIORS needs CrossOver patched with
+[winevideo](https://github.com/Jfishin/winevideo)**, because it decodes VP9
+through Media Foundation and there is otherwise nothing to decode it with. The
+two Life is Strange titles freeze inside DXGI and never involved video at all;
+Mortal Shell decodes VP9 in-process with Unreal's own libvpx. Install winevideo
+regardless — it fixes a great deal on its own — but only one fix here depends
+on it.
+
+<sup>1</sup> Expected rather than measured. See
+[the wiki page](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Mortal-Shell-2#winevideo).
+
+The Unreal fix carries two unrelated repairs in one DLL: the Electra buffer
+path that crashes Mortal Shell, and the adapter-node walk that freezes both
+Life is Strange titles. Installing it is the same act either way.
 
 Tested on an M4 Max, macOS 27, CrossOver 26.2 with Game Porting Toolkit 4.0b2.
 
@@ -23,57 +38,49 @@ Tested on an M4 Max, macOS 27, CrossOver 26.2 with Game Porting Toolkit 4.0b2.
 
 1. Download `MacGameVideoFix.app` from
    [Releases](../../releases), or build it yourself with `app/build-app.sh`.
-2. Create the user `Engine.ini` described below.
+2. For **Mortal Shell 2** only, create the user `Engine.ini` described below.
 3. Open the app, **pick your game from the list**, drop its folder on it, and
    press **Apply Fix**.
 
 Picking the game first is what tells the app which folder to ask for, and it
-says so on the drop zone. For an Unreal title there is then a choice of two
-fixes — leave it on **Runtime patch** unless the app says the game ships no
-`libogg`. For DYNASTY WARRIORS: ORIGINS there is one, and step 2 below does
-not apply.
+says so on the drop zone. It also checks the game's shipping executable is
+really under the folder you dropped, so pointing Double Exposure at Reunion's
+folder is caught rather than half-applied.
 
-The app also checks that CrossOver is patched with winevideo and warns if it
-is not, because without it neither fix can change anything on screen.
+The app also checks whether CrossOver is patched with winevideo and says so.
+For DYNASTY WARRIORS that warning is fatal — nothing will decode. For the
+Unreal titles it is advice.
 
-The two modes solve the same problem, so the app will not let you apply one
-while the other is in place. **Revert** puts everything back either way.
+**Revert** puts everything back.
 
 ### Which folder to pick
 
 For **DYNASTY WARRIORS: ORIGINS**, the folder holding `DWORIGINS.exe` —
 usually `steamapps/common/DWORIGINS`.
 
-For an **Unreal title**, the folder that **contains `Content`** — not
-`Content/Movies`, and not your Steam library root.
-
-For Mortal Shell 2 that is `MortalShell2`, the folder inside Steam's `Sparta`
-directory:
+For an **Unreal title**, the game's own folder — the one with `Engine` in it:
 
 ```
-…/steamapps/common/Sparta/MortalShell2      ← drop this one
-├── Binaries/
-└── Content/
-    ├── Movies/          ← the cutscenes
-    │   ├── Movie_MortalShellII_OpeningCutscene.mp4
-    │   ├── Shells/
-    │   └── Tutorials/
-    └── Paks/            ← pakchunk0-Windows.pak lives here
+…/steamapps/common/Sparta                   ← drop this one
+├── Engine/
+│   └── Binaries/ThirdParty/Ogg/Win64/      ← the fix rides in here
+└── MortalShell2/
+    ├── Binaries/Win64/                     ← the shipping executable
+    └── Content/
 ```
 
-The tell is simple: the folder you choose must have **both `Content/Movies` and
-`Content/Paks`** underneath it. The app needs Movies to transcode and Paks to
-patch, so either one alone is not enough.
+The tell is `Engine/Binaries/ThirdParty/Ogg/Win64`. That is where the proxy
+DLL goes, and a title that ships no `libogg` cannot take this fix at all — the
+app says so rather than guessing.
 
-You can also drop `Content` itself, or the folder one level above — the app
-looks one level down for a `Content` directory. What it cannot do is guess from
-`Movies` alone, and it will tell you so rather than touch anything:
+Dropping the Steam library folder works too; the app looks one level down.
 
-> That folder has no Content/Movies and Content/Paks inside.
-
-Note that Steam names the install directory after the project, not the game.
-Mortal Shell 2 ships under `Sparta`, so browse by path rather than by the name
-on the store page.
+Note that Steam names install directories after the project, not the game.
+Mortal Shell 2 lives under `Sparta`, Reunion under `LifeisStrangeReunion`, and
+their executables are `MortalShell2-Win64-Shipping.exe` and
+`Iris-Win64-Shipping.exe` respectively. Browse by path rather than by the name
+on the store page — and since the app checks the executable against the title
+you picked, it will tell you when the two disagree.
 
 ### While it runs
 
@@ -81,9 +88,9 @@ The app backs everything up first and has a **Revert** button. It shows a
 progress bar and streams the underlying scripts' output live, so you can see
 which file it is working on rather than staring at a frozen window.
 
-Once the fix is applied, **Apply Fix** is disabled until you revert. Running it
-twice would transcode already-transcoded files and overwrite the backup with
-H.264 instead of the originals.
+Once the fix is applied, **Apply Fix** is disabled until you revert. Applying
+twice would move the proxy DLL aside as though it were the game's own and lose
+the original.
 
 Because the app is signed ad-hoc rather than notarised, macOS will refuse the
 first launch. Right click it and choose **Open**, then confirm.
@@ -93,22 +100,20 @@ first launch. Right click it and choose **Open**, then confirm.
 - Apple Silicon Mac, macOS 14 or later
 - CrossOver 26.2 / 26.3
 
-For the **re-encode** mode, additionally:
+For **DYNASTY WARRIORS: ORIGINS**, additionally:
 
 - [winevideo](https://github.com/Jfishin/winevideo) applied to CrossOver
-- [ffmpeg](https://ffmpeg.org) — `brew install ffmpeg`
-- Roughly 1 GB of free space for the backup and the transcodes
 
-winevideo is not optional for that mode. Its patches 0005–0007 are what make
-Electra's H.264 Media Foundation path work on macOS at all — without them you
-would be moving the cutscenes onto a path that is equally broken, just in a
-different way.
+Not optional there. Without it `MFCreateSourceReaderFromByteStream` on a
+`.webm` fails outright and no frame is ever decoded for the bridge to carry.
 
-The **runtime** mode most likely does not need winevideo: VP9 never goes through
-Media Foundation, because Electra decodes it with its own bundled libvpx. Only
-the *output* conversion was broken, and that is exactly what the patch reroutes.
-This has not been tested on an unpatched CrossOver, so it is stated as an
-expectation and not as a fact.
+The **Unreal** fix most likely does not need winevideo. VP9 never goes through
+Media Foundation in Mortal Shell — Electra decodes it with its own bundled
+libvpx, and only the *output* conversion was broken, which is what the patch
+reroutes — and the Life is Strange freeze is in DXGI, nowhere near video. This
+has not been tested on an unpatched CrossOver, so it is stated as an
+expectation and not as a fact. `diagnostics/check-winevideo-use.sh` is what
+would settle it, against a running game.
 
 ## DYNASTY WARRIORS: ORIGINS
 
@@ -156,7 +161,7 @@ hypotheses that were wrong on the way there.
 
 ---
 
-## Mortal Shell 2, and UE5 titles with VP9 cutscenes
+## Mortal Shell 2: the cutscene crash
 
 ### The Engine.ini
 
@@ -220,30 +225,67 @@ for one) never do: the same bug is there, just unreachable.
 turns up only `Electra.Win.H264UseOldOutputPath` and
 `Electra.Win.H265UseOldOutputPath`. VP9 on D3D12 has no configuration escape.
 
-### The two fixes
+### The fix
 
-Two of them. Both keep D3D12 active, so you keep PSO precompilation. (`-dx11`
-also dodges the crash, but Unreal does not precompile PSOs on the D3D11 RHI,
-which means permanent shader-compilation stutter.)
+A small proxy DLL patches Electra in memory as the game starts, so its VPx
+decoder takes the same CPU output path that every D3D11 machine already uses.
+Your original VP9 cutscenes play, untouched: nothing the game ships is edited,
+it costs 74 KB and a second to apply, and D3D12 stays active so you keep PSO
+precompilation. (`-dx11` also dodges the crash, but Unreal does not precompile
+PSOs on the D3D11 RHI, which means permanent shader-compilation stutter.)
 
-**Runtime patch** — the default. A small proxy DLL patches Electra in memory as
-the game starts, so its VPx decoder takes the same CPU output path that every
-D3D11 machine already uses. Your original VP9 cutscenes play, untouched.
+It does not survive Steam's **verify integrity of game files** — that puts
+every original back, including the DLL we moved aside. Re-apply afterwards.
 
-**Re-encode** — the original fix. Transcode the cutscenes to H.264 and drop the
-VP9 originals from the `.pak` index so the engine reads your files instead.
-Still here for titles that ship no `libogg` for the runtime patch to ride on.
+#### The re-encode mode is gone
 
-|                          | Runtime patch          | Re-encode                       |
-| ------------------------ | ---------------------- | ------------------------------- |
-| Time to apply            | a second               | ~20 minutes                     |
-| Needs ffmpeg             | no                     | yes                             |
-| Disk used                | 72 KB                  | ~1 GB                           |
-| Picture quality          | original VP9           | re-encoded H.264                |
-| Shipped files edited     | none                   | `Movies/`, `pakchunk0` index    |
+Earlier releases could transcode the cutscenes to H.264 and drop the VP9
+originals from the `.pak` index. The runtime patch replaces it completely and
+is better on every axis, so that mode has been removed rather than left as a
+trap: it took twenty minutes, needed ffmpeg and a gigabyte, softened the
+picture, and edited files the game shipped.
 
-Neither survives Steam's **verify integrity of game files** — that puts every
-original back, including the DLL we moved aside. Re-apply afterwards.
+**If you applied it with an older release, the app still detects it and offers
+to undo it**, because a patched pak index and a `Movies_VP9_backup` folder
+cannot be unwound any other way short of letting Steam re-download the game.
+Undo it, then apply the runtime patch.
+
+---
+
+## Life is Strange: Reunion and Double Exposure
+
+A different fault entirely, in the same DLL. The game runs correctly and then
+freezes — after a while, anywhere, with no crash and nothing in any log.
+
+**It is not a deadlock.** A spindump taken while it was stuck shows the
+GameThread burning 1.27 seconds of CPU across 128 samples while RenderThread 0
+used four milliseconds. One thread pinned, everything else starving behind it.
+
+Unreal walks the adapter's memory nodes through
+`IDXGIAdapter3::QueryVideoMemoryInfo`, accumulating across them, and ends the
+walk when the call fails. On Windows it fails once the index passes the number
+of nodes. **D3DMetal answers `S_OK` for every index**, so the counter climbs
+forever — two hundred million iterations a second, measured.
+
+Refusing node 1 with `DXGI_ERROR_INVALID_CALL` ends it. The refusal fires
+**once** per session: Unreal takes the node count from that answer and never
+asks again, and the polling rate settles at around 2,500 a second.
+
+The full write-up, including the disassembly of the loop and the three wrong
+turns that came first, is on the wiki:
+[Reunion](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Reunion) ·
+[Double Exposure](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Double-Exposure).
+
+**This one is not about these games.** Any UE5 title on the D3D12 RHI makes
+that walk, so the guard is worth trying on any Unreal game that freezes this
+way. It was kept as a per-game fix rather than a CrossOver-wide `dxgi.dll`
+override deliberately — patching one game's process is a much smaller blast
+radius than replacing a DLL every bottle loads.
+
+A separate win came out of the same work: serving repeat queries from a 100 ms
+cache was reported as noticeably better frame rates, independent of the freeze.
+Thousands of crossings a second into Wine's unix side cost more than their wall
+time, which is contention rather than cycles.
 
 ---
 
@@ -281,23 +323,19 @@ prebuilt DLL; to build your own you need
 runtime/build-proxy.sh "/path/to/<Game>/Engine/Binaries/ThirdParty/Ogg/Win64/VS2015/libogg_64.dll"
 ```
 
-### Unreal: re-encode
+### Unreal: undoing an older release's re-encode
+
+Only for a copy an earlier version transcoded. Both steps are no-ops on a game
+that never had it applied.
 
 ```bash
-# 1. Transcode. Originals are copied to Movies_VP9_backup/ first.
-scripts/transcode-movies.sh "/path/to/<Game>/Content"
-
-# 2. Hide the pak's video entries so the engine reads the loose files.
-scripts/pak-hide-videos.py "/path/to/<Game>/Content/Paks/pakchunk0-Windows.pak"          # list only
-scripts/pak-hide-videos.py "/path/to/<Game>/Content/Paks/pakchunk0-Windows.pak" --apply
-
-# Undo, in either order
-scripts/pak-hide-videos.py ".../pakchunk0-Windows.pak" --restore
+scripts/pak-hide-videos.py ".../Content/Paks/pakchunk0-Windows.pak" --restore
 scripts/transcode-movies.sh "/path/to/<Game>/Content" --restore
 ```
 
 `pak-hide-videos.py` is pure Python 3 with no dependencies and runs on the
-interpreter macOS already ships.
+interpreter macOS already ships. The forward direction of both scripts is no
+longer offered by the app.
 
 ---
 
@@ -349,16 +387,10 @@ The installer refuses to run if the game's `libogg` exports anything the shipped
 proxy does not forward — a missing entry point would stop the game from starting
 at all, so it is better to fail early and ask for a rebuild.
 
-### Why the loose files are not enough
+### What the pak patch did
 
-The files under `Content/Movies` are **not** what the game reads. The real
-videos live inside `pakchunk0-Windows.pak`, and the pak takes priority over
-disk. Transcoding the loose copies alone changes nothing.
-
-Unreal has a `-LookLooseFirst` switch for exactly this, but it is not compiled
-into UE 5.6 shipping builds. So the pak index has to be edited.
-
-### What the pak patch does
+Kept because the undo path still relies on it, and because the format notes are
+the only public write-up of this that we know of.
 
 It never touches file data. It rewrites the `FullDirectoryIndex` without the
 `.mp4` entries, sets `bReaderHasPathHashIndex = 0` so the engine consults only
@@ -372,22 +404,6 @@ rejects encrypted indexes and pak versions other than 11.
 
 Once an entry is gone the engine falls through to disk, because
 `FPakPlatformFile::IsNonPakFilenameAllowed` does not exclude `.mp4`.
-
-### Why the transcode settings look odd
-
-```
--tune fastdecode -crf 21 -maxrate 6M -bufsize 12M -refs 2 -bf 0 -write_tmcd 0
-```
-
-Electra's H.264 decoder runs **in software** here: winevideo's patch 0005 makes
-the MFT report no D3D awareness, because no macOS backend can create NV12 D3D11
-textures. So decode cost matters more than it normally would, hence
-`fastdecode`, no B-frames and a bitrate ceiling.
-
-`-write_tmcd 0` is the subtle one. The mp4 muxer re-creates the source's
-timecode track by default, and a third track is enough to stop Electra from
-presenting video — audio keeps playing, the picture stays black. Every video
-that works has exactly two tracks.
 
 ## Other games
 
@@ -420,23 +436,23 @@ process, which is exactly the behaviour anti-cheat exists to stop.
 
 ## Troubleshooting
 
-**Steam's "verify integrity of game files" undoes this.** It restores the
-original VP9 pak and the crash returns. Same after a game patch. Just run the
-fix again.
+**Steam's "verify integrity of game files" undoes this.** It puts the game's
+own `libogg_64.dll` back and the proxy is gone. Same after a game patch. Just
+run the fix again.
 
-**Black screen, no audio, game hangs** — the engine found no video files at all.
-With nothing to play, the startup movie player waits forever rather than
-skipping. Check that `Content/Movies` has the H.264 files under the same names
-and subfolder layout as the originals.
+**Still crashing in `AllocateBuffer`** — the proxy is not being loaded. Check
+what the app reports, and look for `C:\ue5-runtime-fix.log` in the bottle's
+`drive_c`: if it does not exist, the DLL never ran.
 
-**Audio plays, picture stays black** — that one file still has a third track, or
-its bitrate is too high for the software decoder. Re-transcode it.
+**Still freezing after a while** — check the same log. The node guard writes
+one line the first time it refuses a node that does not exist, and that line
+appearing is what says the fix took effect. If the log has the Electra lines
+but not that one, the game is not making the adapter-node walk and the freeze
+is something else; the [wiki](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Diagnosing-a-new-game)
+covers how to look.
 
-**Still crashing in `AllocateBuffer`** — the pak is still serving VP9:
-
-```bash
-python3 -c "d=open('pakchunk0-Windows.pak','rb').read(); print('vp09:',d.count(b'vp09'),'avc1:',d.count(b'avc1'))"
-```
+**A game with no `libogg`** — the fix has no way in. Nothing in this repository
+helps that title yet.
 
 ## Things that do not work
 

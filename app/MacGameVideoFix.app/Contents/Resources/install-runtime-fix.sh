@@ -28,8 +28,11 @@ PROXY="${PROXY_DLL:-$HERE/libogg_64.dll}"
 EXPORTS="$HERE/pe.py"
 
 # The proxy writes this path at runtime; finding it inside a DLL is how we tell
-# our file apart from the game's.
-MARKER='ue5-vpx-cpupath.log'
+# our file apart from the game's. Releases up to 3.2 wrote the other name, and
+# both have to be recognised: mistaking our own proxy for the game's original
+# would move it aside and destroy the real one.
+MARKER='ue5-runtime-fix.log'
+LEGACY_MARKER='ue5-vpx-cpupath.log'
 
 usage() { sed -n '3,25p' "$0" >&2; exit 1; }
 [ $# -ge 1 ] || usage
@@ -37,13 +40,15 @@ usage() { sed -n '3,25p' "$0" >&2; exit 1; }
 CONTENT="$1"
 MODE="${2:---install}"
 
-# Content is .../<Game>/Content; Engine/ sits beside <Game>. Walk up rather
-# than assume a depth, because not every title nests the same way.
+# Accepts either the game folder or something below it, usually Content. Walk
+# up rather than assume a depth, because not every title nests the same way --
+# and test the folder we were handed before ascending, or being given the game
+# folder itself, the obvious thing to pass, fails.
 ROOT=""
 probe="$CONTENT"
-for _ in 1 2 3 4; do
-  probe="$(dirname "$probe")"
+for _ in 1 2 3 4 5; do
   if [ -d "$probe/Engine/Binaries/ThirdParty/Ogg/Win64" ]; then ROOT="$probe"; break; fi
+  probe="$(dirname "$probe")"
 done
 [ -n "$ROOT" ] || {
   echo "error: could not find Engine/Binaries/ThirdParty/Ogg/Win64 above" >&2
@@ -65,7 +70,10 @@ REAL="$OGG/libogg_64_real.dll"
 # upgrade would leave the original stranded under a name nothing looks for.
 LEGACY_REAL="$OGG/libogg_real.dll"
 
-is_ours() { [ -f "$1" ] && LC_ALL=C grep -qa "$MARKER" "$1"; }
+is_ours() {
+  [ -f "$1" ] || return 1
+  LC_ALL=C grep -qa "$MARKER" "$1" || LC_ALL=C grep -qa "$LEGACY_MARKER" "$1"
+}
 
 status() {
   if is_ours "$LIVE" && { [ -f "$REAL" ] || [ -f "$LEGACY_REAL" ]; }; then echo installed
@@ -134,7 +142,10 @@ case "$MODE" in
   cp "$PROXY" "$LIVE"
 
   echo
-  echo "installed — the original VP9 cutscenes will play as shipped"
+  echo "installed"
+  echo "  VP9 cutscenes play as shipped, on titles that crashed on them"
+  echo "  the adapter-node walk is guarded, on titles that froze after a while"
+  echo "each half is inert where its fault is absent"
   echo "a log is written to the bottle's C:\\${MARKER} on each launch"
   ;;
 

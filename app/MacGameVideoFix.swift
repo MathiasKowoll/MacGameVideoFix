@@ -131,22 +131,44 @@ struct Winevideo {
 /// the title up front means the app can say exactly what it is looking for,
 /// and exactly what was missing when it is not there.
 enum SupportedGame: String, CaseIterable, Identifiable {
+    case mortalShell2
+    case lisReunion
+    case lisDoubleExposure
+    case unrealOther
     case dynastyWarriors
-    case unrealVP9
 
     var id: String { rawValue }
 
     var name: String {
         switch self {
-        case .dynastyWarriors: return "DYNASTY WARRIORS: ORIGINS"
-        case .unrealVP9:       return "Unreal Engine 5, VP9 cutscenes"
+        case .mortalShell2:      return "Mortal Shell 2"
+        case .lisReunion:        return "Life is Strange: Reunion"
+        case .lisDoubleExposure: return "Life is Strange: Double Exposure"
+        case .unrealOther:       return "Another Unreal Engine 5 title"
+        case .dynastyWarriors:   return "DYNASTY WARRIORS: ORIGINS"
         }
     }
 
     var symptom: String {
         switch self {
-        case .dynastyWarriors: return "Cutscene plays with sound, picture black"
-        case .unrealVP9:       return "Crash on the first cutscene"
+        case .mortalShell2:      return "Crash on the first cutscene"
+        case .lisReunion,
+             .lisDoubleExposure: return "Runs, then freezes after a while"
+        case .unrealOther:       return "Crash on the first cutscene, or a freeze after a while"
+        case .dynastyWarriors:   return "Cutscene plays with sound, picture black"
+        }
+    }
+
+    /// Steam names install folders after the project rather than the game, so
+    /// checking the shipping executable is the only way to tell someone they
+    /// picked Reunion's folder while Double Exposure was selected.
+    var executable: String? {
+        switch self {
+        case .mortalShell2:      return "MortalShell2-Win64-Shipping.exe"
+        case .lisReunion:        return "Iris-Win64-Shipping.exe"
+        case .lisDoubleExposure: return "Chronos-Win64-Shipping.exe"
+        case .unrealOther:       return nil
+        case .dynastyWarriors:   return "DWORIGINS.exe"
         }
     }
 
@@ -154,21 +176,24 @@ enum SupportedGame: String, CaseIterable, Identifiable {
     var folderHint: String {
         switch self {
         case .dynastyWarriors: return "the folder holding DWORIGINS.exe"
-        case .unrealVP9:       return "the folder containing Content"
+        default:               return "the game folder, the one with Engine inside"
         }
     }
 
     var example: String {
         switch self {
-        case .dynastyWarriors: return "…/steamapps/common/DWORIGINS"
-        case .unrealVP9:       return "…/steamapps/common/Sparta/MortalShell2"
+        case .mortalShell2:      return "…/steamapps/common/Sparta"
+        case .lisReunion:        return "…/steamapps/common/LifeisStrangeReunion"
+        case .lisDoubleExposure: return "…/steamapps/common/LifeIsStrangeDoubleExposure"
+        case .unrealOther:       return "…/steamapps/common/<Game>"
+        case .dynastyWarriors:   return "…/steamapps/common/DWORIGINS"
         }
     }
 
     var modes: [Mode] {
         switch self {
         case .dynastyWarriors: return [.videoBridge]
-        case .unrealVP9:       return [.runtime, .transcode]
+        default:               return [.runtime]
         }
     }
 
@@ -178,9 +203,12 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         switch self {
         case .dynastyWarriors:
             return "No DWORIGINS.exe there. Pick the folder the game's executable is in."
-        case .unrealVP9:
-            return "No Content/Movies and Content/Paks below there. "
-                 + "Pick the folder that contains Content, not Content itself."
+        case .unrealOther:
+            return "No Engine/Binaries/ThirdParty/Ogg below there. "
+                 + "Pick the game's own folder, the one with Engine and Content in it."
+        default:
+            return "That is not \(name) — no \(executable ?? "executable") under it. "
+                 + "Pick that game's own folder, or choose the matching title above."
         }
     }
 
@@ -188,8 +216,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
     /// folder and a game folder look alike from the outside.
     func title(from url: URL) -> Title? {
         let fm = FileManager.default
-        switch self {
-        case .dynastyWarriors:
+        if case .dynastyWarriors = self {
             var candidates = [url]
             if let subs = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
                 candidates += subs
@@ -199,9 +226,12 @@ enum SupportedGame: String, CaseIterable, Identifiable {
                 return .dynastyWarriors(c)
             }
             return nil
-        case .unrealVP9:
-            return GameFolder.locate(from: url).map { Title.unrealVP9($0) }
         }
+        guard let g = GameFolder.locate(from: url) else { return nil }
+        // A named title has to prove it is that title; "another UE5 title"
+        // has nothing to check against and is taken at its word.
+        if let exe = executable, !g.hasExecutable(exe) { return nil }
+        return .unrealVP9(g)
     }
 }
 
@@ -221,14 +251,14 @@ enum Title {
 
     var path: String {
         switch self {
-        case .unrealVP9(let g):    return g.content.path
+        case .unrealVP9(let g):    return g.root.path
         case .dynastyWarriors(let u): return u.path
         }
     }
 
     var modes: [Mode] {
         switch self {
-        case .unrealVP9:       return [.runtime, .transcode]
+        case .unrealVP9:       return [.runtime]
         case .dynastyWarriors: return [.videoBridge]
         }
     }
@@ -253,8 +283,6 @@ enum Title {
 enum Mode: String, CaseIterable, Identifiable {
     /// Patch Electra in memory as the game starts. Nothing on disk changes.
     case runtime
-    /// Re-encode the cutscenes to H.264 and hide the pak's VP9 copies.
-    case transcode
     /// Carry the decoded frame from the D3D11 decoder to the D3D12 renderer.
     case videoBridge
 
@@ -263,7 +291,6 @@ enum Mode: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .runtime:     return "Runtime patch"
-        case .transcode:   return "Re-encode cutscenes"
         case .videoBridge: return "Video bridge"
         }
     }
@@ -273,9 +300,6 @@ enum Mode: String, CaseIterable, Identifiable {
         case .runtime:
             return "Adds one small DLL beside the game's own. "
                  + "Your original VP9 cutscenes play untouched, and it takes a second."
-        case .transcode:
-            return "Converts every cutscene to H.264 and edits the pak index. "
-                 + "Slower, needs ffmpeg, and slightly softens the picture."
         case .videoBridge:
             return "Adds one small DLL beside the game's own. The game decodes "
                  + "video on a D3D11 device and draws with D3D12, and under "
@@ -286,15 +310,13 @@ enum Mode: String, CaseIterable, Identifiable {
 
 
 enum Phase {
-    case idle, transcoding, patchingPak, restoringPak, restoringMovies
+    case idle, restoringPak, restoringMovies
     case installingRuntime, removingRuntime
     case installingBridge, removingBridge
 
     var label: String {
         switch self {
         case .idle:              return ""
-        case .transcoding:       return "Transcoding cutscenes to H.264"
-        case .patchingPak:       return "Removing video entries from the pak index"
         case .restoringPak:      return "Restoring the pak index"
         case .restoringMovies:   return "Restoring the original cutscenes"
         case .installingRuntime: return "Installing the runtime patch"
@@ -305,12 +327,10 @@ enum Phase {
     }
 
     /// Where this phase sits in the overall run, so the bar advances smoothly
-    /// instead of resetting between steps. Transcoding is the long pole.
+    /// instead of resetting between steps.
     var span: ClosedRange<Double> {
         switch self {
         case .idle:              return 0...0
-        case .transcoding:       return 0...0.92
-        case .patchingPak:       return 0.92...1
         case .restoringPak:      return 0...0.15
         case .restoringMovies:   return 0.15...1
         case .installingRuntime,
@@ -322,44 +342,63 @@ enum Phase {
 }
 
 struct GameFolder {
-    let content: URL          // .../<Game>/Content
+    /// The game root -- the folder with Engine/ in it. This used to be the
+    /// Content folder, because the removed re-encode mode worked on
+    /// Content/Movies and Content/Paks. The runtime patch needs neither: it
+    /// rides on Engine/Binaries/ThirdParty/Ogg, and requiring the old pair
+    /// turned away every Unreal title that ships no loose movies -- both Life
+    /// is Strange titles among them.
+    let root: URL
+
+    var ogg: URL { root.appendingPathComponent("Engine/Binaries/ThirdParty/Ogg/Win64") }
+
+    /// Only the removed re-encode touched these, so they are allowed to be
+    /// absent; they exist to spot a copy that mode was applied to.
+    var content: URL { root.appendingPathComponent("Content") }
     var movies: URL  { content.appendingPathComponent("Movies") }
     var paks:   URL  { content.appendingPathComponent("Paks") }
 
-    /// Accepts the Content folder itself, or any parent that contains one.
+    /// Accepts the game folder, or a library folder one level above it.
     static func locate(from url: URL) -> GameFolder? {
         let fm = FileManager.default
-        var candidates = [url, url.appendingPathComponent("Content")]
-        // .../<Game>/<Game>/Content is the usual Unreal layout
+        var candidates = [url]
         if let subs = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
-            candidates += subs.map { $0.appendingPathComponent("Content") }
+            candidates += subs
         }
         for c in candidates {
             var isDir: ObjCBool = false
-            let movies = c.appendingPathComponent("Movies")
-            let paks = c.appendingPathComponent("Paks")
-            if fm.fileExists(atPath: movies.path, isDirectory: &isDir), isDir.boolValue,
-               fm.fileExists(atPath: paks.path, isDirectory: &isDir), isDir.boolValue {
-                return GameFolder(content: c)
+            let ogg = c.appendingPathComponent("Engine/Binaries/ThirdParty/Ogg/Win64")
+            if fm.fileExists(atPath: ogg.path, isDirectory: &isDir), isDir.boolValue {
+                return GameFolder(root: c)
             }
         }
         return nil
     }
 
-    var mainPak: URL? {
+    /// Unreal puts the shipping binary in <Project>/Binaries/Win64, and the
+    /// project name is rarely the game's name, so this looks rather than
+    /// guesses at the path.
+    func hasExecutable(_ name: String) -> Bool {
         let fm = FileManager.default
-        guard let files = try? fm.contentsOfDirectory(at: paks, includingPropertiesForKeys: nil)
-        else { return nil }
-        // The chunk holding Content/Movies is normally pakchunk0.
-        return files.filter { $0.pathExtension == "pak" }
-                    .sorted { $0.lastPathComponent < $1.lastPathComponent }
-                    .first
+        guard let subs = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+        else { return false }
+        return subs.contains {
+            fm.fileExists(atPath: $0.appendingPathComponent("Binaries/Win64/\(name)").path)
+        }
+    }
+
+    /// The biggest pak, when there is one. Used only to undo an old re-encode.
+    var mainPak: URL? {
+        (try? FileManager.default.contentsOfDirectory(at: paks,
+            includingPropertiesForKeys: nil))?
+            .filter { $0.pathExtension == "pak" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            .first
     }
 }
 
 /// What we found on disk. Drives which actions are offered, so the same fix
-/// cannot be applied twice (which would transcode already-transcoded files and
-/// leave the backup holding H.264 instead of the originals).
+/// cannot be applied twice.
 enum FixState {
     case unknown, notApplied, partial, applied
 
@@ -373,13 +412,17 @@ final class Runner: ObservableObject {
     /// Set when the game ships no libogg, so the runtime patch cannot be used.
     @Published var runtimeUnavailable = false
     @Published var runtimeState: FixState = .unknown
-    @Published var transcodeState: FixState = .unknown
+    /// An older release could re-encode the cutscenes to H.264 and hide the
+    /// pak's VP9 copies. That mode is gone, but anyone who ran it still has a
+    /// patched pak and their originals in a backup folder, so it is still
+    /// detected and can still be undone -- never applied.
+    @Published var legacyReencode: FixState = .notApplied
     @Published var bridgeState: FixState = .unknown
     @Published var log: [String] = []
     @Published var busy = false
     @Published var title: Title?
     @Published var winevideo = Winevideo.detect()
-    @Published var chosen: SupportedGame = .dynastyWarriors {
+    @Published var chosen: SupportedGame = .mortalShell2 {
         didSet { if oldValue != chosen { clearSelection() } }
     }
 
@@ -387,7 +430,7 @@ final class Runner: ObservableObject {
     /// one, rather than leaving a stale path on screen under a new title.
     private func clearSelection() {
         title = nil
-        runtimeState = .unknown; transcodeState = .unknown; bridgeState = .unknown
+        runtimeState = .unknown; legacyReencode = .notApplied; bridgeState = .unknown
         log.removeAll()
         resetProgress()
         mode = chosen.modes.first ?? .runtime
@@ -420,22 +463,21 @@ final class Runner: ObservableObject {
     var state: FixState {
         switch mode {
         case .runtime:     return runtimeState
-        case .transcode:   return transcodeState
         case .videoBridge: return bridgeState
         }
     }
 
-    /// Only the two Unreal modes exclude each other; the bridge has no rival.
+    /// The runtime patch cures the same crash the old re-encode did, so a
+    /// leftover re-encode has to come out first; the bridge has no rival.
     var otherState: FixState {
         switch mode {
-        case .runtime:     return transcodeState
-        case .transcode:   return runtimeState
+        case .runtime:     return legacyReencode
         case .videoBridge: return .notApplied
         }
     }
 
-    /// Both fixes cure the same crash, so having both in place is never useful
-    /// and makes reverting ambiguous. Offer Apply only when the other is clear.
+    /// Having both in place is never useful and makes reverting ambiguous.
+    /// Offer Apply only when the other is clear.
     var canApply: Bool { !busy && state.canApply && otherState == .notApplied }
     var canRevert: Bool { !busy && state.canRevert }
 
@@ -472,10 +514,10 @@ final class Runner: ObservableObject {
         title = t
         mode = chosen.modes.first ?? .runtime
         runtimeState = .unknown
-        transcodeState = .unknown
+        legacyReencode = .notApplied
         log.removeAll()
         resetProgress()
-        note("\(t.name)")
+        note(chosen.name)
         note(t.path)
         Task { await inspectTitle() }
     }
@@ -516,32 +558,34 @@ final class Runner: ObservableObject {
     }
 
     func inspect(_ g: GameFolder) async {
-        let fm = FileManager.default
-        let movies = (try? fm.subpathsOfDirectory(atPath: g.movies.path)) ?? []
-        note("Found \(movies.filter { $0.hasSuffix(".mp4") }.count) .mp4 files under Movies/")
-
         await inspectRuntime(g)
+        detectLegacyReencode(g)
+        describe()
+    }
 
+    /// Looks for the traces the removed re-encode mode left behind. A title
+    /// with no loose movies and no paks simply never had it applied, so a
+    /// missing pak is an answer here and not a failure.
+    private func detectLegacyReencode(_ g: GameFolder) {
+        let fm = FileManager.default
         guard let pak = g.mainPak else {
-            status = "No .pak found in Content/Paks."
+            legacyReencode = .notApplied
             return
         }
-        note("Main pak: \(pak.lastPathComponent)")
-
         let marker = pak.deletingLastPathComponent()
             .appendingPathComponent(".\(pak.lastPathComponent).hidden-videos.json")
         let patched = fm.fileExists(atPath: marker.path)
         let backedUp = fm.fileExists(atPath: g.content.appendingPathComponent("Movies_VP9_backup").path)
 
         if patched && backedUp {
-            transcodeState = .applied
+            legacyReencode = .applied
+            note("This copy still has re-encoded cutscenes from an older version.")
         } else if patched || backedUp {
-            transcodeState = .partial
+            legacyReencode = .partial
+            note("A half-finished re-encode from an older version is still here.")
         } else {
-            transcodeState = .notApplied
+            legacyReencode = .notApplied
         }
-
-        describe()
     }
 
     /// Asks the installer what it sees, rather than repeating its search for
@@ -551,7 +595,7 @@ final class Runner: ObservableObject {
         statusAnswer = ""
         // The handler fires off the main actor, so hop back rather than
         // capturing a local -- same pattern as run().
-        let code = await runStreaming("/bin/bash", [script, g.content.path, "--status"]) { line in
+        let code = await runStreaming("/bin/bash", [script, g.root.path, "--status"]) { line in
             Task { @MainActor [weak self] in
                 guard let self, self.statusAnswer.isEmpty else { return }
                 self.statusAnswer = line
@@ -560,8 +604,7 @@ final class Runner: ObservableObject {
         await Task.yield()
 
         guard code == 0 else {
-            // No libogg in this title: the runtime patch has no way in, but the
-            // transcode mode still works.
+            // No libogg in this title: the runtime patch has no way in.
             runtimeState = .notApplied
             note("This game has no libogg for the runtime patch to ride on.")
             runtimeUnavailable = true
@@ -577,13 +620,11 @@ final class Runner: ObservableObject {
 
     /// One sentence covering whatever is actually in place.
     private func describe() {
-        if runtimeState == .applied && transcodeState == .applied {
-            status = "Both fixes are in place — revert one."
+        if legacyReencode != .notApplied {
+            status = "Re-encoded cutscenes from an older version are still in place."
         } else if runtimeState == .applied {
             status = "Runtime patch installed. Cutscenes should play."
-        } else if transcodeState == .applied {
-            status = "Re-encoded cutscenes in place. They should play."
-        } else if runtimeState == .partial || transcodeState == .partial {
+        } else if runtimeState == .partial {
             status = "Partially applied — revert to undo, then try again."
         } else {
             status = "Not patched yet."
@@ -634,7 +675,6 @@ final class Runner: ObservableObject {
     func apply() {
         switch mode {
         case .runtime:     applyRuntime()
-        case .transcode:   applyTranscode()
         case .videoBridge: runBridge(install: true)
         }
     }
@@ -642,7 +682,6 @@ final class Runner: ObservableObject {
     func revert() {
         switch mode {
         case .runtime:     revertRuntime()
-        case .transcode:   revertTranscode()
         case .videoBridge: runBridge(install: false)
         }
     }
@@ -686,7 +725,7 @@ final class Runner: ObservableObject {
             progress = 0
 
             let script = resources.appendingPathComponent("install-runtime-fix.sh").path
-            guard await run(.installingRuntime, "/bin/bash", [script, g.content.path]) else {
+            guard await run(.installingRuntime, "/bin/bash", [script, g.root.path]) else {
                 status = "Could not install the runtime patch."
                 await inspect(g)
                 return
@@ -709,7 +748,7 @@ final class Runner: ObservableObject {
             progress = 0
 
             let script = resources.appendingPathComponent("install-runtime-fix.sh").path
-            _ = await run(.removingRuntime, "/bin/bash", [script, g.content.path, "--restore"])
+            _ = await run(.removingRuntime, "/bin/bash", [script, g.root.path, "--restore"])
 
             progress = 1
             note("")
@@ -718,45 +757,13 @@ final class Runner: ObservableObject {
         }
     }
 
-    // MARK: Re-encoding
+    // MARK: Undoing an older release's re-encode
 
-    private func applyTranscode() {
-        guard let g = game, let pak = g.mainPak else { return }
-        busy = true
-        Task {
-            defer { busy = false; indeterminate = false; phaseLabel = ""; detail = "" }
-            status = "Working…"
-            progress = 0
-
-            guard which("ffmpeg") != nil else {
-                note("")
-                note("ffmpeg is required and was not found.")
-                note("Install it with:  brew install ffmpeg")
-                status = "ffmpeg missing."
-                return
-            }
-
-            let transcode = resources.appendingPathComponent("transcode-movies.sh").path
-            let hide = resources.appendingPathComponent("pak-hide-videos.py").path
-
-            guard await run(.transcoding, "/bin/bash", [transcode, g.content.path]) else {
-                status = "Transcoding failed — the pak was left untouched."
-                return
-            }
-            guard await run(.patchingPak, "/usr/bin/python3", [hide, pak.path, "--apply"]) else {
-                status = "Pak patching failed. Your transcodes are in place but unused."
-                return
-            }
-
-            progress = 1
-            note("")
-            note("Done. Launch the game — the cutscenes should play.")
-            note("Note: Steam's \"verify integrity of game files\" undoes this.")
-            await inspectTitle()
-        }
-    }
-
-    private func revertTranscode() {
+    /// Puts back what the removed re-encode mode replaced: the pak's video
+    /// entries and the original VP9 files. Kept because a copy patched by an
+    /// older version cannot be repaired any other way, short of Steam
+    /// re-downloading the game.
+    func undoLegacyReencode() {
         guard let g = game, let pak = g.mainPak else { return }
         busy = true
         Task {
@@ -777,13 +784,6 @@ final class Runner: ObservableObject {
         }
     }
 
-    private func which(_ tool: String) -> String? {
-        for dir in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"] {
-            let p = "\(dir)/\(tool)"
-            if FileManager.default.isExecutableFile(atPath: p) { return p }
-        }
-        return nil
-    }
 }
 
 // MARK: - Interface
@@ -800,6 +800,7 @@ struct ContentView: View {
             supported
             dropZone
             if let t = runner.title {
+                if runner.legacyReencode != .notApplied { legacyBanner }
                 if t.modes.count > 1 { modePicker(t) }
                 actions
             }
@@ -931,6 +932,32 @@ struct ContentView: View {
         }
     }
 
+    /// Only ever seen by someone who ran the re-encode mode before it was
+    /// removed. Their cutscenes are H.264 and their pak index is edited, and
+    /// the runtime patch cannot go in on top of that, so this is the way out.
+    private var legacyBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "clock.arrow.circlepath")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Re-encoded cutscenes from an older version")
+                    .font(.callout.weight(.medium))
+                Text("This copy still has H.264 cutscenes and an edited pak index. "
+                   + "That mode has been removed — the runtime patch replaces it and "
+                   + "leaves your original VP9 files alone. Undo it to switch over.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button("Undo") { runner.undoLegacyReencode() }
+                .disabled(runner.busy)
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10)
+            .fill(Color.orange.opacity(0.08)))
+    }
+
     private var actions: some View {
         HStack(spacing: 12) {
             Button("Apply Fix") { runner.apply() }
@@ -958,7 +985,6 @@ struct ContentView: View {
         }
         switch runner.mode {
         case .runtime:     return "Install the proxy DLL that patches Electra at startup."
-        case .transcode:   return "Re-encode the cutscenes and hide the pak's copies."
         case .videoBridge: return "Install the DLL that carries frames from the decoder to the renderer."
         }
     }
