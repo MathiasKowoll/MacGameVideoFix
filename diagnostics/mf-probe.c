@@ -292,6 +292,8 @@ static ID3D11DeviceContext *video_context;
 static ID3D11Texture2D *frame_texture;
 static ID3D11Texture2D *game_shared_texture;
 static UINT shared_width, shared_height;
+static HRESULT (WINAPI *real_texture_qi)(void *, REFIID, void **);
+static HRESULT WINAPI texture_qi(void *self, REFIID iid, void **out);
 static UINT frame_width, frame_height, frame_stride;
 static UINT texture_width, texture_height;   /* what frame_texture actually is */
 static const BOOL probe_colour = TRUE;       /* diagnostic build: see upload_frame */
@@ -730,8 +732,59 @@ static HRESULT WINAPI device_create_texture2d(void *self, const void *desc,
         shared_height = d[1];
         ID3D11Texture2D_AddRef(game_shared_texture);
         LeaveCriticalSection(&frame_lock);
+        if (!real_texture_qi)
+        {
+            real_texture_qi = patch_vtable_slot(*texture, 0, texture_qi);
+            logf_("    texture QueryInterface watch: %s",
+                  real_texture_qi ? "installed" : "COULD NOT PATCH");
+        }
         if (previous) ID3D11Texture2D_Release(previous);
         logf_("    kept as the texture the D3D12 side reads");
+    }
+    return hr;
+}
+
+/*
+ * Does the game ever get a handle for the shared texture?
+ *
+ * Magenta written into both of its 2560x1440 textures does not reach the
+ * screen, but the GPTK counter moved when a D3D11 copy was added, so both
+ * APIs are going through the same backend and a share ought to work. The
+ * remaining possibility is upstream of the copy entirely: the game asks the
+ * texture for IDXGIResource and then for a shared handle, and if that fails
+ * its D3D12 side never opens the texture at all -- nothing written into it
+ * could ever show, and no error would appear anywhere we have been looking.
+ *
+ * IDXGIResource slot 8 is GetSharedHandle. Reaching it means intercepting the
+ * QueryInterface that produces the IDXGIResource first.
+ */
+static const GUID iid_dxgi_resource = { 0x035f3ab4, 0x482e, 0x4e50,
+                                        { 0xb4, 0x1f, 0x8a, 0x7f, 0x8b, 0xd8, 0x96, 0x0b } };
+
+static HRESULT (WINAPI *real_res_get_shared_handle)(void *, HANDLE *);
+
+static HRESULT WINAPI res_get_shared_handle(void *self, HANDLE *handle)
+{
+    HRESULT hr = real_res_get_shared_handle(self, handle);
+    logf_("IDXGIResource::GetSharedHandle -> %s", SUCCEEDED(hr) ? "ok" : "FAILED");
+    if (SUCCEEDED(hr) && handle) logf_("    handle: %p", *handle);
+    else log_hr("    result", hr);
+    return hr;
+}
+
+static HRESULT WINAPI texture_qi(void *self, REFIID iid, void **out)
+{
+    HRESULT hr = real_texture_qi(self, iid, out);
+
+    if (IsEqualGUID(iid, &iid_dxgi_resource))
+    {
+        stub_called("ID3D11Texture2D::QueryInterface(IDXGIResource)");
+        if (SUCCEEDED(hr) && out && *out && !real_res_get_shared_handle)
+        {
+            real_res_get_shared_handle = patch_vtable_slot(*out, 8, res_get_shared_handle);
+            logf_("  GetSharedHandle watch: %s",
+                  real_res_get_shared_handle ? "installed" : "COULD NOT PATCH");
+        }
     }
     return hr;
 }
