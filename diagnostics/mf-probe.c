@@ -114,7 +114,6 @@ static void describe_subtype(const char *label, const GUID *g)
 }
 
 static void log_hr(const char *what, HRESULT hr);
-static void complete_media_type(IMFMediaType *type);
 
 static void log_wstr(const char *label, const WCHAR *w)
 {
@@ -633,10 +632,7 @@ static LONG read_samples, read_failures;
 static HRESULT WINAPI reader_set_media_type(void *self, DWORD stream, DWORD *reserved,
                                             IMFMediaType *type)
 {
-    HRESULT hr;
-
-    complete_media_type(type);
-    hr = real_set_media_type(self, stream, reserved, type);
+    HRESULT hr = real_set_media_type(self, stream, reserved, type);
     GUID subtype;
 
     logf_("IMFSourceReader::SetCurrentMediaType(stream=%lu)", (unsigned long)stream);
@@ -698,46 +694,6 @@ static const struct { const char *name; GUID guid; } media_type_keys[] =
  {"MF_MT_TRANSFER_FUNCTION", {0x5fb0fce9,0xbe5c,0x4935,{0xa8,0x11,0xec,0x83,0x8f,0x8e,0xed,0x93}}},
  {"MF_MT_VIDEO_ROTATION",    {0xc380465d,0x2271,0x428c,{0x9b,0x83,0xec,0xea,0x3b,0x4a,0x85,0xc1}}},
 };
-
-/*
- * Fill in the two attributes a Windows source always sets and winegstreamer
- * does not.
- *
- * After the reader is set up the game calls MFCreateMFVideoFormatFromMFMediaType,
- * and Wine's implementation reads exactly these:
- *
- *     media_type_get_ratio(media_type, &MF_MT_PIXEL_ASPECT_RATIO, ...)
- *     format->videoInfo.InterlaceMode = media_type_get_uint32(media_type, &MF_MT_INTERLACE_MODE)
- *
- * Neither is present on the media types this reader hands out -- the dump
- * listed eight attributes and both are absent -- so the MFVIDEOFORMAT comes
- * out with an aspect ratio of 0/0 and an interlace mode of Unknown. A caller
- * that divides by the denominator, or that insists on progressive, would give
- * up right here.
- *
- * Setting them is a test. If it works, the repair belongs in winegstreamer,
- * which knows the video is progressive and square-pixelled and should say so.
- */
-static void complete_media_type(IMFMediaType *type)
-{
-    IMFAttributes *attrs = (IMFAttributes *)type;
-    UINT64 ratio;
-    UINT32 mode;
-
-    if (!type) return;
-
-    if (FAILED(IMFAttributes_GetUINT64(attrs, &MF_MT_PIXEL_ASPECT_RATIO, &ratio)))
-    {
-        IMFAttributes_SetUINT64(attrs, &MF_MT_PIXEL_ASPECT_RATIO, ((UINT64)1 << 32) | 1);
-        stub_called("MF_MT_PIXEL_ASPECT_RATIO was absent -> set to 1:1");
-    }
-    if (FAILED(IMFAttributes_GetUINT32(attrs, &MF_MT_INTERLACE_MODE, &mode))
-        || mode == MFVideoInterlace_Unknown)
-    {
-        IMFAttributes_SetUINT32(attrs, &MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
-        stub_called("MF_MT_INTERLACE_MODE was Unknown -> set to Progressive");
-    }
-}
 
 static void dump_media_type(const char *label, IMFMediaType *type)
 {
@@ -817,11 +773,8 @@ static HRESULT WINAPI reader_get_native_type(void *self, DWORD stream, DWORD ind
         logf_("IMFSourceReader::GetNativeMediaType(stream=%lu, index=%lu)",
               (unsigned long)stream, (unsigned long)index);
         log_hr("  result", hr);
-        if (SUCCEEDED(hr) && type)
-        {
-            complete_media_type(*type);
-            if (reader_chatter <= 4) dump_media_type("native type", *type);
-        }
+        if (SUCCEEDED(hr) && type && reader_chatter <= 4)
+            dump_media_type("native type", *type);
     }
     return hr;
 }
@@ -845,7 +798,6 @@ static HRESULT WINAPI reader_get_current_type(void *self, DWORD stream, IMFMedia
                 logf_("  frame size: NOT SET  <- a decoder that reports no size is unusable");
             dump_media_type("current type", *type);
         }
-        if (SUCCEEDED(hr) && type) complete_media_type(*type);
         log_hr("  result", hr);
     }
     return hr;
