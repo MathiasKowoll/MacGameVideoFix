@@ -294,6 +294,7 @@ static ID3D11Texture2D *game_shared_texture;
 static UINT shared_width, shared_height;
 static UINT frame_width, frame_height, frame_stride;
 static UINT texture_width, texture_height;   /* what frame_texture actually is */
+static const BOOL probe_colour = TRUE;       /* diagnostic build: see upload_frame */
 static BYTE *frame_scratch;
 static CRITICAL_SECTION frame_lock;
 static LONG frames_uploaded;
@@ -1026,6 +1027,28 @@ static void upload_frame(IMFSample *sample)
                 }
 
                 nv12_to_bgra(data, stride, frame_scratch, frame_width, frame_height);
+
+                /*
+                 * One question is still open and everything else depends on
+                 * it: do writes made through the D3D11 device reach the
+                 * texture the D3D12 renderer samples at all?
+                 *
+                 * The copy into the shared texture happens, the frame has real
+                 * content, and the video rectangle is still flat grey -- which
+                 * is what an untouched texture looks like. If D3DMetal backs
+                 * its D3D11 and D3D12 sides with separate resources, the share
+                 * silently produces two unrelated textures and nothing written
+                 * here can ever appear.
+                 *
+                 * Magenta settles it. Nothing in this game is magenta.
+                 */
+                if (probe_colour)
+                {
+                    size_t px = (size_t)frame_width * frame_height;
+                    BYTE *q = frame_scratch;
+                    while (px--) { q[0] = 0xff; q[1] = 0x00; q[2] = 0xff; q[3] = 0xff; q += 4; }
+                    if (n <= 1) logf_("  PROBE: frame replaced with solid magenta");
+                }
                 ID3D11DeviceContext_UpdateSubresource(video_context,
                         (ID3D11Resource *)frame_texture, 0, NULL,
                         frame_scratch, frame_width * 4, 0);
