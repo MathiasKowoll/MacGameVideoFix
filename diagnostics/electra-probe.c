@@ -215,7 +215,17 @@ typedef struct
 static HRESULT (WINAPI *pMFCreateSample)(void **);
 static HRESULT (WINAPI *pMFCreate2DMediaBuffer)(DWORD, DWORD, DWORD, BOOL, void **);
 static UINT32 frame_w, frame_h;
-static BOOL provide_samples = TRUE;
+/* The swap is off.
+ *
+ * Removing Electra's buffer from its own sample crashed the game outright:
+ * RemoveAllBuffers releases it, and if Electra still holds the pointer it is
+ * reading freed memory a moment later. Taking something away from a caller
+ * that is still using it was never going to work.
+ *
+ * The buffer has to be left where it is and taught to answer IMF2DBuffer
+ * instead -- which is what the DYNASTY WARRIORS bridge did for IMFDXGIBuffer,
+ * and is the next thing to build. */
+static BOOL provide_samples = FALSE;
 
 static void load_mfplat(void)
 {
@@ -438,6 +448,175 @@ static HRESULT WINAPI my_SetInputType(void *self, DWORD stream, void *type, DWOR
     return hr;
 }
 
+
+/* Teach the caller's own buffer to answer IMF2DBuffer.
+ *
+ * Electra's path, read from UE's VideoDecoderH264_DX.cpp rather than guessed:
+ *
+ *     GetBufferCount()                     must be exactly 1   (:1162)
+ *     GetBufferByIndex(0, &Buffer)                             (:1167)
+ *     Buffer->QueryInterface(IMF2DBuffer)  <- fails here       (:1192)
+ *     Buffer2D->Lock2D(&Data, &Pitch)                          (:988)
+ *     ... copies DecodedHeight * 3 / 2 rows ...
+ *     Buffer2D->Unlock2D()
+ *
+ * So only Lock2D and Unlock2D are load-bearing, and nothing needs to be taken
+ * away from the caller -- which is what crashed the game last time. The buffer
+ * stays exactly where Electra put it; asking it for IMF2DBuffer now yields a
+ * small object of ours that locks the very same memory and reports a pitch.
+ *
+ * NV12 in a flat buffer is contiguous, so the pitch is the frame width. */
+
+static const GUID IID_IMF2DBuffer_ =
+    { 0x7dc9d5f9, 0x9ed9, 0x44ec, { 0x9b, 0xbf, 0x06, 0x00, 0xbb, 0x58, 0x9f, 0xbb } };
+static const GUID IID_IUnknown_ =
+    { 0x00000000, 0x0000, 0x0000, { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+
+/* IMFMediaBuffer: Lock 3, Unlock 4, GetCurrentLength 5. */
+struct two_d
+{
+    void **vtbl;
+    LONG refs;
+    void *inner;          /* the real IMFMediaBuffer, AddRef'd */
+    BYTE *locked;
+};
+
+static HRESULT WINAPI td_QueryInterface(void *self, const GUID *iid, void **out)
+{
+    struct two_d *td = (struct two_d *)self;
+    if (!out) return E_POINTER;
+    if (IsEqualGUID(iid, &IID_IMF2DBuffer_) || IsEqualGUID(iid, &IID_IUnknown_))
+    {
+        InterlockedIncrement(&td->refs);
+        *out = self;
+        return S_OK;
+    }
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI td_AddRef(void *self)
+{
+    return InterlockedIncrement(&((struct two_d *)self)->refs);
+}
+
+static ULONG WINAPI td_Release(void *self)
+{
+    struct two_d *td = (struct two_d *)self;
+    LONG n = InterlockedDecrement(&td->refs);
+    if (n == 0)
+    {
+        if (td->inner) release_obj(td->inner);
+        HeapFree(GetProcessHeap(), 0, td);
+    }
+    return n;
+}
+
+static HRESULT WINAPI td_Lock2D(void *self, BYTE **scanline0, LONG *pitch)
+{
+    struct two_d *td = (struct two_d *)self;
+    HRESULT (WINAPI *lock)(void *, BYTE **, DWORD *, DWORD *) =
+        (HRESULT (WINAPI *)(void *, BYTE **, DWORD *, DWORD *))(*(void ***)td->inner)[3];
+    BYTE *data = NULL;
+    DWORD max = 0, cur = 0;
+    HRESULT hr = lock(td->inner, &data, &max, &cur);
+    if (FAILED(hr)) return hr;
+    td->locked = data;
+    if (scanline0) *scanline0 = data;
+    if (pitch) *pitch = (LONG)frame_w;
+    return S_OK;
+}
+
+static HRESULT WINAPI td_Unlock2D(void *self)
+{
+    struct two_d *td = (struct two_d *)self;
+    HRESULT (WINAPI *unlock)(void *) =
+        (HRESULT (WINAPI *)(void *))(*(void ***)td->inner)[4];
+    td->locked = NULL;
+    return unlock(td->inner);
+}
+
+static HRESULT WINAPI td_GetScanline0AndPitch(void *self, BYTE **scanline0, LONG *pitch)
+{
+    struct two_d *td = (struct two_d *)self;
+    if (!td->locked) return 0xC00D36B2L;  /* MF_E_INVALIDREQUEST */
+    if (scanline0) *scanline0 = td->locked;
+    if (pitch) *pitch = (LONG)frame_w;
+    return S_OK;
+}
+
+static HRESULT WINAPI td_IsContiguousFormat(void *self, BOOL *contiguous)
+{
+    (void)self;
+    if (contiguous) *contiguous = TRUE;
+    return S_OK;
+}
+
+static HRESULT WINAPI td_GetContiguousLength(void *self, DWORD *len)
+{
+    (void)self;
+    if (len) *len = frame_w * frame_h * 3 / 2;
+    return S_OK;
+}
+
+static HRESULT WINAPI td_ContiguousCopyTo(void *self, BYTE *dest, DWORD size)
+{
+    BYTE *src = NULL;
+    LONG pitch = 0;
+    HRESULT hr = td_Lock2D(self, &src, &pitch);
+    if (FAILED(hr)) return hr;
+    CopyMemory(dest, src, size);
+    td_Unlock2D(self);
+    return S_OK;
+}
+
+static HRESULT WINAPI td_ContiguousCopyFrom(void *self, const BYTE *src, DWORD size)
+{
+    BYTE *dst = NULL;
+    LONG pitch = 0;
+    HRESULT hr = td_Lock2D(self, &dst, &pitch);
+    if (FAILED(hr)) return hr;
+    CopyMemory(dst, src, size);
+    td_Unlock2D(self);
+    return S_OK;
+}
+
+static void *two_d_vtbl[10] =
+{
+    (void *)td_QueryInterface, (void *)td_AddRef, (void *)td_Release,
+    (void *)td_Lock2D, (void *)td_Unlock2D, (void *)td_GetScanline0AndPitch,
+    (void *)td_IsContiguousFormat, (void *)td_GetContiguousLength,
+    (void *)td_ContiguousCopyTo, (void *)td_ContiguousCopyFrom
+};
+
+/* The buffer's own QueryInterface, patched once on its shared vtable. */
+static HRESULT (WINAPI *real_buffer_QI)(void *, const GUID *, void **);
+
+static HRESULT WINAPI my_buffer_QueryInterface(void *self, const GUID *iid, void **out)
+{
+    if (iid && IsEqualGUID(iid, &IID_IMF2DBuffer_))
+    {
+        HRESULT hr = real_buffer_QI(self, iid, out);
+        if (SUCCEEDED(hr)) return hr;          /* already 2D: leave it alone */
+        {
+            struct two_d *td = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*td));
+            static LONG said;
+            if (!td) return E_OUTOFMEMORY;
+            td->vtbl = two_d_vtbl;
+            td->refs = 1;
+            td->inner = self;
+            ((ULONG (WINAPI *)(void *))(*(void ***)self)[1])(self);   /* AddRef inner */
+            *out = td;
+            if (InterlockedIncrement(&said) == 1)
+                logf_("gave Electra an IMF2DBuffer over its own buffer "
+                      "(%ux%u, pitch %u) -- nothing taken away this time",
+                      frame_w, frame_h, frame_w);
+            return S_OK;
+        }
+    }
+    return real_buffer_QI(self, iid, out);
+}
+
 static HRESULT WINAPI my_ProcessOutput(void *self, DWORD flags, DWORD count,
                                        void *samples, DWORD *status)
 {
@@ -484,6 +663,24 @@ static HRESULT WINAPI my_ProcessOutput(void *self, DWORD flags, DWORD count,
     }
 
     hr = real_ProcessOutput(self, flags, count, samples, status);
+
+    /* Patch the buffer's QueryInterface on its shared vtable, once, using a
+     * real buffer as the way in -- there is no other handle on that class. */
+    if (SUCCEEDED(hr) && out && count >= 1 && out[0].pSample && !real_buffer_QI)
+    {
+        void *buffer = NULL;
+        HRESULT (WINAPI *by_index)(void *, DWORD, void **) =
+            (HRESULT (WINAPI *)(void *, DWORD, void **))(*(void ***)out[0].pSample)[40];
+        if (SUCCEEDED(by_index(out[0].pSample, 0, &buffer)) && buffer)
+        {
+            static void *saved;
+            if (patch_slot("buffer QueryInterface", buffer, 0,
+                           (void *)my_buffer_QueryInterface, &saved))
+                real_buffer_QI =
+                    (HRESULT (WINAPI *)(void *, const GUID *, void **))saved;
+            release_obj(buffer);
+        }
+    }
     if (FAILED(hr) && ours && out)
     {
         release_obj(ours);
