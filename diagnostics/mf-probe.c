@@ -308,6 +308,7 @@ static UINT frame_width, frame_height, frame_stride;
 static UINT texture_width, texture_height;   /* what frame_texture actually is */
 /* The magenta test served its purpose: the bridge carries what we put in it. */
 static const BOOL probe_colour = FALSE;
+static const BOOL patch_abort_branches = FALSE;
 static BYTE *frame_scratch;
 static CRITICAL_SECTION frame_lock;
 static LONG frames_uploaded;
@@ -2404,7 +2405,19 @@ static DWORD WINAPI worker(LPVOID unused)
     HOOK("MFPlat.DLL", MFTEnumEx);
     HOOK("MFReadWrite.dll", MFCreateSourceReaderFromByteStream);
     hook_remaining_mfplat();
-    defeat_abort_branches();
+
+    /*
+     * The abort branches are left alone now.
+     *
+     * Nopping them was necessary before the bridge existed: the player gave up
+     * because it could not get a video processor, and forcing it past that was
+     * the only way to see what it wanted next. Now it gets everything it asks
+     * for, so it should pass its own checks honestly -- and if it does, the
+     * shipping version never has to modify the game's code at all, which also
+     * removes the crash on skipping a cutscene rather than working around it.
+     */
+    if (patch_abort_branches) defeat_abort_branches();
+    else logf_("  abort branches left intact -- the player should pass its own checks");
     logf_("");
     return 0;
 }
