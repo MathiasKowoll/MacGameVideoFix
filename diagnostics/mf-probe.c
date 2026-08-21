@@ -279,8 +279,25 @@ static struct stub_object stub_vp_enumerator;
 static struct stub_object stub_vp_processor;
 static struct stub_object stub_vp_input_view;
 static struct stub_object stub_vp_output_view;
+static struct stub_object stub_dxgi_buffer;
 
 static const char *dxgi_format_name(UINT f);
+static void *patch_vtable_slot(void *object, unsigned slot, void *replacement);
+static void upload_frame(IMFSample *sample);
+
+/* The frame we put in front of the game, and the device it belongs to. */
+static ID3D11Device *video_device;
+static ID3D11DeviceContext *video_context;
+static ID3D11Texture2D *frame_texture;
+static UINT frame_width, frame_height;
+static CRITICAL_SECTION frame_lock;
+static LONG frames_uploaded;
+static void *dxgibuf_vtbl[];
+
+/* Filled in once the MFPlat imports are wrapped; index 1 is MFCreateMediaType,
+ * which reader_set_media_type needs to build its RGB32 request. */
+static void *real_mf[9];
+#define real_MFCreateMediaType ((HRESULT (WINAPI *)(IMFMediaType **))real_mf[1])
 
 static HRESULT WINAPI stub_QueryInterface(void *self, REFIID iid, void **out)
 {
@@ -289,7 +306,8 @@ static HRESULT WINAPI stub_QueryInterface(void *self, REFIID iid, void **out)
         || (obj == &stub_video_device  && IsEqualGUID(iid, &iid_video_device))
         || (obj == &stub_video_context && IsEqualGUID(iid, &iid_video_context))
         || obj == &stub_vp_enumerator || obj == &stub_vp_processor
-        || obj == &stub_vp_input_view || obj == &stub_vp_output_view)
+        || obj == &stub_vp_input_view || obj == &stub_vp_output_view
+        || obj == &stub_dxgi_buffer)
     {
         InterlockedIncrement(&obj->refcount);
         *out = obj;
@@ -499,6 +517,19 @@ static HRESULT WINAPI vc_VideoProcessorBlt(void *self, void *processor, void *ou
         describe_resource("input ", input_view_resource);
         describe_resource("output", output_view_resource);
     }
+
+    /*
+     * Both sides are BGRA of the same size, so the conversion the real
+     * processor would do is already done: copy.
+     */
+    EnterCriticalSection(&frame_lock);
+    if (frame_texture && output_view_resource && video_context)
+        ID3D11DeviceContext_CopyResource(video_context,
+                (ID3D11Resource *)output_view_resource, (ID3D11Resource *)frame_texture);
+    else if (blit_calls <= 3)
+        logf_("    nothing to copy (texture %p, output %p)",
+              (void *)frame_texture, output_view_resource);
+    LeaveCriticalSection(&frame_lock);
     return S_OK;
 }
 
@@ -625,6 +656,142 @@ static HRESULT WINAPI device_create_rtv(void *self, void *res, const void *desc,
     return hr;
 }
 
+/* --------------------------------------------- D3D-backed samples --- */
+
+/*
+ * Hand the game frames it can actually use.
+ *
+ * The executable references IMFDXGIBuffer, ID3D11Texture2D and IDXGIResource,
+ * and neither IMF2DBuffer nor IMFMediaBuffer. It only knows how to present a
+ * sample backed by a D3D texture: query the buffer for IMFDXGIBuffer, take the
+ * texture, wrap it in a VideoProcessorInputView, blit.
+ *
+ * Dropping MF_SOURCE_READER_D3D_MANAGER is what made decoding work, and it is
+ * also what leaves the samples in plain memory. Rather than choose between
+ * them, decode in software and put each frame into a texture ourselves, then
+ * answer the IMFDXGIBuffer query with it.
+ *
+ * The game's own two textures are BGRA, so asking the reader for RGB32 instead
+ * of NV12 lets winegstreamer do the colour conversion -- in code written for
+ * it -- and leaves us only an upload. A scalar NV12 converter here would be
+ * 3.7 million pixels a frame.
+ */
+static const GUID iid_dxgi_buffer = { 0xe7174cfa, 0x1c9e, 0x48b1,
+                                      { 0x88, 0x66, 0x62, 0x62, 0x26, 0xbf, 0xc2, 0x58 } };
+
+static HRESULT WINAPI dxgibuf_GetResource(void *self, REFIID iid, void **out)
+{
+    HRESULT hr;
+    (void)self;
+    if (!out) return E_INVALIDARG;
+    EnterCriticalSection(&frame_lock);
+    hr = frame_texture ? ID3D11Texture2D_QueryInterface(frame_texture, iid, out)
+                       : E_FAIL;
+    LeaveCriticalSection(&frame_lock);
+    if (FAILED(hr)) stub_called("IMFDXGIBuffer::GetResource had no texture to give");
+    return hr;
+}
+
+static HRESULT WINAPI dxgibuf_GetSubresourceIndex(void *self, UINT *index)
+{
+    (void)self;
+    if (!index) return E_INVALIDARG;
+    *index = 0;                      /* one texture, one subresource */
+    return S_OK;
+}
+
+static HRESULT WINAPI dxgibuf_GetUnknown(void *self, REFIID guid, REFIID iid, void **out)
+{
+    (void)self; (void)guid; (void)iid;
+    if (out) *out = NULL;
+    return MF_E_ATTRIBUTENOTFOUND;
+}
+
+static HRESULT WINAPI dxgibuf_SetUnknown(void *self, REFIID guid, IUnknown *unk)
+{
+    (void)self; (void)guid; (void)unk;
+    return S_OK;
+}
+
+static void *dxgibuf_vtbl[] =
+{
+    stub_QueryInterface, stub_AddRef, stub_Release,
+    dxgibuf_GetResource,
+    dxgibuf_GetSubresourceIndex,
+    dxgibuf_GetUnknown,
+    dxgibuf_SetUnknown,
+};
+
+/* Slot 0 of the buffer the reader hands out, so a query for IMFDXGIBuffer
+ * reaches us. One slot, as everywhere else in this file. */
+static HRESULT (WINAPI *real_buffer_qi)(void *, REFIID, void **);
+
+static HRESULT WINAPI buffer_qi(void *self, REFIID iid, void **out)
+{
+    if (IsEqualGUID(iid, &iid_dxgi_buffer))
+    {
+        stub_called("IMFMediaBuffer::QueryInterface(IMFDXGIBuffer) -> ours");
+        InterlockedIncrement(&stub_dxgi_buffer.refcount);
+        *out = &stub_dxgi_buffer;
+        return S_OK;
+    }
+    return real_buffer_qi(self, iid, out);
+}
+
+/* Copy one decoded frame into the texture the game will be handed. */
+static void upload_frame(IMFSample *sample)
+{
+    IMFMediaBuffer *buffer = NULL;
+    BYTE *data = NULL;
+    DWORD length = 0;
+
+    if (!sample || !video_device || !video_context) return;
+    if (FAILED(IMFSample_ConvertToContiguousBuffer(sample, &buffer)) || !buffer) return;
+
+    if (!real_buffer_qi)
+    {
+        real_buffer_qi = patch_vtable_slot(buffer, 0, buffer_qi);
+        logf_("  media buffer hook: %s", real_buffer_qi ? "installed" : "COULD NOT PATCH");
+    }
+
+    if (SUCCEEDED(IMFMediaBuffer_Lock(buffer, &data, NULL, &length)) && data)
+    {
+        EnterCriticalSection(&frame_lock);
+        if (!frame_texture && frame_width && frame_height)
+        {
+            D3D11_TEXTURE2D_DESC desc;
+            HRESULT hr;
+
+            memset(&desc, 0, sizeof(desc));
+            desc.Width = frame_width;
+            desc.Height = frame_height;
+            desc.MipLevels = 1;
+            desc.ArraySize = 1;
+            desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+            desc.SampleDesc.Count = 1;
+            desc.Usage = D3D11_USAGE_DEFAULT;
+            desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            hr = ID3D11Device_CreateTexture2D(video_device, &desc, NULL, &frame_texture);
+            logf_("  frame texture %ux%u BGRA: %s", frame_width, frame_height,
+                  SUCCEEDED(hr) ? "created" : "FAILED");
+            if (FAILED(hr)) { log_hr("    result", hr); frame_texture = NULL; }
+        }
+        if (frame_texture)
+        {
+            /* RGB32 rows are width * 4 and bottom-up unless the stride says
+             * otherwise; the reader reports a positive stride for this type. */
+            ID3D11DeviceContext_UpdateSubresource(video_context,
+                    (ID3D11Resource *)frame_texture, 0, NULL, data, frame_width * 4, 0);
+            if (InterlockedIncrement(&frames_uploaded) <= 3)
+                logf_("  frame %ld uploaded (%lu bytes)", frames_uploaded,
+                      (unsigned long)length);
+        }
+        LeaveCriticalSection(&frame_lock);
+        IMFMediaBuffer_Unlock(buffer);
+    }
+    IMFMediaBuffer_Release(buffer);
+}
+
 static void install_video_stubs(void *device, void *context)
 {
     stub_video_device.vtbl    = vd_vtbl;
@@ -633,6 +800,7 @@ static void install_video_stubs(void *device, void *context)
     stub_vp_processor.vtbl    = vp_vtbl;
     stub_vp_input_view.vtbl   = vpiv_vtbl;
     stub_vp_output_view.vtbl  = vpov_vtbl;
+    stub_dxgi_buffer.vtbl     = dxgibuf_vtbl;
 
     if (device && !real_device_qi)
     {
@@ -667,6 +835,8 @@ static HRESULT WINAPI my_D3D11CreateDevice(void *adapter, UINT driver_type, HMOD
                         &iid_video_context);
         install_video_stubs(device ? *(void **)device : NULL,
                             context ? *(void **)context : NULL);
+        if (!video_device && device)  video_device  = *(ID3D11Device **)device;
+        if (!video_context && context) video_context = *(ID3D11DeviceContext **)context;
     }
     return hr;
 }
@@ -892,12 +1062,53 @@ static LONG read_samples, read_failures;
 static HRESULT WINAPI reader_set_media_type(void *self, DWORD stream, DWORD *reserved,
                                             IMFMediaType *type)
 {
-    HRESULT hr = real_set_media_type(self, stream, reserved, type);
+    HRESULT hr = E_FAIL;
     GUID subtype;
+    UINT64 size = 0;
 
     logf_("IMFSourceReader::SetCurrentMediaType(stream=%lu)", (unsigned long)stream);
     if (type && SUCCEEDED(IMFAttributes_GetGUID((IMFAttributes *)type, &MF_MT_SUBTYPE, &subtype)))
         describe_subtype("asked for", &subtype);
+    if (type && SUCCEEDED(IMFAttributes_GetUINT64((IMFAttributes *)type, &MF_MT_FRAME_SIZE, &size)))
+    {
+        frame_width  = (UINT)(size >> 32);
+        frame_height = (UINT)(size & 0xffffffff);
+    }
+
+    /*
+     * Ask for RGB32 instead. The frames have to end up in a BGRA texture
+     * either way -- both of the game's own are BGRA -- and letting the reader
+     * convert means winegstreamer does it rather than a scalar loop here.
+     *
+     * A copy of the request, never the game's own object: adding to the type
+     * it passes in is what turned a working SetCurrentMediaType into
+     * MF_E_TOPO_CODEC_NOT_FOUND once already.
+     */
+    if (type && real_MFCreateAttributes)
+    {
+        IMFMediaType *rgb = NULL;
+        if (SUCCEEDED(real_MFCreateMediaType(&rgb)) && rgb)
+        {
+            if (SUCCEEDED(IMFMediaType_CopyAllItems(type, (IMFAttributes *)rgb))
+                && SUCCEEDED(IMFAttributes_SetGUID((IMFAttributes *)rgb, &MF_MT_SUBTYPE,
+                                                   &MFVideoFormat_RGB32)))
+            {
+                hr = real_set_media_type(self, stream, reserved, rgb);
+                if (SUCCEEDED(hr))
+                {
+                    stub_called("asked the reader for RGB32 instead of NV12");
+                    log_hr("result (RGB32)", hr);
+                    IMFMediaType_Release(rgb);
+                    return hr;
+                }
+                logf_("  RGB32 refused, falling back to what the game asked for");
+                log_hr("    result", hr);
+            }
+            IMFMediaType_Release(rgb);
+        }
+    }
+
+    hr = real_set_media_type(self, stream, reserved, type);
     log_hr("result", hr);
     return hr;
 }
@@ -923,6 +1134,7 @@ static HRESULT WINAPI reader_read_sample(void *self, DWORD stream, DWORD flags,
               (sample && *sample) ? "delivered" : "NULL");
         if (sample_flags) logf_("  flags: 0x%lx", (unsigned long)*sample_flags);
     }
+    if (SUCCEEDED(hr) && sample && *sample) upload_frame(*sample);
     return hr;
 }
 
@@ -1457,6 +1669,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
     if (reason == DLL_PROCESS_ATTACH)
     {
         InitializeCriticalSection(&log_lock);
+        InitializeCriticalSection(&frame_lock);
         DisableThreadLibraryCalls(inst);
         thread = CreateThread(NULL, 0, worker, NULL, 0, NULL);
         if (thread) CloseHandle(thread);
