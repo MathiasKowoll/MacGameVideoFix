@@ -29,7 +29,10 @@ REF="$1"
 OUT="${2:-$HERE/build}"
 [ -f "$REF" ] || { echo "error: no such file: $REF" >&2; exit 1; }
 
-NAME="$(basename "$REF")"
+# Once installed, the reference file on disk is the *renamed* original, so the
+# carrier name cannot always be taken from it. CARRIER_NAME says what the game
+# actually imports.
+NAME="${CARRIER_NAME:-$(basename "$REF")}"
 STEM="${NAME%.*}"
 REAL="${STEM}_real"
 

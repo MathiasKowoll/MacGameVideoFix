@@ -44,7 +44,8 @@ static void logf_(const char *fmt, ...)
     int n;
 
     va_start(ap, fmt);
-    n = vsnprintf(buf, sizeof(buf) - 2, fmt, ap);
+    n = snprintf(buf, sizeof(buf) - 2, "[%6lu] ", (unsigned long)GetTickCount());
+    n += vsnprintf(buf + n, sizeof(buf) - n - 2, fmt, ap);
     va_end(ap);
     if (n < 0) return;
     buf[n] = '\n';
@@ -154,6 +155,11 @@ static void log_bytestream_tags(IMFByteStream *stream)
 
 /* ---------------------------------------------------------------- hooks --- */
 
+static FARPROC (WINAPI *real_GetProcAddress)(HMODULE, LPCSTR);
+static HRESULT (WINAPI *real_MFStartup)(ULONG, DWORD);
+static HRESULT (WINAPI *real_MFShutdown)(void);
+static HRESULT (WINAPI *real_MFCreateDXGIDeviceManager)(UINT *, void **);
+static HRESULT (WINAPI *real_MFCreateAttributes)(IMFAttributes **, UINT32);
 static HRESULT (WINAPI *real_MFCreateFile)(MF_FILE_ACCESSMODE, MF_FILE_OPENMODE,
                                            MF_FILE_FLAGS, LPCWSTR, IMFByteStream **);
 static HRESULT (WINAPI *real_MFCreateSourceReaderFromByteStream)(IMFByteStream *,
@@ -162,6 +168,55 @@ static HRESULT (WINAPI *real_MFCreateSourceReaderFromByteStream)(IMFByteStream *
 static HRESULT (WINAPI *real_MFTEnumEx)(GUID, UINT32, const MFT_REGISTER_TYPE_INFO *,
                                         const MFT_REGISTER_TYPE_INFO *,
                                         IMFActivate ***, UINT32 *);
+
+/*
+ * A game can reach Media Foundation without going through its import table.
+ * If it does, the hooks below never fire and the log looks like "nothing
+ * happened" when the truth is "we were not watching". This says which is which.
+ */
+static FARPROC WINAPI my_GetProcAddress(HMODULE module, LPCSTR name)
+{
+    FARPROC proc = real_GetProcAddress(module, name);
+
+    if ((ULONG_PTR)name > 0xFFFF &&
+        (name[0] == 'M' && name[1] == 'F'))
+    {
+        char path[MAX_PATH] = "?";
+        GetModuleFileNameA(module, path, sizeof(path) - 1);
+        logf_("GetProcAddress(%s) from %s -> %s", name, path, proc ? "ok" : "NOT FOUND");
+    }
+    return proc;
+}
+
+static HRESULT WINAPI my_MFStartup(ULONG version, DWORD flags)
+{
+    HRESULT hr = real_MFStartup(version, flags);
+    logf_("MFStartup(version=0x%lx, flags=%lu)", (unsigned long)version, (unsigned long)flags);
+    log_hr("result", hr);
+    return hr;
+}
+
+static HRESULT WINAPI my_MFShutdown(void)
+{
+    logf_("MFShutdown");
+    return real_MFShutdown();
+}
+
+static HRESULT WINAPI my_MFCreateDXGIDeviceManager(UINT *token, void **manager)
+{
+    HRESULT hr = real_MFCreateDXGIDeviceManager(token, manager);
+    logf_("MFCreateDXGIDeviceManager");
+    log_hr("result", hr);
+    return hr;
+}
+
+static HRESULT WINAPI my_MFCreateAttributes(IMFAttributes **attrs, UINT32 size)
+{
+    HRESULT hr = real_MFCreateAttributes(attrs, size);
+    logf_("MFCreateAttributes(size=%u)", size);
+    log_hr("result", hr);
+    return hr;
+}
 
 static HRESULT WINAPI my_MFCreateFile(MF_FILE_ACCESSMODE access, MF_FILE_OPENMODE open,
                                       MF_FILE_FLAGS flags, LPCWSTR url,
@@ -287,6 +342,11 @@ static DWORD WINAPI worker(LPVOID unused)
     (void)unused;
     logf_("");
     logf_("=== mf-probe attached ===");
+    HOOK("KERNEL32.dll", GetProcAddress);
+    HOOK("MFPlat.DLL", MFStartup);
+    HOOK("MFPlat.DLL", MFShutdown);
+    HOOK("MFPlat.DLL", MFCreateAttributes);
+    HOOK("MFPlat.DLL", MFCreateDXGIDeviceManager);
     HOOK("MFPlat.DLL", MFCreateFile);
     HOOK("MFPlat.DLL", MFTEnumEx);
     HOOK("MFReadWrite.dll", MFCreateSourceReaderFromByteStream);
