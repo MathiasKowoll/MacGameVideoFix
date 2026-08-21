@@ -104,6 +104,39 @@ static HRESULT (WINAPI *real_MFTEnumEx)(GUID, UINT32, const REG_TYPE_INFO *,
                                         const REG_TYPE_INFO *, void ***, UINT32 *);
 static HRESULT (WINAPI *real_MFCreateSourceReaderFromByteStream)(void *, void *, void **);
 static HRESULT (WINAPI *real_MFCreateSourceReaderFromURL)(LPCWSTR, void *, void **);
+static HRESULT (WINAPI *real_MFCreateDXGIDeviceManager)(UINT *, void **);
+
+/* Refuse the DXGI device manager.
+ *
+ * The game asks Media Foundation to decode straight into D3D textures. Under
+ * D3DMetal that path produces no picture -- the sound, which never goes near
+ * it, is unaffected, which is exactly the symptom.
+ *
+ * Failing this is not a lie: a machine with no D3D video support is a state
+ * Windows itself can be in, and a player that asks for hardware decoding is
+ * expected to cope with not getting it. If the game falls back to software the
+ * frame arrives in system memory, and this is the whole fix. If it refuses to
+ * play at all, that is worth knowing too, and it is one file to put back.
+ *
+ * Set BEAST_ALLOW_D3D_MANAGER=1 in the bottle to watch without interfering. */
+static BOOL refuse_d3d_manager = TRUE;
+
+static HRESULT WINAPI my_MFCreateDXGIDeviceManager(UINT *token, void **manager)
+{
+    if (refuse_d3d_manager)
+    {
+        logf_("MFCreateDXGIDeviceManager -- REFUSED, so decoding has to go to "
+              "software; the frame then arrives in system memory");
+        if (token) *token = 0;
+        if (manager) *manager = NULL;
+        return E_NOTIMPL;
+    }
+    {
+        HRESULT hr = real_MFCreateDXGIDeviceManager(token, manager);
+        logf_("MFCreateDXGIDeviceManager -> 0x%08lx (allowed through)", hr);
+        return hr;
+    }
+}
 
 static HRESULT WINAPI my_MFStartup(ULONG version, DWORD flags)
 {
@@ -163,6 +196,7 @@ static FARPROC WINAPI my_GetProcAddress(HMODULE module, LPCSTR name)
     SWAP(MFTEnumEx)
     SWAP(MFCreateSourceReaderFromByteStream)
     SWAP(MFCreateSourceReaderFromURL)
+    SWAP(MFCreateDXGIDeviceManager)
 #undef SWAP
 
     /* Name every media entry point the game asks for, resolved or not. The
@@ -215,7 +249,13 @@ static void *hook_import(const char *dll, const char *func, void *replacement)
 static DWORD WINAPI worker(LPVOID unused)
 {
     (void)unused;
-    logf_("---- probe armed, watching only ----");
+    {
+        char v[8] = {0};
+        if (GetEnvironmentVariableA("BEAST_ALLOW_D3D_MANAGER", v, sizeof(v)) && v[0] == '1')
+            refuse_d3d_manager = FALSE;
+    }
+    logf_("---- armed: DXGI device manager %s ----",
+          refuse_d3d_manager ? "REFUSED (forcing software decode)" : "allowed (watching only)");
     return 0;
 }
 
