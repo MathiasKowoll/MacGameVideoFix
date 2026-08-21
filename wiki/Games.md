@@ -59,10 +59,22 @@ its video texture with its D3D12 renderer by handle, and D3DMetal has no way
 to make one: the legacy call refuses and `IDXGIResource1`, whose
 `CreateSharedHandle` replaces it, is absent.
 
-That last one looked like the end of the road, and it was not. winevideo had
-already met the same wall for D3D9 under DXMT and gone around it — see
-`0008-d3d9-dxmt-video-bridge-handle.patch` — by manufacturing the handle
-itself and owning the far side. The same shape works here:
+That last one looked like the end of the road, and it was not — though not for
+the reason first claimed here. winevideo's D3D9 bridge does **not** invent a
+handle: `0008-d3d9-dxmt-video-bridge-handle.patch` creates a texture with
+`D3D11_RESOURCE_MISC_SHARED`, calls the real `IDXGIResource::GetSharedHandle`,
+and fails outright with `E_FAIL` if it does not work. What it substitutes is
+Wine's *unimplemented* D3D9 sharing with D3D11 sharing that DXMT *does*
+implement — `dxmt/src/d3d11/d3d11_texture_device.cpp:288`. The one call it
+leans on is precisely the one that is `E_NOTIMPL` here.
+
+So the handle below is a new invention, not a port, and the parts most likely
+to be fragile are the parts with no reference implementation. What did
+transfer from winevideo is the upload recipe in `0009`: `UpdateSubresource`,
+then a `D3D11_QUERY_EVENT` waited on with a deadline rather than a bare
+`Flush`. That lesson is why the fence wait below exists.
+
+The shape that works here:
 
 - `GetSharedHandle` hands back a handle of ours instead of the refusal.
 - The game carries it to `ID3D12Device::OpenSharedHandle` and asks for an
@@ -70,6 +82,10 @@ itself and owning the far side. The same shape works here:
 - That call returns a BGRA texture created on the game's own D3D12 device.
 - Each converted frame is re-pitched into an upload buffer, copied with
   `CopyTextureRegion` on a copy queue, and waited on with a fence.
+
+Worth noting for anyone hitting this elsewhere: DXMT implements
+`GetSharedHandle` and D3DMetal does not, so a game in this position may simply
+work under a different backend.
 
 Reaching the D3D12 device took one more step than expected: the game ships
 NVIDIA Streamline and asks `sl.interposer.dll` for `D3D12CreateDevice` by
@@ -95,8 +111,11 @@ discarded before the disassembler was used properly: a missing codec
 registration, the absent audio track, the container duration, a missing pixel
 aspect ratio and interlace mode — setting those actively broke the negotiation
 and had to be reverted — NV12 texture creation, and the shared texture itself.
-Two conclusions were also wrong and had to be withdrawn, the second of them
-"this is blocked upstream and cannot be fixed from here". What worked was
+Three conclusions were also wrong and had to be withdrawn: that the crash at
+the menu was D3D's fault rather than a raw pointer's, that this was blocked
+upstream and could not be fixed from here, and that winevideo had already
+solved the handle problem — an adversarial review of the claim found it was
+the one thing their bridge never had to do. What worked was
 reading the code rather than guessing at it: `find-callsites.py` locating the
 player statically by resolving `call qword ptr [rip+disp]` against the import
 table, following its branches in a disassembler, and answering interface
