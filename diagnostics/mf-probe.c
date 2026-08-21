@@ -113,6 +113,8 @@ static void describe_subtype(const char *label, const GUID *g)
           g->Data4[4], g->Data4[5], g->Data4[6], g->Data4[7]);
 }
 
+static void log_hr(const char *what, HRESULT hr);
+
 static void log_wstr(const char *label, const WCHAR *w)
 {
     char buf[512];
@@ -156,6 +158,9 @@ static void log_bytestream_tags(IMFByteStream *stream)
 /* ---------------------------------------------------------------- hooks --- */
 
 static FARPROC (WINAPI *real_GetProcAddress)(HMODULE, LPCSTR);
+static HRESULT (WINAPI *real_CoCreateInstance)(REFCLSID, IUnknown *, DWORD, REFIID, void **);
+static HANDLE (WINAPI *real_CreateFileW)(LPCWSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES,
+                                         DWORD, DWORD, HANDLE);
 static HRESULT (WINAPI *real_MFStartup)(ULONG, DWORD);
 static HRESULT (WINAPI *real_MFShutdown)(void);
 static HRESULT (WINAPI *real_MFCreateDXGIDeviceManager)(UINT *, void **);
@@ -168,6 +173,56 @@ static HRESULT (WINAPI *real_MFCreateSourceReaderFromByteStream)(IMFByteStream *
 static HRESULT (WINAPI *real_MFTEnumEx)(GUID, UINT32, const MFT_REGISTER_TYPE_INFO *,
                                         const MFT_REGISTER_TYPE_INFO *,
                                         IMFActivate ***, UINT32 *);
+
+static void log_guid(const char *label, const GUID *g)
+{
+    logf_("  %s: {%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x}", label,
+          (unsigned long)g->Data1, g->Data2, g->Data3,
+          g->Data4[0], g->Data4[1], g->Data4[2], g->Data4[3],
+          g->Data4[4], g->Data4[5], g->Data4[6], g->Data4[7]);
+}
+
+/*
+ * Between MFStartup and MFShutdown the game called nothing we were watching,
+ * so whatever fails is not a Media Foundation call. That leaves asking COM for
+ * a class -- a decoder requested by its exact CLSID, which Wine may not have
+ * registered -- or simply failing to open the file. Watch both.
+ *
+ * Only failures are logged: a game asks COM for plenty of things that work.
+ */
+static HRESULT WINAPI my_CoCreateInstance(REFCLSID clsid, IUnknown *outer, DWORD context,
+                                          REFIID iid, void **out)
+{
+    HRESULT hr = real_CoCreateInstance(clsid, outer, context, iid, out);
+    if (FAILED(hr))
+    {
+        logf_("CoCreateInstance FAILED");
+        log_guid("clsid", clsid);
+        log_hr("result", hr);
+    }
+    return hr;
+}
+
+static HANDLE WINAPI my_CreateFileW(LPCWSTR name, DWORD access, DWORD share,
+                                    LPSECURITY_ATTRIBUTES sa, DWORD disposition,
+                                    DWORD flags, HANDLE template_file)
+{
+    HANDLE h = real_CreateFileW(name, access, share, sa, disposition, flags, template_file);
+
+    /* Only the movies. A game opens thousands of other files. */
+    if (name)
+    {
+        const WCHAR *dot = wcsrchr(name, L'.');
+        if (dot && (!_wcsicmp(dot, L".webm") || !_wcsicmp(dot, L".mkv")))
+        {
+            logf_("CreateFileW %s", h == INVALID_HANDLE_VALUE ? "FAILED" : "ok");
+            log_wstr("path", name);
+            if (h == INVALID_HANDLE_VALUE)
+                logf_("  GetLastError: %lu", (unsigned long)GetLastError());
+        }
+    }
+    return h;
+}
 
 /*
  * A game can reach Media Foundation without going through its import table.
@@ -343,6 +398,8 @@ static DWORD WINAPI worker(LPVOID unused)
     logf_("");
     logf_("=== mf-probe attached ===");
     HOOK("KERNEL32.dll", GetProcAddress);
+    HOOK("KERNEL32.dll", CreateFileW);
+    HOOK("ole32.dll", CoCreateInstance);
     HOOK("MFPlat.DLL", MFStartup);
     HOOK("MFPlat.DLL", MFShutdown);
     HOOK("MFPlat.DLL", MFCreateAttributes);
