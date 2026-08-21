@@ -134,7 +134,10 @@ case "$MODE" in
   cp "$PROXY" "$LIVE"
 
   echo
-  echo "installed — the original VP9 cutscenes will play as shipped"
+  echo "installed"
+  echo "  VP9 cutscenes play as shipped, on titles that crashed on them"
+  echo "  the adapter-node walk is guarded, on titles that froze after a while"
+  echo "each half is inert where its fault is absent"
   echo "a log is written to the bottle's C:\\${MARKER} on each launch"
   ;;
 
