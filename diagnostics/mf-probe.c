@@ -285,6 +285,8 @@ static struct stub_object stub_dxgi_buffer;
 
 static const char *dxgi_format_name(UINT f);
 static void log_guid(const char *label, const GUID *g);
+static HRESULT WINAPI my_D3D12CreateDevice(void *adapter, UINT feature_level,
+                                           REFIID iid, void **device);
 
 /* The handle handed to the game in place of the one D3DMetal will not make. */
 #define BRIDGE_HANDLE ((HANDLE)(ULONG_PTR)0xD3D12B21D)
@@ -1342,6 +1344,23 @@ static FARPROC WINAPI my_GetProcAddress(HMODULE module, LPCSTR name)
         char path[MAX_PATH] = "?";
         GetModuleFileNameA(module, path, sizeof(path) - 1);
         logf_("GetProcAddress(%s) from %s -> %s", name, path, proc ? "ok" : "NOT FOUND");
+
+        /*
+         * This is where the D3D12 device really comes from.
+         *
+         * The import-table hook on d3d12.dll ordinal 101 stayed untouched and
+         * unused: the game ships NVIDIA Streamline and asks
+         * sl.interposer.dll for D3D12CreateDevice by name, so it never goes
+         * through its own imports at all. Handing back a wrapper here catches
+         * the call whichever module it is asked of.
+         */
+        if (proc && !lstrcmpA(name, "D3D12CreateDevice")
+            && proc != (FARPROC)my_D3D12CreateDevice)
+        {
+            real_D3D12CreateDevice = (void *)proc;
+            logf_("  -> substituting our own, so the device can be reached");
+            return (FARPROC)my_D3D12CreateDevice;
+        }
     }
     return proc;
 }
