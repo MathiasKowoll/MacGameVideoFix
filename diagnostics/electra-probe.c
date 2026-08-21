@@ -99,6 +99,119 @@ static void describe_subtype(const char *what, const GUID *g)
 
 typedef struct { GUID guidMajorType; GUID guidSubtype; } REG_TYPE_INFO;
 
+/* Follow the decoder itself, not the registry entry that promises one.
+ *
+ * MFTEnumEx is a registry read: it loads no DLL, so a stale or bogus entry
+ * makes it answer "1 decoder" and only fails later, when the object is
+ * actually created. A player that ignores that HRESULT and keeps presenting
+ * its render target shows a black picture and says nothing -- which is what we
+ * are looking at.
+ *
+ * So the interesting calls are further in: does the object instantiate, does
+ * SetOutputType agree a format, and does ProcessOutput ever hand back a frame.
+ * A frame that never arrives and a frame that arrives and is not drawn are
+ * both "black with sound", and only these tell them apart.
+ *
+ * Vtable slots, patched one at a time rather than proxying the whole object --
+ * full proxying broke rendering when it was tried on DYNASTY WARRIORS.
+ *   IMFActivate:  IUnknown(3) + IMFAttributes(30) -> ActivateObject = 33
+ *   IMFTransform: IUnknown(3) + SetOutputType 16, ProcessMessage 23,
+ *                 ProcessInput 24, ProcessOutput 25 */
+#define SLOT_ACTIVATE_OBJECT  33
+#define SLOT_SET_OUTPUT_TYPE  16
+#define SLOT_PROCESS_MESSAGE  23
+#define SLOT_PROCESS_INPUT    24
+#define SLOT_PROCESS_OUTPUT   25
+
+static BOOL patch_slot(void *obj, int slot, void *replacement, void **saved)
+{
+    void ***vt = (void ***)obj;
+    DWORD old;
+    if (!obj || !vt[0]) return FALSE;
+    if (*saved) return TRUE;                  /* one vtable, patch it once */
+    *saved = (*vt)[slot];
+    if (!VirtualProtect(&(*vt)[slot], sizeof(void *), PAGE_READWRITE, &old))
+        return FALSE;
+    (*vt)[slot] = replacement;
+    VirtualProtect(&(*vt)[slot], sizeof(void *), old, &old);
+    return TRUE;
+}
+
+static HRESULT (WINAPI *real_ActivateObject)(void *, REFIID, void **);
+static HRESULT (WINAPI *real_SetOutputType)(void *, DWORD, void *, DWORD);
+static HRESULT (WINAPI *real_ProcessMessage)(void *, DWORD, ULONG_PTR);
+static HRESULT (WINAPI *real_ProcessInput)(void *, DWORD, void *, DWORD);
+static HRESULT (WINAPI *real_ProcessOutput)(void *, DWORD, DWORD, void *, DWORD *);
+
+static LONG frames_out, output_calls, input_calls;
+
+static HRESULT WINAPI my_ProcessOutput(void *self, DWORD flags, DWORD count,
+                                       void *samples, DWORD *status)
+{
+    HRESULT hr = real_ProcessOutput(self, flags, count, samples, status);
+    LONG n = InterlockedIncrement(&output_calls);
+    if (SUCCEEDED(hr))
+    {
+        LONG f = InterlockedIncrement(&frames_out);
+        if (f == 1 || f == 10 || f == 100)
+            logf_("ProcessOutput: frame %ld decoded OK  << the decoder works; "
+                  "if the screen is black the frame is being lost after this", f);
+    }
+    else if (n == 1 || (n % 200) == 0)
+    {
+        logf_("ProcessOutput -> 0x%08lx after %ld calls, %ld frames so far",
+              hr, n, frames_out);
+        if (hr == 0xC00D6D72L) logf_("  (MF_E_TRANSFORM_NEED_MORE_INPUT -- normal)");
+    }
+    return hr;
+}
+
+static HRESULT WINAPI my_ProcessInput(void *self, DWORD stream, void *sample, DWORD flags)
+{
+    HRESULT hr = real_ProcessInput(self, stream, sample, flags);
+    LONG n = InterlockedIncrement(&input_calls);
+    if (FAILED(hr) && (n == 1 || (n % 200) == 0))
+        logf_("ProcessInput -> 0x%08lx (call %ld)", hr, n);
+    return hr;
+}
+
+static HRESULT WINAPI my_SetOutputType(void *self, DWORD stream, void *type, DWORD flags)
+{
+    HRESULT hr = real_SetOutputType(self, stream, type, flags);
+    logf_("SetOutputType(flags=0x%lx) -> 0x%08lx%s", flags, hr,
+          FAILED(hr) ? "   << no agreed output format means no picture, ever" : "");
+    return hr;
+}
+
+static HRESULT WINAPI my_ProcessMessage(void *self, DWORD message, ULONG_PTR param)
+{
+    HRESULT hr = real_ProcessMessage(self, message, param);
+    if (message == 0x00000002) /* MFT_MESSAGE_SET_D3D_MANAGER */
+        logf_("ProcessMessage(SET_D3D_MANAGER, %p) -> 0x%08lx", (void *)param, hr);
+    return hr;
+}
+
+static HRESULT WINAPI my_ActivateObject(void *self, REFIID iid, void **out)
+{
+    HRESULT hr = real_ActivateObject(self, iid, out);
+    logf_("IMFActivate::ActivateObject -> 0x%08lx%s", hr,
+          FAILED(hr) ? "   << the decoder MFTEnumEx promised does NOT exist" : "");
+    if (SUCCEEDED(hr) && out && *out)
+    {
+        static void *st, *pm, *pi, *po;
+        patch_slot(*out, SLOT_SET_OUTPUT_TYPE, (void *)my_SetOutputType, &st);
+        patch_slot(*out, SLOT_PROCESS_MESSAGE, (void *)my_ProcessMessage, &pm);
+        patch_slot(*out, SLOT_PROCESS_INPUT,   (void *)my_ProcessInput,   &pi);
+        patch_slot(*out, SLOT_PROCESS_OUTPUT,  (void *)my_ProcessOutput,  &po);
+        real_SetOutputType  = (HRESULT (WINAPI *)(void *, DWORD, void *, DWORD))st;
+        real_ProcessMessage = (HRESULT (WINAPI *)(void *, DWORD, ULONG_PTR))pm;
+        real_ProcessInput   = (HRESULT (WINAPI *)(void *, DWORD, void *, DWORD))pi;
+        real_ProcessOutput  = (HRESULT (WINAPI *)(void *, DWORD, DWORD, void *, DWORD *))po;
+        logf_("  decoder instantiated and now watched");
+    }
+    return hr;
+}
+
 static HRESULT (WINAPI *real_MFStartup)(ULONG, DWORD);
 static HRESULT (WINAPI *real_MFTEnumEx)(GUID, UINT32, const REG_TYPE_INFO *,
                                         const REG_TYPE_INFO *, void ***, UINT32 *);
@@ -155,6 +268,13 @@ static HRESULT WINAPI my_MFTEnumEx(GUID category, UINT32 flags,
     logf_("MFTEnumEx flags=0x%lx -> 0x%08lx, %u decoder(s) offered",
           flags, hr, count ? *count : 0);
     if (in)  describe_subtype("wants to decode", &in->guidSubtype);
+    /* Watch the promised decoder actually be created. */
+    if (SUCCEEDED(hr) && mfts && *mfts && count && *count > 0)
+    {
+        static void *ao;
+        if (patch_slot((*mfts)[0], SLOT_ACTIVATE_OBJECT, (void *)my_ActivateObject, &ao))
+            real_ActivateObject = (HRESULT (WINAPI *)(void *, REFIID, void **))ao;
+    }
     if (out) describe_subtype("wants out as  ", &out->guidSubtype);
     if (count && *count == 0)
         logf_("  NOTHING can decode that here -- this is the failure, if the "
