@@ -9,8 +9,8 @@ folder on it, press Apply.
 | Game | Symptom | Fix | winevideo |
 | --- | --- | --- | --- |
 | [**Mortal Shell 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Mortal-Shell-2) | Crash on the first cutscene | Runtime patch | no <sup>1</sup> |
-| [**Life is Strange: Reunion**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Reunion) | Runs, then freezes after a while | Runtime patch | no |
-| [**Life is Strange: Double Exposure**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Double-Exposure) | Runs, then freezes after a while | Runtime patch | no |
+| [**Life is Strange: Reunion**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Reunion) | Runs, then freezes after a while | Runtime patch | no <sup>1</sup> |
+| [**Life is Strange: Double Exposure**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Double-Exposure) | Runs, then freezes after a while | Runtime patch | no <sup>2</sup> |
 | [**DYNASTY WARRIORS: ORIGINS**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Dynasty-Warriors-Origins) | Cutscene plays with sound, picture black | Video bridge | **yes** |
 
 Each row links to a page in the [wiki](https://github.com/MathiasKowoll/MacGameVideoFix/wiki) with that game's findings and fix.
@@ -23,8 +23,9 @@ Mortal Shell decodes VP9 in-process with Unreal's own libvpx. Install winevideo
 regardless — it fixes a great deal on its own — but only one fix here depends
 on it.
 
-<sup>1</sup> Expected rather than measured. See
-[the wiki page](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Mortal-Shell-2#winevideo).
+<sup>1</sup> Measured: both were played on CrossOver 26.3 without winevideo
+and again on CrossOver-winevideo 26.3, and the fix worked either way.
+<sup>2</sup> Inferred from Reunion — identical fault, identical DLL.
 
 The Unreal fix carries two unrelated repairs in one DLL: the Electra buffer
 path that crashes Mortal Shell, and the adapter-node walk that freezes both
@@ -107,13 +108,20 @@ For **DYNASTY WARRIORS: ORIGINS**, additionally:
 Not optional there. Without it `MFCreateSourceReaderFromByteStream` on a
 `.webm` fails outright and no frame is ever decoded for the bridge to carry.
 
-The **Unreal** fix most likely does not need winevideo. VP9 never goes through
-Media Foundation in Mortal Shell — Electra decodes it with its own bundled
-libvpx, and only the *output* conversion was broken, which is what the patch
-reroutes — and the Life is Strange freeze is in DXGI, nowhere near video. This
-has not been tested on an unpatched CrossOver, so it is stated as an
-expectation and not as a fact. `diagnostics/check-winevideo-use.sh` is what
-would settle it, against a running game.
+The **Unreal** fix does not need winevideo, and this is now measured rather
+than assumed. Mortal Shell 2 and Life is Strange: Reunion were both played on
+CrossOver 26.3 with no winevideo, and again on CrossOver-winevideo 26.3 — the
+same version, differing only in the GStreamer plugins — and the fix worked
+either way.
+
+The mechanism agrees: VP9 never goes through Media Foundation in Mortal Shell
+(Electra decodes it with its own bundled libvpx, and only the *output*
+conversion was broken, which is what the patch reroutes), and the Life is
+Strange freeze is in DXGI, nowhere near video.
+
+`diagnostics/launch-with.sh` is what makes that comparison possible — bottles
+are shared between CrossOver installs, so the same games run with winevideo
+present or absent without reinstalling anything.
 
 ## DYNASTY WARRIORS: ORIGINS
 

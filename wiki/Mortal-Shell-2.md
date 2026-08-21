@@ -39,12 +39,19 @@ Nothing on disk changes. The original VP9 files are left exactly as they are.
 
 ## winevideo
 
-Not required, as far as can be told from here. VP9 never goes through Media
-Foundation in this game — Electra decodes it in-process with its own libvpx,
-and only the *output* conversion was broken, which is what the patch reroutes.
+**Not required — measured.** The game was played through on CrossOver 26.3
+carrying no winevideo, and again on CrossOver-winevideo 26.3: the same version,
+differing only in the GStreamer plugins. The fix worked either way.
 
-This has **not** been tested on a CrossOver without winevideo, so treat it as
-an expectation rather than a measurement.
+That matches the mechanism. VP9 never goes through Media Foundation here —
+Electra decodes it in-process with its own libvpx, and only the *output*
+conversion was broken, which is what the patch reroutes. The executable does
+import `MFPlat`, `MFReadWrite` and `MF`, but all three are **delay-loaded**, so
+the import table only ever said the code *could* reach Media Foundation, never
+that it did.
+
+Install winevideo anyway — it fixes a great deal elsewhere. This fix simply
+does not depend on it.
 
 ## Caveats
 

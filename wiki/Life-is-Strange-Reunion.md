@@ -7,7 +7,7 @@ Unreal Engine 5. Runs, then freezes.
 | Symptom | Runs fine, then freezes after a while, anywhere in the game |
 | Cause | `IDXGIAdapter3::QueryVideoMemoryInfo` succeeds for node indices the adapter does not have |
 | Fix | Refuse them, which is what Windows does |
-| winevideo | Not required — the fault is in DXGI, not in video |
+| winevideo | Not required — measured, and the fault is in DXGI, not in video |
 
 **It is not a deadlock.** A spindump taken while it was stuck shows the
 GameThread burning 1.27 seconds of CPU across 128 samples while RenderThread 0

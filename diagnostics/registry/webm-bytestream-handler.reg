@@ -1,0 +1,16 @@
+REGEDIT4
+
+; Tell Media Foundation that a .webm can be opened, by mapping it to the
+; GStreamer byte-stream handler that CrossOver already registers as a COM
+; server ("Generic Decodebin Byte Stream Handler").
+;
+; This is the whole of what winevideo contributes to DYNASTY WARRIORS: ORIGINS
+; on CrossOver Preview. Preview already ships the pieces that do the work --
+; libgstmatroska for the container and libgstapplemedia, whose VideoToolbox
+; path decodes VP9 in hardware -- but without this mapping Media Foundation
+; refuses to open the file at all, so the decoder never gets a chance.
+;
+; .mkv and .msd are the other two winevideo adds; only .webm matters here.
+
+[HKEY_LOCAL_MACHINE\Software\Microsoft\Windows Media Foundation\ByteStreamHandlers\.webm]
+"{317df618-5e5a-468a-9f15-d827a9a08162}"="GStreamer Byte Stream Handler"

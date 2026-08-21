@@ -12,12 +12,16 @@ Tested on an M4 Max, macOS 27, CrossOver 26.2 patched with
 | Game | Engine | Symptom | Fix | winevideo | Status |
 | --- | --- | --- | --- | --- | --- |
 | [Mortal Shell 2](Mortal-Shell-2.md) | Unreal Engine 5.6.1 | Crash on the first cutscene | Runtime patch, 4 sites | No <sup>1</sup> | Fixed |
-| [Life is Strange: Reunion](Life-is-Strange-Reunion.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard | No | Fixed |
-| [Life is Strange: Double Exposure](Life-is-Strange-Double-Exposure.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard, same DLL | No | Installed, not yet confirmed in play |
+| [Life is Strange: Reunion](Life-is-Strange-Reunion.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard | No <sup>1</sup> | Fixed |
+| [Life is Strange: Double Exposure](Life-is-Strange-Double-Exposure.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard, same DLL | No <sup>2</sup> | Installed, not yet confirmed in play |
 | [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | Video bridge, D3D11 to D3D12 | **Yes** | Fixed |
 
-<sup>1</sup> Expected rather than measured: VP9 never reaches Media Foundation
-in that game, but it has not been run on a CrossOver without winevideo.
+<sup>1</sup> Measured, not assumed. Both were played on CrossOver 26.3 with no
+winevideo and again on CrossOver-winevideo 26.3 -- the same version, differing
+only in the GStreamer plugins -- and the fix worked either way.
+
+<sup>2</sup> Inferred from Reunion rather than measured: identical fault,
+identical DLL.
 
 Every row is a title we deliberately took on, and every claim on the linked
 page comes from a measurement on an installed copy. Where something was
