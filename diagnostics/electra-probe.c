@@ -122,6 +122,12 @@ typedef struct { GUID guidMajorType; GUID guidSubtype; } REG_TYPE_INFO;
  * effect and the silence below means nothing. Distinguishing "the game does
  * not feed the decoder" from "I am not seeing it feed the decoder" is the
  * whole reason it is here. */
+/* Between SetInputType and SetOutputType the caller asks what the decoder can
+ * produce and picks one. The game stops in that gap, so this is where the
+ * answer is: either the decoder offers nothing, or it offers formats the game
+ * will not take. Both look identical from the sofa. */
+#define SLOT_GET_OUTPUT_AVAIL 14
+#define SLOT_GET_OUTPUT_INFO   7
 #define SLOT_GET_STREAM_COUNT  4
 #define SLOT_SET_INPUT_TYPE   15
 #define SLOT_ACTIVATE_OBJECT  33
@@ -180,7 +186,60 @@ static HRESULT (WINAPI *real_ProcessOutput)(void *, DWORD, DWORD, void *, DWORD 
 
 static HRESULT (WINAPI *real_GetStreamCount)(void *, DWORD *, DWORD *);
 static HRESULT (WINAPI *real_SetInputType)(void *, DWORD, void *, DWORD);
+static HRESULT (WINAPI *real_GetOutputAvailableType)(void *, DWORD, DWORD, void **);
+static HRESULT (WINAPI *real_GetOutputStreamInfo)(void *, DWORD, void *);
 static LONG frames_out, output_calls, input_calls;
+
+/* IMFMediaType is an IMFAttributes: GetGUID is slot 3 + 7 = 10. */
+static BOOL type_subtype(void *type, GUID *out)
+{
+    static const GUID mf_subtype =
+        { 0xf7e34c9a, 0x42e8, 0x4714, { 0xb7, 0x4b, 0xcb, 0x29, 0xd7, 0x2c, 0x35, 0xe5 } };
+    HRESULT (WINAPI *get_guid)(void *, const GUID *, GUID *);
+    void **vt;
+    if (!type) return FALSE;
+    vt = *(void ***)type;
+    get_guid = (HRESULT (WINAPI *)(void *, const GUID *, GUID *))vt[10];
+    return SUCCEEDED(get_guid(type, &mf_subtype, out));
+}
+
+static HRESULT WINAPI my_GetOutputAvailableType(void *self, DWORD stream,
+                                                DWORD index, void **type)
+{
+    HRESULT hr = real_GetOutputAvailableType(self, stream, index, type);
+    if (SUCCEEDED(hr) && type && *type)
+    {
+        GUID sub;
+        if (type_subtype(*type, &sub))
+        {
+            char label[32];
+            snprintf(label, sizeof(label), "offers type %lu", index);
+            describe_subtype(label, &sub);
+        }
+        else
+            logf_("  offers type %lu (subtype unreadable)", index);
+    }
+    else if (hr == 0xC00D36B9L)   /* MF_E_NO_MORE_TYPES */
+        logf_("  ...that is all it offers (%lu total). The game picks from "
+              "this list, and stops here if none will do.", index);
+    else
+        logf_("GetOutputAvailableType(%lu) -> 0x%08lx", index, hr);
+    return hr;
+}
+
+static HRESULT WINAPI my_GetOutputStreamInfo(void *self, DWORD stream, void *info)
+{
+    HRESULT hr = real_GetOutputStreamInfo(self, stream, info);
+    if (SUCCEEDED(hr) && info)
+    {
+        /* MFT_OUTPUT_STREAM_INFO: dwFlags at offset 4. Bit 0x100 =
+         * PROVIDES_SAMPLES, which decides who allocates the frame. */
+        DWORD flags = *(DWORD *)((BYTE *)info + 4);
+        logf_("GetOutputStreamInfo: flags=0x%lx (%s allocates the frame)",
+              flags, (flags & 0x100) ? "the decoder" : "the caller");
+    }
+    return hr;
+}
 
 static HRESULT WINAPI my_GetStreamCount(void *self, DWORD *in, DWORD *out)
 {
@@ -260,6 +319,17 @@ static HRESULT WINAPI my_ActivateObject(void *self, REFIID iid, void **out)
     if (SUCCEEDED(hr) && out && *out)
     {
         static void *st, *pm, *pi, *po, *gc, *si;
+        {
+            static void *ga, *gi;
+            patch_slot("GetOutputAvailableType", *out, SLOT_GET_OUTPUT_AVAIL,
+                       (void *)my_GetOutputAvailableType, &ga);
+            patch_slot("GetOutputStreamInfo", *out, SLOT_GET_OUTPUT_INFO,
+                       (void *)my_GetOutputStreamInfo, &gi);
+            real_GetOutputAvailableType =
+                (HRESULT (WINAPI *)(void *, DWORD, DWORD, void **))ga;
+            real_GetOutputStreamInfo =
+                (HRESULT (WINAPI *)(void *, DWORD, void *))gi;
+        }
         patch_slot("GetStreamCount", *out, SLOT_GET_STREAM_COUNT, (void *)my_GetStreamCount, &gc);
         patch_slot("SetInputType", *out, SLOT_SET_INPUT_TYPE,  (void *)my_SetInputType,  &si);
         real_GetStreamCount = (HRESULT (WINAPI *)(void *, DWORD *, DWORD *))gc;
@@ -302,7 +372,12 @@ static HRESULT (WINAPI *real_MFCreateDXGIDeviceManager)(UINT *, void **);
  * play at all, that is worth knowing too, and it is one file to put back.
  *
  * Set BEAST_ALLOW_D3D_MANAGER=1 in the bottle to watch without interfering. */
-static BOOL refuse_d3d_manager = TRUE;
+/* Default OFF now. Driving this from the bottle environment did not work --
+ * a live wineserver kept the old config and the run silently repeated the
+ * previous condition while looking like the new one. A build flag cannot do
+ * that: the log line states which build is running, and it comes from the same
+ * variable the code branches on. */
+static BOOL refuse_d3d_manager = FALSE;
 
 static HRESULT WINAPI my_MFCreateDXGIDeviceManager(UINT *token, void **manager)
 {
@@ -441,8 +516,8 @@ static DWORD WINAPI worker(LPVOID unused)
     (void)unused;
     {
         char v[8] = {0};
-        if (GetEnvironmentVariableA("BEAST_ALLOW_D3D_MANAGER", v, sizeof(v)) && v[0] == '1')
-            refuse_d3d_manager = FALSE;
+        if (GetEnvironmentVariableA("BEAST_REFUSE_D3D_MANAGER", v, sizeof(v)) && v[0] == '1')
+            refuse_d3d_manager = TRUE;
     }
     logf_("---- armed: DXGI device manager %s ----",
           refuse_d3d_manager ? "REFUSED (forcing software decode)" : "allowed (watching only)");
