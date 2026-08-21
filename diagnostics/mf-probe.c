@@ -304,7 +304,8 @@ static HRESULT (WINAPI *real_texture_qi)(void *, REFIID, void **);
 static HRESULT WINAPI texture_qi(void *self, REFIID iid, void **out);
 static UINT frame_width, frame_height, frame_stride;
 static UINT texture_width, texture_height;   /* what frame_texture actually is */
-static const BOOL probe_colour = TRUE;       /* diagnostic build: see upload_frame */
+/* The magenta test served its purpose: the bridge carries what we put in it. */
+static const BOOL probe_colour = FALSE;
 static BYTE *frame_scratch;
 static CRITICAL_SECTION frame_lock;
 static LONG frames_uploaded;
