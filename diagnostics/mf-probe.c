@@ -2080,10 +2080,9 @@ static DWORD WINAPI worker(LPVOID unused)
     (void)unused;
     logf_("");
     logf_("=== mf-probe attached ===");
-    HOOK("d3d11.dll", D3D11CreateDevice);
-    real_D3D12CreateDevice = hook_import_ordinal("d3d12.dll", 101, my_D3D12CreateDevice);
     logf_("  %-40s %s", "D3D12CreateDevice (ordinal 101)",
-          real_D3D12CreateDevice ? "hooked" : "not imported");
+          real_D3D12CreateDevice ? "hooked in DllMain" : "not imported");
+    HOOK("d3d11.dll", D3D11CreateDevice);
     HOOK("KERNEL32.dll", GetProcAddress);
     HOOK("KERNEL32.dll", CreateFileW);
     HOOK("KERNEL32.dll", FindFirstFileW);
@@ -2122,6 +2121,21 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
         InitializeCriticalSection(&log_lock);
         InitializeCriticalSection(&frame_lock);
         DisableThreadLibraryCalls(inst);
+
+        /*
+         * This one cannot wait for the worker thread.
+         *
+         * Everything else here is hooked before it is used, because the game
+         * does not touch Media Foundation until a cutscene starts. Its D3D12
+         * device is built during startup, and the last run shows the hook
+         * installed and never called -- the device already existed by the time
+         * the thread ran.
+         *
+         * Patching an import table is a write to already-mapped memory, so it
+         * is safe under the loader lock in a way that loading a library or
+         * taking someone else's lock would not be.
+         */
+        real_D3D12CreateDevice = hook_import_ordinal("d3d12.dll", 101, my_D3D12CreateDevice);
         thread = CreateThread(NULL, 0, worker, NULL, 0, NULL);
         if (thread) CloseHandle(thread);
     }
