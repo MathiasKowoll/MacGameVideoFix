@@ -25,9 +25,14 @@ git clone -q "$REMOTE" "$WORK" || {
 }
 
 # README.md documents this folder; the wiki has no use for it.
+#
+# Links are written as [Games](Games.md) so they work when the pages are read
+# in the repository. The wiki resolves that to the raw file instead of the
+# page, so strip the extension on the way across -- but only for links to a
+# bare filename, never for anything with a slash in it.
 for page in "$HERE"/*.md; do
   [ "$(basename "$page")" = "README.md" ] && continue
-  cp "$page" "$WORK/"
+  sed -E 's/\]\(([^)/]+)\.md\)/](\1)/g' "$page" > "$WORK/$(basename "$page")"
 done
 
 cd "$WORK"
