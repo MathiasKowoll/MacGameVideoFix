@@ -290,8 +290,8 @@ static void upload_frame(IMFSample *sample);
 static ID3D11Device *video_device;
 static ID3D11DeviceContext *video_context;
 static ID3D11Texture2D *frame_texture;
-static ID3D11Texture2D *game_render_target;
 static ID3D11Texture2D *game_shared_texture;
+static UINT shared_width, shared_height;
 static UINT frame_width, frame_height, frame_stride;
 static UINT texture_width, texture_height;   /* what frame_texture actually is */
 static BYTE *frame_scratch;
@@ -570,18 +570,21 @@ static HRESULT WINAPI vc_VideoProcessorBlt(void *self, void *processor, void *ou
         }
 
         /*
-         * Writing into the shared texture as well crashed the game, and the
-         * reason is here rather than in D3D: these pointers are kept raw. The
-         * game builds a fresh pair of textures for every video and releases
-         * the old ones, so by the second cutscene the pointer is to freed
-         * memory. Copying into the one the D3D12 side is reading, without any
-         * synchronisation, is a second reason not to.
-         *
-         * The question that mattered can be answered by watching instead: the
-         * CopyResource hook below says whether the game moves the frame into
-         * that texture itself. Doing it here is only worth attempting after
-         * that answer, and with the reference counts held properly.
+         * And into the texture the D3D12 renderer actually samples. TYPELESS
+         * and UNORM of the same base format are copy-compatible, and the
+         * dimensions are checked rather than assumed.
          */
+        if (game_shared_texture
+            && shared_width == texture_width && shared_height == texture_height)
+        {
+            ID3D11DeviceContext_CopyResource(video_context,
+                    (ID3D11Resource *)game_shared_texture, (ID3D11Resource *)frame_texture);
+            if (blit_calls <= 3) logf_("    also copied into the shared texture");
+        }
+        else if (blit_calls <= 3 && game_shared_texture)
+            logf_("    shared texture is %ux%u, ours %ux%u -- not copying",
+                  shared_width, shared_height, texture_width, texture_height);
+        ID3D11DeviceContext_Flush(video_context);
     }
     else if (blit_calls <= 3)
         logf_("    nothing to copy (texture %p, output %p)",
@@ -703,10 +706,31 @@ static HRESULT WINAPI device_create_texture2d(void *self, const void *desc,
         if (FAILED(hr)) log_hr("    result", hr);
     }
 
-    if (SUCCEEDED(hr) && d && texture && *texture && d[0] > 64 && d[1] > 64)
+    /*
+     * Hold on to the shared one, with a reference this time.
+     *
+     * The game copies out of the render target into a destination that is
+     * NULL -- its own log line reads "dst: NULL, src: <the render target>" --
+     * so the frame never reaches the texture its D3D12 renderer samples, and
+     * what shows on screen is that texture's uninitialised contents. Filling
+     * it is the job the real video processor would have done.
+     *
+     * Storing the pointer raw is what crashed the game at the menu: it builds
+     * a fresh pair for every clip and releases the old ones. So AddRef what we
+     * keep and Release what we drop.
+     */
+    if (SUCCEEDED(hr) && d && texture && *texture && d[0] > 64 && d[1] > 64 && (d[10] & 2))
     {
-        if (d[10] & 2)      game_shared_texture = (ID3D11Texture2D *)*texture;
-        else if (d[8] & 0x20) game_render_target = (ID3D11Texture2D *)*texture;
+        ID3D11Texture2D *previous;
+        EnterCriticalSection(&frame_lock);
+        previous = game_shared_texture;
+        game_shared_texture = (ID3D11Texture2D *)*texture;
+        shared_width = d[0];
+        shared_height = d[1];
+        ID3D11Texture2D_AddRef(game_shared_texture);
+        LeaveCriticalSection(&frame_lock);
+        if (previous) ID3D11Texture2D_Release(previous);
+        logf_("    kept as the texture the D3D12 side reads");
     }
     return hr;
 }
