@@ -117,23 +117,58 @@ typedef struct { GUID guidMajorType; GUID guidSubtype; } REG_TYPE_INFO;
  *   IMFActivate:  IUnknown(3) + IMFAttributes(30) -> ActivateObject = 33
  *   IMFTransform: IUnknown(3) + SetOutputType 16, ProcessMessage 23,
  *                 ProcessInput 24, ProcessOutput 25 */
+/* A canary. Practically every caller asks a transform how many streams it has
+ * before doing anything else, so if this never fires the patch is not taking
+ * effect and the silence below means nothing. Distinguishing "the game does
+ * not feed the decoder" from "I am not seeing it feed the decoder" is the
+ * whole reason it is here. */
+#define SLOT_GET_STREAM_COUNT  4
+#define SLOT_SET_INPUT_TYPE   15
 #define SLOT_ACTIVATE_OBJECT  33
 #define SLOT_SET_OUTPUT_TYPE  16
 #define SLOT_PROCESS_MESSAGE  23
 #define SLOT_PROCESS_INPUT    24
 #define SLOT_PROCESS_OUTPUT   25
 
-static BOOL patch_slot(void *obj, int slot, void *replacement, void **saved)
+/* Reports what it did rather than failing quietly.
+ *
+ * The previous build patched nothing and said nothing, and the silence read
+ * exactly like "the game never calls the decoder" -- a far more interesting
+ * conclusion than "VirtualProtect refused", and the wrong one. An instrument
+ * that can fail silently is worse than no instrument. */
+static BOOL patch_slot(const char *what, void *obj, int slot,
+                       void *replacement, void **saved)
 {
     void ***vt = (void ***)obj;
     DWORD old;
-    if (!obj || !vt[0]) return FALSE;
+    void *before;
+
+    if (!obj) { logf_("  patch %s: no object", what); return FALSE; }
+    if (!*vt) { logf_("  patch %s: no vtable", what); return FALSE; }
     if (*saved) return TRUE;                  /* one vtable, patch it once */
-    *saved = (*vt)[slot];
-    if (!VirtualProtect(&(*vt)[slot], sizeof(void *), PAGE_READWRITE, &old))
+
+    before = (*vt)[slot];
+    if (!before)
+    {
+        logf_("  patch %s: slot %d is NULL -- wrong layout", what, slot);
         return FALSE;
+    }
+    if (!VirtualProtect(&(*vt)[slot], sizeof(void *), PAGE_READWRITE, &old))
+    {
+        logf_("  patch %s: VirtualProtect refused (err %lu) at vtable %p slot %d",
+              what, GetLastError(), (void *)*vt, slot);
+        return FALSE;
+    }
     (*vt)[slot] = replacement;
     VirtualProtect(&(*vt)[slot], sizeof(void *), old, &old);
+
+    if ((*vt)[slot] != replacement)
+    {
+        logf_("  patch %s: write did not stick (still %p)", what, (*vt)[slot]);
+        return FALSE;
+    }
+    *saved = before;
+    logf_("  patch %s: slot %d  %p -> ours", what, slot, before);
     return TRUE;
 }
 
@@ -143,7 +178,27 @@ static HRESULT (WINAPI *real_ProcessMessage)(void *, DWORD, ULONG_PTR);
 static HRESULT (WINAPI *real_ProcessInput)(void *, DWORD, void *, DWORD);
 static HRESULT (WINAPI *real_ProcessOutput)(void *, DWORD, DWORD, void *, DWORD *);
 
+static HRESULT (WINAPI *real_GetStreamCount)(void *, DWORD *, DWORD *);
+static HRESULT (WINAPI *real_SetInputType)(void *, DWORD, void *, DWORD);
 static LONG frames_out, output_calls, input_calls;
+
+static HRESULT WINAPI my_GetStreamCount(void *self, DWORD *in, DWORD *out)
+{
+    static LONG once;
+    HRESULT hr = real_GetStreamCount(self, in, out);
+    if (InterlockedIncrement(&once) == 1)
+        logf_("GetStreamCount -> 0x%08lx  << CANARY: the vtable patch works, so "
+              "anything not logged below genuinely is not being called", hr);
+    return hr;
+}
+
+static HRESULT WINAPI my_SetInputType(void *self, DWORD stream, void *type, DWORD flags)
+{
+    HRESULT hr = real_SetInputType(self, stream, type, flags);
+    logf_("SetInputType(flags=0x%lx) -> 0x%08lx%s", flags, hr,
+          FAILED(hr) ? "   << the decoder refuses the stream it was chosen for" : "");
+    return hr;
+}
 
 static HRESULT WINAPI my_ProcessOutput(void *self, DWORD flags, DWORD count,
                                        void *samples, DWORD *status)
@@ -194,19 +249,34 @@ static HRESULT WINAPI my_ProcessMessage(void *self, DWORD message, ULONG_PTR par
 static HRESULT WINAPI my_ActivateObject(void *self, REFIID iid, void **out)
 {
     HRESULT hr = real_ActivateObject(self, iid, out);
+    if (iid)
+        logf_("IMFActivate::ActivateObject asked for "
+              "{%08lX-%04X-%04X-%02X%02X%02X%02X%02X%02X%02X%02X}",
+              iid->Data1, iid->Data2, iid->Data3,
+              iid->Data4[0], iid->Data4[1], iid->Data4[2], iid->Data4[3],
+              iid->Data4[4], iid->Data4[5], iid->Data4[6], iid->Data4[7]);
     logf_("IMFActivate::ActivateObject -> 0x%08lx%s", hr,
           FAILED(hr) ? "   << the decoder MFTEnumEx promised does NOT exist" : "");
     if (SUCCEEDED(hr) && out && *out)
     {
-        static void *st, *pm, *pi, *po;
-        patch_slot(*out, SLOT_SET_OUTPUT_TYPE, (void *)my_SetOutputType, &st);
-        patch_slot(*out, SLOT_PROCESS_MESSAGE, (void *)my_ProcessMessage, &pm);
-        patch_slot(*out, SLOT_PROCESS_INPUT,   (void *)my_ProcessInput,   &pi);
-        patch_slot(*out, SLOT_PROCESS_OUTPUT,  (void *)my_ProcessOutput,  &po);
+        static void *st, *pm, *pi, *po, *gc, *si;
+        patch_slot("GetStreamCount", *out, SLOT_GET_STREAM_COUNT, (void *)my_GetStreamCount, &gc);
+        patch_slot("SetInputType", *out, SLOT_SET_INPUT_TYPE,  (void *)my_SetInputType,  &si);
+        real_GetStreamCount = (HRESULT (WINAPI *)(void *, DWORD *, DWORD *))gc;
+        real_SetInputType   = (HRESULT (WINAPI *)(void *, DWORD, void *, DWORD))si;
+        patch_slot("SetOutputType", *out, SLOT_SET_OUTPUT_TYPE, (void *)my_SetOutputType, &st);
+        patch_slot("ProcessMessage", *out, SLOT_PROCESS_MESSAGE, (void *)my_ProcessMessage, &pm);
+        patch_slot("ProcessInput", *out, SLOT_PROCESS_INPUT,   (void *)my_ProcessInput,   &pi);
+        patch_slot("ProcessOutput", *out, SLOT_PROCESS_OUTPUT,  (void *)my_ProcessOutput,  &po);
         real_SetOutputType  = (HRESULT (WINAPI *)(void *, DWORD, void *, DWORD))st;
         real_ProcessMessage = (HRESULT (WINAPI *)(void *, DWORD, ULONG_PTR))pm;
         real_ProcessInput   = (HRESULT (WINAPI *)(void *, DWORD, void *, DWORD))pi;
         real_ProcessOutput  = (HRESULT (WINAPI *)(void *, DWORD, DWORD, void *, DWORD *))po;
+        {
+            void **vt = *(void ***)*out;
+            logf_("  transform vtable %p: [3]=%p [4]=%p [15]=%p [16]=%p [24]=%p [25]=%p",
+                  (void *)vt, vt[3], vt[4], vt[15], vt[16], vt[24], vt[25]);
+        }
         logf_("  decoder instantiated and now watched");
     }
     return hr;
@@ -272,7 +342,7 @@ static HRESULT WINAPI my_MFTEnumEx(GUID category, UINT32 flags,
     if (SUCCEEDED(hr) && mfts && *mfts && count && *count > 0)
     {
         static void *ao;
-        if (patch_slot((*mfts)[0], SLOT_ACTIVATE_OBJECT, (void *)my_ActivateObject, &ao))
+        if (patch_slot("ActivateObject", (*mfts)[0], SLOT_ACTIVATE_OBJECT, (void *)my_ActivateObject, &ao))
             real_ActivateObject = (HRESULT (WINAPI *)(void *, REFIID, void **))ao;
     }
     if (out) describe_subtype("wants out as  ", &out->guidSubtype);
