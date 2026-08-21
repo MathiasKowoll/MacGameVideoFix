@@ -31,6 +31,7 @@
 #include <mferror.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #define LOGFILE "C:\\mf-probe.log"
 
@@ -289,7 +290,8 @@ static void upload_frame(IMFSample *sample);
 static ID3D11Device *video_device;
 static ID3D11DeviceContext *video_context;
 static ID3D11Texture2D *frame_texture;
-static UINT frame_width, frame_height;
+static UINT frame_width, frame_height, frame_stride;
+static BYTE *frame_scratch;
 static CRITICAL_SECTION frame_lock;
 static LONG frames_uploaded;
 static void *dxgibuf_vtbl[];
@@ -738,15 +740,67 @@ static HRESULT WINAPI buffer_qi(void *self, REFIID iid, void **out)
     return real_buffer_qi(self, iid, out);
 }
 
+/*
+ * NV12 to BGRA.
+ *
+ * The reader refused RGB32 with MF_E_TOPO_CODEC_NOT_FOUND, so the samples
+ * arrive as NV12 and the conversion has to happen here after all: a full-size
+ * luma plane followed by half-resolution interleaved chroma.
+ *
+ * BT.709 limited range, which is what 2560x1440 content is, in integer
+ * arithmetic. Coefficients are the usual ones scaled by 256.
+ */
+static void nv12_to_bgra(const BYTE *nv12, UINT stride, BYTE *bgra, UINT width, UINT height)
+{
+    const BYTE *chroma = nv12 + (size_t)stride * height;
+    UINT x, y;
+
+    for (y = 0; y < height; ++y)
+    {
+        const BYTE *luma_row = nv12 + (size_t)stride * y;
+        const BYTE *chroma_row = chroma + (size_t)stride * (y / 2);
+        BYTE *out = bgra + (size_t)width * 4 * y;
+
+        for (x = 0; x < width; ++x)
+        {
+            int c = luma_row[x] - 16;
+            int d = chroma_row[(x & ~1u)] - 128;
+            int e = chroma_row[(x & ~1u) + 1] - 128;
+            int r = (298 * c + 459 * e + 128) >> 8;
+            int g = (298 * c - 55 * d - 136 * e + 128) >> 8;
+            int b = (298 * c + 541 * d + 128) >> 8;
+
+            out[0] = (BYTE)(b < 0 ? 0 : b > 255 ? 255 : b);
+            out[1] = (BYTE)(g < 0 ? 0 : g > 255 ? 255 : g);
+            out[2] = (BYTE)(r < 0 ? 0 : r > 255 ? 255 : r);
+            out[3] = 0xff;
+            out += 4;
+        }
+    }
+}
+
 /* Copy one decoded frame into the texture the game will be handed. */
 static void upload_frame(IMFSample *sample)
 {
     IMFMediaBuffer *buffer = NULL;
     BYTE *data = NULL;
     DWORD length = 0;
+    HRESULT hr;
+    LONG n;
 
-    if (!sample || !video_device || !video_context) return;
-    if (FAILED(IMFSample_ConvertToContiguousBuffer(sample, &buffer)) || !buffer) return;
+    if (!sample) return;
+    if (!video_device || !video_context)
+    {
+        stub_called("no D3D11 device to upload frames to");
+        return;
+    }
+
+    hr = IMFSample_ConvertToContiguousBuffer(sample, &buffer);
+    if (FAILED(hr) || !buffer)
+    {
+        stub_called("ConvertToContiguousBuffer failed");
+        return;
+    }
 
     if (!real_buffer_qi)
     {
@@ -754,14 +808,28 @@ static void upload_frame(IMFSample *sample)
         logf_("  media buffer hook: %s", real_buffer_qi ? "installed" : "COULD NOT PATCH");
     }
 
-    if (SUCCEEDED(IMFMediaBuffer_Lock(buffer, &data, NULL, &length)) && data)
+    n = InterlockedIncrement(&frames_uploaded);
+    hr = IMFMediaBuffer_Lock(buffer, &data, NULL, &length);
+    if (FAILED(hr) || !data)
     {
-        EnterCriticalSection(&frame_lock);
-        if (!frame_texture && frame_width && frame_height)
+        if (n <= 3) { logf_("  buffer Lock failed"); log_hr("    result", hr); }
+        IMFMediaBuffer_Release(buffer);
+        return;
+    }
+
+    EnterCriticalSection(&frame_lock);
+
+    if (!frame_width || !frame_height)
+    {
+        if (n <= 3)
+            logf_("  frame size unknown (%ux%u) -- nothing to upload into",
+                  frame_width, frame_height);
+    }
+    else
+    {
+        if (!frame_texture)
         {
             D3D11_TEXTURE2D_DESC desc;
-            HRESULT hr;
-
             memset(&desc, 0, sizeof(desc));
             desc.Width = frame_width;
             desc.Height = frame_height;
@@ -776,19 +844,37 @@ static void upload_frame(IMFSample *sample)
                   SUCCEEDED(hr) ? "created" : "FAILED");
             if (FAILED(hr)) { log_hr("    result", hr); frame_texture = NULL; }
         }
-        if (frame_texture)
+
+        if (!frame_scratch)
+            frame_scratch = malloc((size_t)frame_width * frame_height * 4);
+
+        if (frame_texture && frame_scratch)
         {
-            /* RGB32 rows are width * 4 and bottom-up unless the stride says
-             * otherwise; the reader reports a positive stride for this type. */
-            ID3D11DeviceContext_UpdateSubresource(video_context,
-                    (ID3D11Resource *)frame_texture, 0, NULL, data, frame_width * 4, 0);
-            if (InterlockedIncrement(&frames_uploaded) <= 3)
-                logf_("  frame %ld uploaded (%lu bytes)", frames_uploaded,
-                      (unsigned long)length);
+            UINT stride = frame_stride ? frame_stride : frame_width;
+            DWORD needed = stride * frame_height * 3 / 2;
+
+            if (length < needed)
+            {
+                if (n <= 3)
+                    logf_("  sample is %lu bytes, NV12 at %ux%u stride %u needs %lu",
+                          (unsigned long)length, frame_width, frame_height, stride,
+                          (unsigned long)needed);
+            }
+            else
+            {
+                nv12_to_bgra(data, stride, frame_scratch, frame_width, frame_height);
+                ID3D11DeviceContext_UpdateSubresource(video_context,
+                        (ID3D11Resource *)frame_texture, 0, NULL,
+                        frame_scratch, frame_width * 4, 0);
+                if (n <= 3)
+                    logf_("  frame %ld converted and uploaded (%lu bytes in)",
+                          n, (unsigned long)length);
+            }
         }
-        LeaveCriticalSection(&frame_lock);
-        IMFMediaBuffer_Unlock(buffer);
     }
+
+    LeaveCriticalSection(&frame_lock);
+    IMFMediaBuffer_Unlock(buffer);
     IMFMediaBuffer_Release(buffer);
 }
 
@@ -1264,8 +1350,18 @@ static HRESULT WINAPI reader_get_current_type(void *self, DWORD stream, IMFMedia
             if (SUCCEEDED(IMFAttributes_GetGUID((IMFAttributes *)*type, &MF_MT_SUBTYPE, &subtype)))
                 describe_subtype("  subtype", &subtype);
             if (SUCCEEDED(IMFAttributes_GetUINT64((IMFAttributes *)*type, &MF_MT_FRAME_SIZE, &size)))
+            {
+                UINT32 stride = 0;
                 logf_("  frame size: %lux%lu",
                       (unsigned long)(size >> 32), (unsigned long)(size & 0xffffffff));
+                /* The type the reader actually settled on is the authority on
+                 * both of these, more than the one the game asked for. */
+                frame_width  = (UINT)(size >> 32);
+                frame_height = (UINT)(size & 0xffffffff);
+                if (SUCCEEDED(IMFAttributes_GetUINT32((IMFAttributes *)*type,
+                                                      &MF_MT_DEFAULT_STRIDE, &stride)))
+                    frame_stride = stride > 0x7fffffff ? (UINT)(-(INT32)stride) : stride;
+            }
             else
                 logf_("  frame size: NOT SET  <- a decoder that reports no size is unusable");
             dump_media_type("current type", *type);
