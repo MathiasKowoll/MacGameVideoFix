@@ -559,6 +559,63 @@ static HRESULT WINAPI my_MFCreateFile(MF_FILE_ACCESSMODE access, MF_FILE_OPENMOD
     return hr;
 }
 
+/*
+ * Watch the reader itself. Creating it succeeding tells us nothing about
+ * whether frames come out -- and the retry loop says they do not.
+ *
+ * IMFSourceReader slot 7 is SetCurrentMediaType, slot 9 is ReadSample. Two
+ * slots, not a proxy, for the same reason as the device.
+ */
+static HRESULT (WINAPI *real_set_media_type)(void *, DWORD, DWORD *, IMFMediaType *);
+static HRESULT (WINAPI *real_read_sample)(void *, DWORD, DWORD, DWORD *, DWORD *,
+                                          LONGLONG *, IMFSample **);
+static LONG read_samples, read_failures;
+
+static HRESULT WINAPI reader_set_media_type(void *self, DWORD stream, DWORD *reserved,
+                                            IMFMediaType *type)
+{
+    HRESULT hr = real_set_media_type(self, stream, reserved, type);
+    GUID subtype;
+
+    logf_("IMFSourceReader::SetCurrentMediaType(stream=%lu)", (unsigned long)stream);
+    if (type && SUCCEEDED(IMFAttributes_GetGUID((IMFAttributes *)type, &MF_MT_SUBTYPE, &subtype)))
+        describe_subtype("asked for", &subtype);
+    log_hr("result", hr);
+    return hr;
+}
+
+static HRESULT WINAPI reader_read_sample(void *self, DWORD stream, DWORD flags,
+                                         DWORD *actual, DWORD *sample_flags,
+                                         LONGLONG *timestamp, IMFSample **sample)
+{
+    HRESULT hr = real_read_sample(self, stream, flags, actual, sample_flags, timestamp, sample);
+    LONG n = InterlockedIncrement(&read_samples);
+
+    if (FAILED(hr))
+    {
+        if (InterlockedIncrement(&read_failures) <= 8)
+        {
+            logf_("IMFSourceReader::ReadSample  [#%ld]", n);
+            log_hr("result", hr);
+        }
+    }
+    else if (n <= 3)
+    {
+        logf_("IMFSourceReader::ReadSample  [#%ld] ok, sample %s", n,
+              (sample && *sample) ? "delivered" : "NULL");
+        if (sample_flags) logf_("  flags: 0x%lx", (unsigned long)*sample_flags);
+    }
+    return hr;
+}
+
+static void hook_source_reader(void *reader)
+{
+    if (!reader || real_read_sample) return;
+    real_set_media_type = patch_vtable_slot(reader, 7, reader_set_media_type);
+    real_read_sample    = patch_vtable_slot(reader, 9, reader_read_sample);
+    logf_("  source reader hooks: %s", real_read_sample ? "installed" : "COULD NOT PATCH");
+}
+
 static HRESULT WINAPI my_MFCreateSourceReaderFromByteStream(IMFByteStream *stream,
                                                             IMFAttributes *attrs,
                                                             IMFSourceReader **reader)
@@ -588,8 +645,42 @@ static HRESULT WINAPI my_MFCreateSourceReaderFromByteStream(IMFByteStream *strea
     }
     else logf_("  attributes: (none)");
 
+    /*
+     * Hand the reader a copy of the attributes without the two that ask for
+     * D3D-backed decoding.
+     *
+     * The game sets MF_SOURCE_READER_D3D_MANAGER and
+     * MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, which tell Media Foundation to
+     * decode into D3D video textures. Nothing under D3DMetal can produce
+     * those -- that is the whole reason ID3D11VideoDevice was missing. Without
+     * them the reader decodes in software, which is exactly the path
+     * winegstreamer's VP9 support already serves.
+     *
+     * The game's own attribute store is left alone; it may be reused.
+     */
+    if (attrs && real_MFCreateAttributes)
+    {
+        IMFAttributes *plain = NULL;
+        if (SUCCEEDED(real_MFCreateAttributes(&plain, count + 2)) && plain)
+        {
+            if (SUCCEEDED(IMFAttributes_CopyAllItems(attrs, plain)))
+            {
+                IMFAttributes_DeleteItem(plain, &MF_SOURCE_READER_D3D_MANAGER);
+                IMFAttributes_DeleteItem(plain, &MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS);
+                stub_called("dropped D3D_MANAGER and HARDWARE_TRANSFORMS -> software decode");
+                hr = real_MFCreateSourceReaderFromByteStream(stream, plain, reader);
+                IMFAttributes_Release(plain);
+                log_hr("result (software)", hr);
+                if (SUCCEEDED(hr) && reader) hook_source_reader(*reader);
+                return hr;
+            }
+            IMFAttributes_Release(plain);
+        }
+    }
+
     hr = real_MFCreateSourceReaderFromByteStream(stream, attrs, reader);
     log_hr("result", hr);
+    if (SUCCEEDED(hr) && reader) hook_source_reader(*reader);
     return hr;
 }
 
@@ -694,8 +785,9 @@ static DWORD WINAPI worker(LPVOID unused)
 static void report_totals(void)
 {
     logf_("");
-    logf_("=== totals: %ld MFStartup, %ld MFShutdown, %ld failed file opens ===",
-          mf_startups, mf_shutdowns, open_failures);
+    logf_("=== totals: %ld MFStartup, %ld MFShutdown, %ld failed file opens, "
+          "%ld ReadSample (%ld failed) ===",
+          mf_startups, mf_shutdowns, open_failures, read_samples, read_failures);
 }
 
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
