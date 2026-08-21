@@ -806,7 +806,50 @@ READER_WRAP(3,  "GetStreamSelection")
 READER_WRAP(8,  "SetCurrentPosition")
 READER_WRAP(10, "Flush")
 READER_WRAP(11, "GetServiceForStream")
-READER_WRAP(12, "GetPresentationAttribute")
+
+/*
+ * GetPresentationAttribute is the last call the game makes before tearing
+ * everything down, and it succeeds. So it is not the call that fails -- it is
+ * the answer.
+ *
+ * The attribute is MF_PD_DURATION. A player handed a duration of zero has a
+ * video of no length, and skipping it is the reasonable thing to do; it would
+ * look exactly like this. So log the value, and when it is zero substitute a
+ * plausible one.
+ *
+ * The substitution is a test, not a fix. If the game starts reading frames,
+ * the real repair belongs in winegstreamer, which should report the duration
+ * the container already carries -- ffprobe reads 10.01s out of TITLE.webm
+ * without difficulty.
+ */
+static const GUID mf_pd_duration = { 0x6c990d33, 0xbb8e, 0x477a,
+                                     { 0x85, 0x98, 0x0d, 0x5d, 0x96, 0xfc, 0xd8, 0x8a } };
+#define SUBSTITUTE_DURATION  (10ull * 60 * 10000000)   /* ten minutes in 100ns units */
+
+static ULONG_PTR WINAPI rdr_12(void *self, ULONG_PTR stream, ULONG_PTR guid,
+                               ULONG_PTR value, ULONG_PTR d, ULONG_PTR e, ULONG_PTR f)
+{
+    ULONG_PTR r = real_reader[12](self, stream, guid, value, d, e, f);
+    HRESULT hr = (HRESULT)r;
+    PROPVARIANT *pv = (PROPVARIANT *)value;
+    BOOL duration = guid && IsEqualGUID((const GUID *)guid, &mf_pd_duration);
+
+    if (InterlockedIncrement(&reader_calls[12]) <= 4 || FAILED(hr))
+    {
+        logf_("IMFSourceReader::GetPresentationAttribute(stream=0x%llx, %s)",
+              (unsigned long long)stream, duration ? "MF_PD_DURATION" : "other");
+        log_hr("  result", hr);
+        if (SUCCEEDED(hr) && pv)
+            logf_("  value: vt=%u  %llu", pv->vt, (unsigned long long)pv->uhVal.QuadPart);
+    }
+
+    if (duration && SUCCEEDED(hr) && pv && pv->vt == VT_UI8 && pv->uhVal.QuadPart == 0)
+    {
+        pv->uhVal.QuadPart = SUBSTITUTE_DURATION;
+        stub_called("MF_PD_DURATION was 0 -> substituted ten minutes");
+    }
+    return r;
+}
 
 static void hook_source_reader(void *reader)
 {
