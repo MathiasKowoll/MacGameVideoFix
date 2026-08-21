@@ -186,6 +186,63 @@ static HRESULT (WINAPI *real_ProcessOutput)(void *, DWORD, DWORD, void *, DWORD 
 
 static HRESULT (WINAPI *real_GetStreamCount)(void *, DWORD *, DWORD *);
 static HRESULT (WINAPI *real_SetInputType)(void *, DWORD, void *, DWORD);
+/* Give Electra a frame it will accept.
+ *
+ * The decoder now produces frames, and they are thrown away one by one: the
+ * caller allocates a plain memory buffer, a plain memory buffer does not
+ * implement IMF2DBuffer, and Electra rejects every video frame that is not 2D.
+ * That is winevideo's patch 0007, whose fix is to make the decoder provide the
+ * samples so its allocator's 2D buffers are used instead.
+ *
+ * That flag lives inside the MFT and cannot be set from out here. But the same
+ * end is reached from the other side: tell the caller the decoder provides
+ * samples, so it stops allocating and passes nothing -- then hand the real
+ * ProcessOutput a sample of ours built on MFCreate2DMediaBuffer, which
+ * implements IMF2DBuffer natively, and give that sample back.
+ *
+ * The MFT is unchanged and still fills a buffer it was handed. Only the buffer
+ * is different, and it is different in exactly the way Electra requires. */
+#define MFT_OUTPUT_STREAM_PROVIDES_SAMPLES 0x100
+
+typedef struct
+{
+    DWORD dwStreamID;
+    void *pSample;      /* IMFSample */
+    DWORD dwStatus;
+    void *pEvents;      /* IMFCollection */
+} OUT_DATA_BUFFER;
+
+static HRESULT (WINAPI *pMFCreateSample)(void **);
+static HRESULT (WINAPI *pMFCreate2DMediaBuffer)(DWORD, DWORD, DWORD, BOOL, void **);
+static UINT32 frame_w, frame_h;
+static BOOL provide_samples = TRUE;
+
+static void load_mfplat(void)
+{
+    HMODULE mf;
+    if (pMFCreateSample) return;
+    mf = LoadLibraryA("mfplat.dll");
+    if (!mf) { logf_("cannot load mfplat.dll"); return; }
+    *(FARPROC *)&pMFCreateSample = GetProcAddress(mf, "MFCreateSample");
+    *(FARPROC *)&pMFCreate2DMediaBuffer = GetProcAddress(mf, "MFCreate2DMediaBuffer");
+    if (!pMFCreate2DMediaBuffer)
+        logf_("mfplat has no MFCreate2DMediaBuffer -- cannot build a 2D frame");
+}
+
+/* IMFSample::AddBuffer is slot 3(IUnknown) + 30(IMFAttributes) + 3 = 36. */
+static HRESULT sample_add_buffer(void *sample, void *buffer)
+{
+    HRESULT (WINAPI *add)(void *, void *) =
+        (HRESULT (WINAPI *)(void *, void *))(*(void ***)sample)[36];
+    return add(sample, buffer);
+}
+
+static void release_obj(void *p)
+{
+    ULONG (WINAPI *rel)(void *) = (ULONG (WINAPI *)(void *))(*(void ***)p)[2];
+    rel(p);
+}
+
 static HRESULT (WINAPI *real_GetOutputAvailableType)(void *, DWORD, DWORD, void **);
 static HRESULT (WINAPI *real_GetOutputStreamInfo)(void *, DWORD, void *);
 static LONG frames_out, output_calls, input_calls;
@@ -304,6 +361,15 @@ static HRESULT WINAPI my_GetOutputStreamInfo(void *self, DWORD stream, void *inf
         /* MFT_OUTPUT_STREAM_INFO: dwFlags at offset 4. Bit 0x100 =
          * PROVIDES_SAMPLES, which decides who allocates the frame. */
         DWORD flags = *(DWORD *)((BYTE *)info + 4);
+        if (provide_samples && !(flags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES))
+        {
+            static LONG said;
+            flags |= MFT_OUTPUT_STREAM_PROVIDES_SAMPLES;
+            *(DWORD *)((BYTE *)info + 4) = flags;
+            if (InterlockedIncrement(&said) == 1)
+                logf_("GetOutputStreamInfo: claiming PROVIDES_SAMPLES so the "
+                      "caller stops allocating flat buffers");
+        }
         logf_("GetOutputStreamInfo: flags=0x%lx -- %s allocates the frame%s",
               flags, (flags & 0x100) ? "the DECODER" : "the CALLER",
               (flags & 0x100) ? "" : "   << a caller buffer is not IMF2DBuffer, "
@@ -333,7 +399,41 @@ static HRESULT WINAPI my_SetInputType(void *self, DWORD stream, void *type, DWOR
 static HRESULT WINAPI my_ProcessOutput(void *self, DWORD flags, DWORD count,
                                        void *samples, DWORD *status)
 {
-    HRESULT hr = real_ProcessOutput(self, flags, count, samples, status);
+    OUT_DATA_BUFFER *out = (OUT_DATA_BUFFER *)samples;
+    void *ours = NULL, *buffer = NULL;
+    HRESULT hr;
+
+    /* The caller believed us and passed nothing, so build the frame it would
+     * have built -- on a 2D buffer, which is the whole point. */
+    if (provide_samples && out && count >= 1 && !out[0].pSample && frame_w && frame_h)
+    {
+        load_mfplat();
+        if (pMFCreateSample && pMFCreate2DMediaBuffer
+            && SUCCEEDED(pMFCreateSample(&ours))
+            && SUCCEEDED(pMFCreate2DMediaBuffer(frame_w, frame_h, 0x3231564e /* NV12 */,
+                                                FALSE, &buffer))
+            && SUCCEEDED(sample_add_buffer(ours, buffer)))
+        {
+            static LONG said;
+            out[0].pSample = ours;
+            if (InterlockedIncrement(&said) == 1)
+                logf_("supplying a 2D NV12 sample %ux%u of our own", frame_w, frame_h);
+        }
+        else
+        {
+            if (buffer) release_obj(buffer);
+            if (ours) { release_obj(ours); ours = NULL; }
+            logf_("could not build a 2D sample");
+        }
+        if (buffer) release_obj(buffer);   /* the sample holds its own reference */
+    }
+
+    hr = real_ProcessOutput(self, flags, count, samples, status);
+    if (FAILED(hr) && ours && out)
+    {
+        release_obj(ours);
+        out[0].pSample = NULL;
+    }
     LONG n = InterlockedIncrement(&output_calls);
     if (SUCCEEDED(hr))
     {
@@ -360,9 +460,27 @@ static HRESULT WINAPI my_ProcessInput(void *self, DWORD stream, void *sample, DW
     return hr;
 }
 
+/* MF_MT_FRAME_SIZE packs width in the high half and height in the low half. */
+static void capture_frame_size(void *type)
+{
+    static const GUID mf_frame_size =
+        { 0x1652c33d, 0xd6b2, 0x4012, { 0xb8, 0x34, 0x72, 0x03, 0x08, 0x49, 0xa3, 0x7d } };
+    HRESULT (WINAPI *get_u64)(void *, const GUID *, UINT64 *);
+    UINT64 packed = 0;
+    if (!type) return;
+    get_u64 = (HRESULT (WINAPI *)(void *, const GUID *, UINT64 *))(*(void ***)type)[8];
+    if (SUCCEEDED(get_u64(type, &mf_frame_size, &packed)))
+    {
+        frame_w = (UINT32)(packed >> 32);
+        frame_h = (UINT32)packed;
+        logf_("  frame size %ux%u", frame_w, frame_h);
+    }
+}
+
 static HRESULT WINAPI my_SetOutputType(void *self, DWORD stream, void *type, DWORD flags)
 {
     HRESULT hr = real_SetOutputType(self, stream, type, flags);
+    if (SUCCEEDED(hr)) capture_frame_size(type);
     logf_("SetOutputType(flags=0x%lx) -> 0x%08lx%s", flags, hr,
           FAILED(hr) ? "   << no agreed output format means no picture, ever" : "");
     return hr;
