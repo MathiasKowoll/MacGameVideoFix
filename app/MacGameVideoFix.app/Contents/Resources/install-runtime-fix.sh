@@ -126,8 +126,31 @@ case "$MODE" in
   echo "[2/4] checking the proxy exports everything the game imports"
   # If the game ships a libogg we do not fully forward, the process would fail
   # to start with a missing-entry-point error. Better to refuse now.
-  missing="$(comm -23 <(python3 "$EXPORTS" exports "$LIVE" | sort) \
-                      <(python3 "$EXPORTS" exports "$PROXY" | sort))"
+  #
+  # Read each side separately and check both succeeded. Piping straight into
+  # comm hides a failure: comm -23 with an unreadable left side reports nothing
+  # missing, which reads exactly like "everything is forwarded" -- and the next
+  # step then moves that unreadable file over the saved original. Whatever
+  # $LIVE is, if its exports cannot be read it is not a DLL worth keeping.
+  if ! live_exports="$(python3 "$EXPORTS" exports "$LIVE" 2>&1)"; then
+    echo "error: cannot read the exports of $LIVE" >&2
+    echo "$live_exports" | sed 's/^/       /' >&2
+    if [ -f "$REAL" ] || [ -f "$LEGACY_REAL" ]; then
+      echo "       That file is damaged, and your original is still beside it." >&2
+      echo "       Restore it before doing anything else:" >&2
+      echo "         $0 \"$CONTENT\" --restore" >&2
+    else
+      echo "       Verify the game files in Steam, then run this again." >&2
+    fi
+    exit 1
+  fi
+  if ! proxy_exports="$(python3 "$EXPORTS" exports "$PROXY" 2>&1)"; then
+    echo "error: cannot read the exports of the shipped proxy $PROXY" >&2
+    echo "$proxy_exports" | sed 's/^/       /' >&2
+    exit 1
+  fi
+  missing="$(comm -23 <(printf '%s\n' "$live_exports" | sort) \
+                      <(printf '%s\n' "$proxy_exports" | sort))"
   if [ -n "$missing" ]; then
     echo "error: this game's libogg exports symbols the shipped proxy does not:" >&2
     echo "$missing" | sed 's/^/       /' >&2
