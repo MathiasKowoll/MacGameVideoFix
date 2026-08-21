@@ -157,6 +157,8 @@ static void log_bytestream_tags(IMFByteStream *stream)
 
 /* ---------------------------------------------------------------- hooks --- */
 
+static HRESULT (WINAPI *real_D3D11CreateDevice)(void *, UINT, HMODULE, UINT, const UINT *,
+                                                UINT, UINT, void **, UINT *, void **);
 static FARPROC (WINAPI *real_GetProcAddress)(HMODULE, LPCSTR);
 static HRESULT (WINAPI *real_CoCreateInstance)(REFCLSID, IUnknown *, DWORD, REFIID, void **);
 static HANDLE (WINAPI *real_CreateFileW)(LPCWSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES,
@@ -192,6 +194,58 @@ static HRESULT (WINAPI *real_MFCreateSourceReaderFromByteStream)(IMFByteStream *
 static HRESULT (WINAPI *real_MFTEnumEx)(GUID, UINT32, const MFT_REGISTER_TYPE_INFO *,
                                         const MFT_REGISTER_TYPE_INFO *,
                                         IMFActivate ***, UINT32 *);
+
+/*
+ * The game creates a second D3D11 device purely for video, then asks it for
+ * ID3D11VideoDevice and its context for ID3D11VideoContext. Disassembly shows
+ * the whole video subsystem gives up if either fails -- which matches what we
+ * see: it never opens a movie, and retries once a frame forever.
+ *
+ * So ask the same two questions on the same objects and log the answers. This
+ * only queries interfaces; the game's own calls are untouched.
+ */
+static const GUID iid_video_device  = { 0x10ec4d5b, 0x975a, 0x4689,
+                                        { 0xb9, 0xe4, 0xd0, 0xaa, 0xc3, 0x0f, 0xe3, 0x33 } };
+static const GUID iid_video_context = { 0x61f21c45, 0x3c0e, 0x4a74,
+                                        { 0x9c, 0xea, 0x67, 0x10, 0x0d, 0x9a, 0xd5, 0xe4 } };
+
+static void probe_interface(const char *label, IUnknown *obj, const GUID *iid)
+{
+    IUnknown *out = NULL;
+    HRESULT hr;
+
+    if (!obj) { logf_("  %s: nothing to ask", label); return; }
+    hr = IUnknown_QueryInterface(obj, iid, (void **)&out);
+    if (SUCCEEDED(hr) && out)
+    {
+        logf_("  %s: AVAILABLE", label);
+        IUnknown_Release(out);
+    }
+    else
+    {
+        logf_("  %s: NOT AVAILABLE", label);
+        log_hr("    QueryInterface", hr);
+    }
+}
+
+static HRESULT WINAPI my_D3D11CreateDevice(void *adapter, UINT driver_type, HMODULE software,
+                                           UINT flags, const UINT *levels, UINT num_levels,
+                                           UINT sdk, void **device, UINT *level, void **context)
+{
+    HRESULT hr = real_D3D11CreateDevice(adapter, driver_type, software, flags, levels,
+                                        num_levels, sdk, device, level, context);
+    logf_("D3D11CreateDevice(driver_type=%u, flags=0x%x)", driver_type, flags);
+    log_hr("result", hr);
+    if (SUCCEEDED(hr))
+    {
+        if (level) logf_("  feature level: 0x%x", *level);
+        probe_interface("ID3D11VideoDevice", device ? *(IUnknown **)device : NULL,
+                        &iid_video_device);
+        probe_interface("ID3D11VideoContext", context ? *(IUnknown **)context : NULL,
+                        &iid_video_context);
+    }
+    return hr;
+}
 
 static void log_guid(const char *label, const GUID *g)
 {
@@ -484,6 +538,7 @@ static DWORD WINAPI worker(LPVOID unused)
     (void)unused;
     logf_("");
     logf_("=== mf-probe attached ===");
+    HOOK("d3d11.dll", D3D11CreateDevice);
     HOOK("KERNEL32.dll", GetProcAddress);
     HOOK("KERNEL32.dll", CreateFileW);
     HOOK("KERNEL32.dll", FindFirstFileW);
