@@ -757,6 +757,207 @@ final class Runner: ObservableObject {
         }
     }
 
+    // MARK: Scanning a whole library
+
+    @Published var bulk = false
+    @Published var scanning = false
+    @Published var plan: [ScanHit] = []
+    @Published var scanNote = ""
+    @Published var batchStep = ""
+    /// Honoured between games, never inside one. Interrupting an installer
+    /// mid-rename is what manufactures the state that destroys an original.
+    @Published var stopping = false
+
+    var selectedHits: [ScanHit] { plan.filter { $0.selected && $0.actionable } }
+
+    func enterBulk() {
+        bulk = true
+        plan = []
+        scanNote = ""
+        log.removeAll()
+        resetProgress()
+        status = "Scan a Steam library, or let the app find them."
+    }
+
+    func leaveBulk() {
+        bulk = false
+        plan = []
+        batchStep = ""
+        status = "Choose your game folder to begin."
+    }
+
+    /// `url` nil means: ask the bottles where their libraries are.
+    func startScan(from url: URL?) {
+        scanning = true
+        plan = []
+        log.removeAll()
+        indeterminate = true
+        status = "Scanning…"
+        Task {
+            defer { scanning = false; indeterminate = false }
+
+            var roots: [URL] = []
+            var describedRoot = ""
+            if let url {
+                let (root, looksLikeLibrary) = SteamLibrary.normalise(url)
+                roots = [root]
+                describedRoot = root.path
+                if !looksLikeLibrary {
+                    note("That folder does not look like a Steam library; scanning it as it is.")
+                }
+            } else {
+                roots = await Task.detached { SteamLibrary.discover() }.value
+                describedRoot = roots.count == 1 ? roots[0].path
+                                                 : "\(roots.count) Steam libraries"
+            }
+
+            guard !roots.isEmpty else {
+                status = "No Steam library found. Drop one on the app instead."
+                return
+            }
+            note("Scanning \(describedRoot)")
+
+            let found = await Task.detached { Self.recognise(in: roots) }.value
+            guard !found.isEmpty else {
+                scanNote = "No supported game found."
+                status = "Nothing to do here."
+                note("No supported game found.")
+                return
+            }
+
+            var probed: [ScanHit] = []
+            for hit in found { probed.append(await probe(hit)) }
+            plan = probed
+
+            let ready = probed.filter { $0.actionable && $0.state != .applied }.count
+            scanNote = "\(probed.count) supported game\(probed.count == 1 ? "" : "s") found"
+            status = ready == 0 ? "Everything here is already fixed."
+                                : "\(ready) can be fixed now."
+        }
+    }
+
+    /// Only the games we recognise are ever named. The rest of the folder is
+    /// walked and forgotten -- what is installed alongside them is nobody's
+    /// business, least of all a log someone pastes into a bug report.
+    private nonisolated static func recognise(in roots: [URL]) -> [ScanHit] {
+        let fm = FileManager.default
+        var hits: [ScanHit] = []
+        var seen = Set<String>()
+        for root in roots {
+            guard let entries = try? fm.contentsOfDirectory(
+                at: root, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+                options: [.skipsHiddenFiles]) else { continue }
+            // The root itself may be a single game folder.
+            for folder in [root] + entries {
+                let values = try? folder.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                if values?.isSymbolicLink == true { continue }
+                if folder != root && values?.isDirectory != true { continue }
+                for game in SupportedGame.scannable where game.isRooted(at: folder) {
+                    let key = "\(game.rawValue)\u{1}\(folder.standardizedFileURL.path)"
+                    if seen.insert(key).inserted {
+                        hits.append(ScanHit(game: game, root: folder))
+                    }
+                }
+            }
+        }
+        return hits
+    }
+
+    /// Asks the installer what it sees, rather than repeating its judgement
+    /// here -- one definition of "installed" in this project, not two.
+    ///
+    /// Only the state word is kept. --status also prints the path it found,
+    /// and that belongs nowhere near a log someone might paste in public.
+    private func probe(_ hit: ScanHit) async -> ScanHit {
+        var hit = hit
+        let script = resources.appendingPathComponent(
+            hit.game == .dynastyWarriors ? "install-dwo-bridge.sh" : "install-runtime-fix.sh").path
+
+        statusAnswer = ""
+        let code = await runStreaming("/bin/bash", [script, hit.root.path, "--status"]) { line in
+            Task { @MainActor [weak self] in
+                guard let self, self.statusAnswer.isEmpty else { return }
+                self.statusAnswer = line
+            }
+        }
+        await Task.yield()
+
+        guard code == 0 else {
+            hit.state = .notApplied
+            hit.selected = false
+            hit.blocker = hit.game == .dynastyWarriors
+                ? "This copy ships no libxess.dll for the bridge to ride on."
+                : "This copy ships no libogg for the fix to ride on."
+            return hit
+        }
+        switch statusAnswer.split(separator: " ", maxSplits: 1).first.map(String.init) {
+        case "installed":
+            hit.state = .applied
+            hit.selected = false
+        case "broken":
+            hit.state = .partial
+            hit.selected = false
+            hit.blocker = "Half-installed. Verify this game's files in Steam, then scan again."
+        default:
+            hit.state = .notApplied
+            hit.blocker = nil
+        }
+        return hit
+    }
+
+    func applyPlan(install: Bool) {
+        let targets = selectedHits.filter { install ? $0.state != .applied : $0.state != .notApplied }
+        guard !targets.isEmpty else { return }
+        busy = true
+        stopping = false
+        Task {
+            defer { busy = false; indeterminate = false; batchStep = ""; phaseLabel = ""; detail = "" }
+            progress = 0
+            var done = 0
+            for hit in targets {
+                if stopping { note(""); note("Stopped. \(targets.count - done) game(s) left untouched."); break }
+                done += 1
+                batchStep = "\(hit.game.name) (\(done) of \(targets.count))"
+                status = install ? "Installing…" : "Removing…"
+                note(""); note("▸ \(hit.game.name)")
+
+                let script = resources.appendingPathComponent(
+                    hit.game == .dynastyWarriors ? "install-dwo-bridge.sh" : "install-runtime-fix.sh").path
+                var args = [script, hit.root.path]
+                if !install { args.append("--restore") }
+
+                indeterminate = true
+                let code = await runStreaming("/bin/bash", args) { line in
+                    Task { @MainActor [weak self] in self?.note("  " + line) }
+                }
+                await Task.yield()
+                progress = Double(done) / Double(targets.count)
+
+                if let i = plan.firstIndex(where: { $0.id == hit.id }) {
+                    plan[i].outcome = code == 0 ? (install ? "Fixed" : "Removed")
+                                                : "Failed — see the log"
+                }
+            }
+            // Re-probe rather than trust what we just did.
+            var refreshed: [ScanHit] = []
+            for var hit in plan {
+                let outcome = hit.outcome
+                hit = await probe(hit)
+                hit.outcome = outcome
+                refreshed.append(hit)
+            }
+            plan = refreshed
+            batchStep = ""
+            let ok = plan.filter { $0.outcome == "Fixed" || $0.outcome == "Removed" }.count
+            let bad = plan.filter { $0.outcome?.hasPrefix("Failed") == true }.count
+            let already = plan.filter { $0.outcome == nil && $0.state == .applied }.count
+            var parts = ["\(ok) \(install ? "fixed" : "removed")"]
+            if already > 0 { parts.append("\(already) already done") }
+            if bad > 0 { parts.append("\(bad) needs attention") }
+            status = parts.joined(separator: " · ")
+        }
+    }
+
     // MARK: Undoing an older release's re-encode
 
     /// Puts back what the removed re-encode mode replaced: the pak's video
@@ -785,6 +986,147 @@ final class Runner: ObservableObject {
     }
 
 }
+
+// MARK: - Scanning a Steam library
+
+/// One recognised game, and what the scan found out about it.
+struct ScanHit: Identifiable {
+    let id = UUID()
+    let game: SupportedGame
+    let root: URL
+    var state: FixState = .unknown
+    /// Set when the row cannot be acted on, and says why in the user's terms.
+    var blocker: String?
+    var selected = true
+    var outcome: String?
+
+    var actionable: Bool { blocker == nil }
+}
+
+extension SupportedGame {
+    /// Titles a scan can identify.
+    ///
+    /// `.unrealOther` is excluded deliberately: its `executable` is nil, so it
+    /// would match any folder with an Engine directory, claim to be a
+    /// supported game, and put unrelated folder names on screen. Identity has
+    /// to be something the folder can fail.
+    static var scannable: [SupportedGame] { allCases.filter { $0.executable != nil } }
+
+    /// Is this exact folder this game? The scan already knows which folder it
+    /// is asking about, so unlike `title(from:)` this neither walks up nor
+    /// looks one level down.
+    ///
+    /// Identity is the shipping executable and nothing else. Whether the game
+    /// ships the carrier DLL the fix rides on is a separate question, asked
+    /// later by the installer -- a title with no libogg is still that title,
+    /// and has to appear as a row saying so rather than vanish from the scan.
+    func isRooted(at folder: URL) -> Bool {
+        guard let exe = executable else { return false }
+        if case .dynastyWarriors = self {
+            return FileManager.default.fileExists(
+                atPath: folder.appendingPathComponent(exe).path)
+        }
+        return GameFolder(root: folder).hasExecutable(exe)
+    }
+}
+
+/// Working out which folder to scan.
+enum SteamLibrary {
+    /// Steam's own layout, and one step back up it.
+    ///
+    /// The last rule is the one that matters: someone who drags the game they
+    /// were thinking about gets the library it sits in scanned, rather than a
+    /// one-row plan and a second trip to Finder.
+    static func normalise(_ url: URL) -> (root: URL, looksLikeLibrary: Bool) {
+        let fm = FileManager.default
+        func isDir(_ u: URL) -> Bool {
+            var d: ObjCBool = false
+            return fm.fileExists(atPath: u.path, isDirectory: &d) && d.boolValue
+        }
+        if url.lastPathComponent == "common" { return (url, true) }
+        let steamapps = url.appendingPathComponent("steamapps/common")
+        if isDir(steamapps) { return (steamapps, true) }
+        let common = url.appendingPathComponent("common")
+        if isDir(common) { return (common, true) }
+        let parent = url.deletingLastPathComponent()
+        if parent.lastPathComponent == "common" { return (parent, true) }
+        return (url, false)
+    }
+
+    /// Libraries the Steam inside each CrossOver bottle knows about.
+    ///
+    /// The bottle is the only place worth looking. Windows games installed
+    /// under CrossOver are managed by the Steam running inside it, and the
+    /// native macOS Steam does not record those libraries at all -- trusting
+    /// it would find nothing and report, wrongly, that the user owns none of
+    /// the supported games.
+    ///
+    /// These roots are read and never shown. They are the user's storage
+    /// layout, unmounted volumes included; only recognised games belong on
+    /// screen.
+    static func discover() -> [URL] {
+        let fm = FileManager.default
+        let bottles = (try? fm.contentsOfDirectory(
+            at: URL(fileURLWithPath: NSHomeDirectory())
+                .appendingPathComponent("Library/Application Support/CrossOver/Bottles"),
+            includingPropertiesForKeys: nil)) ?? []
+
+        var roots: [URL] = []
+        for bottle in bottles {
+            let vdf = bottle.appendingPathComponent(
+                "drive_c/Program Files (x86)/Steam/config/libraryfolders.vdf")
+            guard let text = try? String(contentsOf: vdf, encoding: .utf8) else { continue }
+            for windowsPath in paths(in: text) {
+                guard let mac = translate(windowsPath, inBottle: bottle) else { continue }
+                let common = mac.appendingPathComponent("steamapps/common")
+                var d: ObjCBool = false
+                if fm.fileExists(atPath: common.path, isDirectory: &d), d.boolValue {
+                    roots.append(common)
+                }
+            }
+        }
+        // Several bottles usually share one library.
+        var seen = Set<String>()
+        return roots.filter { seen.insert($0.standardizedFileURL.path).inserted }
+    }
+
+    /// The "path" values out of a libraryfolders.vdf. Backslashes arrive
+    /// doubled, as the file is written escaped.
+    private static func paths(in vdf: String) -> [String] {
+        var found: [String] = []
+        for line in vdf.split(separator: "\n") {
+            let parts = line.split(separator: "\"", omittingEmptySubsequences: false)
+            // "path"<tab>"VALUE"  ->  ["", "path", "\t", "VALUE", ""]
+            guard parts.count >= 4, parts[1] == "path" else { continue }
+            found.append(String(parts[3]).replacingOccurrences(of: "\\\\", with: "\\"))
+        }
+        return found
+    }
+
+    /// A Windows path to a macOS one, by reading the bottle's own drive map.
+    ///
+    /// Read rather than assumed: Z: is the root here but Y: is the home
+    /// directory, so hardcoding either would silently resolve to the wrong
+    /// place on someone else's machine.
+    private static func translate(_ windowsPath: String, inBottle bottle: URL) -> URL? {
+        guard windowsPath.count >= 2, windowsPath[windowsPath.index(windowsPath.startIndex, offsetBy: 1)] == ":"
+        else { return nil }
+        let letter = String(windowsPath.first!).lowercased()
+        let link = bottle.appendingPathComponent("dosdevices/\(letter):")
+        guard let target = try? FileManager.default.destinationOfSymbolicLink(atPath: link.path)
+        else { return nil }
+
+        let base = target.hasPrefix("/")
+            ? URL(fileURLWithPath: target)
+            : bottle.appendingPathComponent("dosdevices").appendingPathComponent(target)
+        let rest = windowsPath.dropFirst(2)
+            .replacingOccurrences(of: "\\", with: "/")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return rest.isEmpty ? base.standardizedFileURL
+                            : base.appendingPathComponent(rest).standardizedFileURL
+    }
+}
+
 
 // MARK: - Interface
 
