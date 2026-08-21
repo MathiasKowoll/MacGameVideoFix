@@ -163,6 +163,65 @@ static const BOOL serve_from_cache = TRUE;
 static const BOOL fix_reservations = TRUE;
 static UINT64 requested_reservation[2];
 static LONG served, measured;
+
+/*
+ * Who is asking.
+ *
+ * Three theories about the values are dead: the budget is never full, the call
+ * is not expensive, and the game never reserves anything. The loop is real --
+ * two hundred million iterations a second -- so the next useful question is
+ * not what it reads but where it lives.
+ *
+ * A return address names that outright. Collected into a small table with
+ * counts rather than logged, because at this rate logging each one would
+ * write gigabytes; the table is dumped on a timer instead.
+ */
+#define MAX_CALLERS 24
+static struct { ULONG_PTR rva; LONG64 count; } callers[MAX_CALLERS];
+static LONG caller_count;
+static CRITICAL_SECTION caller_lock;
+static ULONGLONG last_dump;
+
+static void note_caller(void *ret)
+{
+    BYTE *base = (BYTE *)GetModuleHandleA(NULL);
+    ULONG_PTR rva;
+    int i;
+
+    if (!ret || (BYTE *)ret < base) return;
+    rva = (ULONG_PTR)((BYTE *)ret - base);
+
+    EnterCriticalSection(&caller_lock);
+    for (i = 0; i < caller_count; ++i)
+        if (callers[i].rva == rva) { callers[i].count++; goto done; }
+    if (caller_count < MAX_CALLERS)
+    {
+        callers[caller_count].rva = rva;
+        callers[caller_count].count = 1;
+        ++caller_count;
+    }
+done:
+    LeaveCriticalSection(&caller_lock);
+}
+
+static void dump_callers(void)
+{
+    ULONGLONG now = GetTickCount64();
+    int i;
+
+    if (now - last_dump < 5000) return;
+    EnterCriticalSection(&caller_lock);
+    if (now - last_dump >= 5000)
+    {
+        last_dump = now;
+        logf_("  call sites so far (%d distinct):", caller_count);
+        for (i = 0; i < caller_count; ++i)
+            logf_("    +0x%llx  %lld calls",
+                  (unsigned long long)callers[i].rva,
+                  (long long)callers[i].count);
+    }
+    LeaveCriticalSection(&caller_lock);
+}
 static ULONGLONG total_call_us;
 
 static HRESULT WINAPI my_query_vram(void *self, UINT node,
@@ -171,6 +230,9 @@ static HRESULT WINAPI my_query_vram(void *self, UINT node,
 {
     LONG n = InterlockedIncrement(&vram_calls);
     HRESULT hr;
+
+    note_caller(__builtin_return_address(0));
+    if ((n & 0xFFFFF) == 0) dump_callers();
     ULONGLONG now = GetTickCount64();
     unsigned slot = (group == DXGI_MEMORY_SEGMENT_GROUP_LOCAL) ? 0 : 1;
 
@@ -404,6 +466,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
     if (reason == DLL_PROCESS_ATTACH)
     {
         InitializeCriticalSection(&log_lock);
+        InitializeCriticalSection(&caller_lock);
         DisableThreadLibraryCalls(inst);
         thread = CreateThread(NULL, 0, worker, NULL, 0, NULL);
         if (thread) CloseHandle(thread);
