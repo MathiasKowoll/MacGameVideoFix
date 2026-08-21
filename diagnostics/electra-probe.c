@@ -1,0 +1,238 @@
+/* electra-probe -- ask the game what it is doing with its video, and change
+ * nothing while asking.
+ *
+ * Beast of Reincarnation plays a startup video whose audio is audible and
+ * whose picture never appears. Four separate levers made no difference:
+ * forcing Electra's VPx output to the CPU path, and the H264/H265
+ * UseOldOutputPath CVars. Each of those covers one decode path, so the fact
+ * that none of them moved anything says the problem is not where they act --
+ * but it does not say where it is.
+ *
+ * The point of this file is to stop deducing. It answers three questions:
+ *
+ *   1. Does the startup movie go through Media Foundation at all? If MFStartup
+ *      is never called, every hypothesis about MF, winevideo, registry
+ *      mappings and D3D-aware MFTs is irrelevant by construction.
+ *   2. If it does, what codec is it asking for? MFTEnumEx carries the subtype
+ *      GUID of the format the caller wants decoded, which is the codec by
+ *      FourCC, and is the fact four investigations have been guessing at.
+ *   3. Which module asks, and does it get an answer?
+ *
+ * It hooks by import table and by GetProcAddress, because this game
+ * delay-loads MFPlat, MFReadWrite and MF -- an import-table hook alone
+ * installs correctly, reports itself hooked, and is never called.
+ *
+ * Purely observational. Every wrapper calls the real function and returns its
+ * real result. A probe that changes behaviour cannot distinguish the fault
+ * from itself.
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+#define COBJMACROS
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <stdio.h>
+
+#define LOGFILE "C:\\electra-probe.log"
+
+static const char *process_name(void)
+{
+    static char who[64];
+    if (!who[0])
+    {
+        char path[MAX_PATH];
+        DWORD len = GetModuleFileNameA(NULL, path, sizeof(path));
+        const char *base = path;
+        while (len-- > 0)
+            if (path[len] == '\\') { base = path + len + 1; break; }
+        lstrcpynA(who, base, sizeof(who));
+        if (!who[0]) lstrcpynA(who, "?", sizeof(who));
+    }
+    return who;
+}
+
+static void logf_(const char *fmt, ...)
+{
+    char buf[1024];
+    HANDLE h;
+    DWORD written;
+    va_list ap;
+    int n, m;
+
+    n = snprintf(buf, sizeof(buf) - 2, "[%s] ", process_name());
+    if (n < 0) n = 0;
+    va_start(ap, fmt);
+    m = vsnprintf(buf + n, sizeof(buf) - 2 - n, fmt, ap);
+    va_end(ap);
+    if (m < 0) return;
+    n += m;
+    buf[n] = '\n';
+
+    h = CreateFileA(LOGFILE, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return;
+    SetFilePointer(h, 0, NULL, FILE_END);
+    WriteFile(h, buf, n + 1, &written, NULL);
+    CloseHandle(h);
+}
+
+/* A media subtype GUID's first four bytes are the FourCC for every codec that
+ * has one, so printing both the FourCC and the GUID names the format whether
+ * or not it is one we already know. */
+static void describe_subtype(const char *what, const GUID *g)
+{
+    char cc[5];
+    DWORD fourcc = g->Data1;
+    cc[0] = (char)(fourcc & 0xff);
+    cc[1] = (char)((fourcc >> 8) & 0xff);
+    cc[2] = (char)((fourcc >> 16) & 0xff);
+    cc[3] = (char)((fourcc >> 24) & 0xff);
+    cc[4] = 0;
+    for (int i = 0; i < 4; i++)
+        if (cc[i] < 32 || cc[i] > 126) cc[i] = '.';
+    logf_("  %s: '%s'  {%08lX-%04X-%04X-%02X%02X%02X%02X%02X%02X%02X%02X}",
+          what, cc, g->Data1, g->Data2, g->Data3,
+          g->Data4[0], g->Data4[1], g->Data4[2], g->Data4[3],
+          g->Data4[4], g->Data4[5], g->Data4[6], g->Data4[7]);
+}
+
+typedef struct { GUID guidMajorType; GUID guidSubtype; } REG_TYPE_INFO;
+
+static HRESULT (WINAPI *real_MFStartup)(ULONG, DWORD);
+static HRESULT (WINAPI *real_MFTEnumEx)(GUID, UINT32, const REG_TYPE_INFO *,
+                                        const REG_TYPE_INFO *, void ***, UINT32 *);
+static HRESULT (WINAPI *real_MFCreateSourceReaderFromByteStream)(void *, void *, void **);
+static HRESULT (WINAPI *real_MFCreateSourceReaderFromURL)(LPCWSTR, void *, void **);
+
+static HRESULT WINAPI my_MFStartup(ULONG version, DWORD flags)
+{
+    HRESULT hr = real_MFStartup ? real_MFStartup(version, flags) : S_OK;
+    logf_("MFStartup(version=0x%lx, flags=0x%lx) -> 0x%08lx  "
+          "<< Media Foundation IS in play", version, flags, hr);
+    return hr;
+}
+
+static HRESULT WINAPI my_MFTEnumEx(GUID category, UINT32 flags,
+                                   const REG_TYPE_INFO *in,
+                                   const REG_TYPE_INFO *out,
+                                   void ***mfts, UINT32 *count)
+{
+    HRESULT hr = real_MFTEnumEx(category, flags, in, out, mfts, count);
+    logf_("MFTEnumEx flags=0x%lx -> 0x%08lx, %u decoder(s) offered",
+          flags, hr, count ? *count : 0);
+    if (in)  describe_subtype("wants to decode", &in->guidSubtype);
+    if (out) describe_subtype("wants out as  ", &out->guidSubtype);
+    if (count && *count == 0)
+        logf_("  NOTHING can decode that here -- this is the failure, if the "
+              "picture is missing and the sound is not");
+    return hr;
+}
+
+static HRESULT WINAPI my_MFCreateSourceReaderFromByteStream(void *stream, void *attrs, void **reader)
+{
+    HRESULT hr = real_MFCreateSourceReaderFromByteStream(stream, attrs, reader);
+    logf_("MFCreateSourceReaderFromByteStream -> 0x%08lx", hr);
+    return hr;
+}
+
+static HRESULT WINAPI my_MFCreateSourceReaderFromURL(LPCWSTR url, void *attrs, void **reader)
+{
+    HRESULT hr = real_MFCreateSourceReaderFromURL(url, attrs, reader);
+    logf_("MFCreateSourceReaderFromURL(%ls) -> 0x%08lx", url ? url : L"(null)", hr);
+    return hr;
+}
+
+/* Delay-loaded imports are resolved through GetProcAddress, so this is where
+ * the hooks actually land for this game. */
+static FARPROC (WINAPI *real_GetProcAddress)(HMODULE, LPCSTR);
+
+static FARPROC WINAPI my_GetProcAddress(HMODULE module, LPCSTR name)
+{
+    FARPROC proc = real_GetProcAddress(module, name);
+    if (!proc || !name || ((ULONG_PTR)name >> 16) == 0)
+        return proc;
+
+#define SWAP(fn)                                                          \
+    if (lstrcmpiA(name, #fn) == 0) {                                      \
+        if (!real_##fn) { *(FARPROC *)&real_##fn = proc; }                \
+        logf_("GetProcAddress(\"%s\") -- hooked", name);                  \
+        return (FARPROC)my_##fn;                                          \
+    }
+    SWAP(MFStartup)
+    SWAP(MFTEnumEx)
+    SWAP(MFCreateSourceReaderFromByteStream)
+    SWAP(MFCreateSourceReaderFromURL)
+#undef SWAP
+
+    /* Name every media entry point the game asks for, resolved or not. The
+     * list of what it looks for is itself evidence about which player it uses. */
+    if (name[0] == 'M' && name[1] == 'F')
+        logf_("GetProcAddress(\"%s\") -> %s", name, proc ? "ok" : "NOT FOUND");
+    return proc;
+}
+
+static void *hook_import(const char *dll, const char *func, void *replacement)
+{
+    HMODULE base = GetModuleHandleA(NULL);
+    IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;
+    IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)((BYTE *)base + dos->e_lfanew);
+    IMAGE_DATA_DIRECTORY *dir = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    IMAGE_IMPORT_DESCRIPTOR *imp;
+    void *original = NULL;
+
+    if (!dir->VirtualAddress) return NULL;
+    imp = (IMAGE_IMPORT_DESCRIPTOR *)((BYTE *)base + dir->VirtualAddress);
+
+    for (; imp->Name; imp++)
+    {
+        const char *name = (const char *)((BYTE *)base + imp->Name);
+        IMAGE_THUNK_DATA *orig, *iat;
+        if (lstrcmpiA(name, dll) != 0) continue;
+
+        orig = (IMAGE_THUNK_DATA *)((BYTE *)base + imp->OriginalFirstThunk);
+        iat  = (IMAGE_THUNK_DATA *)((BYTE *)base + imp->FirstThunk);
+        for (; orig->u1.AddressOfData; orig++, iat++)
+        {
+            IMAGE_IMPORT_BY_NAME *by;
+            DWORD old;
+            if (IMAGE_SNAP_BY_ORDINAL(orig->u1.Ordinal)) continue;
+            by = (IMAGE_IMPORT_BY_NAME *)((BYTE *)base + orig->u1.AddressOfData);
+            if (lstrcmpiA((const char *)by->Name, func) != 0) continue;
+
+            original = (void *)iat->u1.Function;
+            if (VirtualProtect(&iat->u1.Function, sizeof(void *), PAGE_READWRITE, &old))
+            {
+                iat->u1.Function = (ULONG_PTR)replacement;
+                VirtualProtect(&iat->u1.Function, sizeof(void *), old, &old);
+            }
+            return original;
+        }
+    }
+    return original;
+}
+
+static DWORD WINAPI worker(LPVOID unused)
+{
+    (void)unused;
+    logf_("---- probe armed, watching only ----");
+    return 0;
+}
+
+BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
+{
+    (void)reserved;
+    if (reason == DLL_PROCESS_ATTACH)
+    {
+        DisableThreadLibraryCalls(inst);
+        /* GetProcAddress has to be in place before the game resolves anything,
+         * so it goes in here rather than on the worker thread. */
+        *(void **)&real_GetProcAddress =
+            hook_import("KERNEL32.dll", "GetProcAddress", (void *)my_GetProcAddress);
+        if (!real_GetProcAddress)
+            *(FARPROC *)&real_GetProcAddress =
+                GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetProcAddress");
+        CreateThread(NULL, 0, worker, NULL, 0, NULL);
+    }
+    return TRUE;
+}
