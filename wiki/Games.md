@@ -27,56 +27,59 @@ re-encoding is the fallback.
 | --- | --- |
 | Cutscenes | 355 `.webm`, VP9 Profile 0. 42 of them 2560x1440 and up to four minutes; the rest 960x540 interface clips |
 | Played by | `IMFSourceReader`, on a **separate D3D11 device** created only for video |
-| Symptom | Black screen. Game runs and is playable; no crash |
+| Symptom | Cutscene plays with sound, picture stays black. No crash |
 
-**Cause.** The video player queries the D3D11 device for `ID3D11VideoDevice`
-and its context for `ID3D11VideoContext`. Both return `E_NOINTERFACE`, and the
-player gives up before opening anything:
+**Where it stands.** The player now runs: it opens the file, builds a reader,
+negotiates NV12 at 2560x1440, reads samples, seeks, and the audio plays. What
+it never does is put a frame on screen.
 
-```asm
-QueryInterface(ID3D11VideoDevice)    ; 0x80004002
-QueryInterface(ID3D11VideoContext)   ; 0x80004002
-js  <exit>                           ; whole subsystem off
-```
+**The chain, in the order it was found.** Each of these was a real blocker;
+none of them was the last one.
 
-It retries once a frame, forever, which is why nothing appears and nothing
-crashes.
+1. **`ID3D11VideoDevice` and `ID3D11VideoContext` return `E_NOINTERFACE`.**
+   The player queries the D3D11 device for both and gives up if either fails.
+   With `CX_GRAPHICS_BACKEND=d3dmetal`, CrossOver puts Apple's GPTK ahead of
+   Wine, and GPTK's 136 KB `d3d11.dll` is a shim over D3DMetal carrying
+   neither. Wine's own 425 KB `d3d11.dll` implements `ID3D11VideoDevice1` with
+   24 real methods, but the game never sees it.
 
-**Why the interfaces are missing.** With `CX_GRAPHICS_BACKEND=d3dmetal`,
-CrossOver puts Apple's Game Porting Toolkit ahead of Wine in the search path.
-GPTK ships a 136 KB `d3d11.dll` that is a thin shim over D3DMetal and carries
-neither video interface. Wine's own `d3d11.dll` — 425 KB, over wined3d —
-implements `ID3D11VideoDevice1` with 24 real methods and a working decoder,
-and its `QueryInterface` hands it out:
+2. **`MF_SOURCE_READER_D3D_MANAGER`.** The game asks the source reader to
+   decode into D3D video textures, which nothing under D3DMetal can produce.
+   Dropping that attribute makes it decode in software, and winegstreamer's
+   VP9 support handles it without complaint.
 
-```c
-else if (IsEqualGUID(riid, &IID_ID3D11VideoDevice) || IsEqualGUID(riid, &IID_ID3D11VideoDevice1))
-    *out = &device->ID3D11VideoDevice1_iface;
-```
+3. **The video processor.** Converting the decoded NV12 into the BGRA texture
+   the game draws is `ID3D11VideoProcessor`'s job. The player walks the rate
+   conversion caps looking for one specific bit — `ProcessorCaps` bit 1,
+   `DEINTERLACE_BOB` — and returns `E_FAIL` when no entry has it.
 
-So the implementation exists; the game is just not getting it. D3DMetal's own
-binary carries `ID3D11Device` and `ID3D12Device` but neither video interface —
-nor `ID3DDestructionNotifier`, which independently confirms the Mortal Shell 2
-cause from Apple's binary.
+4. **And then the tension that has no easy way out.** The executable
+   references `IMFDXGIBuffer`, `ID3D11Texture2D` and `IDXGIResource`, but
+   neither `IMF2DBuffer` nor `IMFMediaBuffer`. It only knows how to consume
+   samples backed by D3D textures: query the buffer for `IMFDXGIBuffer`, take
+   the texture, wrap it in a `VideoProcessorInputView`, blit.
 
-**Why it is not a one-line fix.** The game renders with D3D12 through D3DMetal
-and wants a D3D11 device only for video, so in principle the two backends could
-coexist. But Wine's `d3d11` builds its device from a DXGI adapter through
-Wine-private interfaces, which GPTK's `dxgi.dll` does not implement — and even
-past that, frames decoded on a wined3d device would still have to reach a
-D3DMetal renderer.
+   So the attribute dropped in step 2 to make decoding work is exactly the one
+   its presentation path depends on. Give it back and decoding fails; leave it
+   off and there is no texture to present.
 
-**What was measured, in order.** The path here is worth recording because four
-launches went into guesses that were all wrong:
+**What a fix would take.** Software decoding that still hands back D3D-backed
+samples: intercept `ReadSample`, upload each frame into a texture, and present
+it through an `IMFDXGIBuffer` the game can consume. That is what Windows does
+when the decoder is software and a device manager is set, and it is what
+neither D3DMetal nor Wine's source reader does here.
 
-1. Media Foundation initialises fine — 2209 `MFStartup` calls, every one
-   `S_OK`. Not the problem.
-2. No `CoCreateInstance` failed, and the game never opens a `.webm`. Not a
-   codec registration, not the file.
-3. `find-callsites.py` located the video player statically, without a run, by
-   resolving `call qword ptr [rip+disp]` against the import table.
-4. Disassembling it gave the exact gate, which a probe then confirmed at
-   runtime by asking the same two questions on the same objects.
+The alternative is upstream: D3DMetal implementing `ID3D11VideoDevice`, at
+which point steps 1 through 4 all disappear at once.
+
+**How it was found.** Worth recording, because most of it was wrong turns.
+Eight hypotheses were tested and discarded before the disassembler was used
+properly: a missing codec registration, the absent audio track, the container
+duration, a missing pixel aspect ratio and interlace mode (setting those
+actively broke the negotiation), NV12 texture creation, and the shared
+texture. What worked was reading the code — `find-callsites.py` locating the
+player statically, then following the branches — and answering interface
+queries with logging stubs so the game itself said what it wanted next.
 
 ## Adding a row
 
