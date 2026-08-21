@@ -75,7 +75,7 @@ static void logf_(const char *fmt, ...)
     buf[n] = '\n';
 
     /* A game under CrossOver cannot be attached to, so leave a trail. */
-    h = CreateFileA("C:\\ue5-vpx-cpupath.log", FILE_APPEND_DATA,
+    h = CreateFileA("C:\\ue5-runtime-fix.log", FILE_APPEND_DATA,
                     FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                     OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) return;

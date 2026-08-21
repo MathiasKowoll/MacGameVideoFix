@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build the proxy DLL that carries ue5-vpx-cpupath into the game.
+# Build the proxy DLL that carries the Unreal runtime fixes into the game.
 #
 # The game has no plugin hook we can use, so the patch rides in on a DLL the
 # engine already loads. libogg_64.dll is a good carrier: every Unreal title
@@ -36,7 +36,7 @@ usage() { sed -n '3,20p' "$0" >&2; exit 1; }
 [ $# -ge 1 ] || usage
 
 REF="$1"
-SOURCE="${2:-ue5-vpx-cpupath.c}"
+SOURCE="${2:-ue5-runtime-fix.c}"
 OUT="${3:-$HERE/build}"
 [ -f "$REF" ] || { echo "error: no such file: $REF" >&2; exit 1; }
 case "$SOURCE" in /*) ;; *) SOURCE="$HERE/$SOURCE" ;; esac

@@ -28,8 +28,11 @@ PROXY="${PROXY_DLL:-$HERE/libogg_64.dll}"
 EXPORTS="$HERE/pe.py"
 
 # The proxy writes this path at runtime; finding it inside a DLL is how we tell
-# our file apart from the game's.
-MARKER='ue5-vpx-cpupath.log'
+# our file apart from the game's. Releases up to 3.2 wrote the other name, and
+# both have to be recognised: mistaking our own proxy for the game's original
+# would move it aside and destroy the real one.
+MARKER='ue5-runtime-fix.log'
+LEGACY_MARKER='ue5-vpx-cpupath.log'
 
 usage() { sed -n '3,25p' "$0" >&2; exit 1; }
 [ $# -ge 1 ] || usage
@@ -65,7 +68,10 @@ REAL="$OGG/libogg_64_real.dll"
 # upgrade would leave the original stranded under a name nothing looks for.
 LEGACY_REAL="$OGG/libogg_real.dll"
 
-is_ours() { [ -f "$1" ] && LC_ALL=C grep -qa "$MARKER" "$1"; }
+is_ours() {
+  [ -f "$1" ] || return 1
+  LC_ALL=C grep -qa "$MARKER" "$1" || LC_ALL=C grep -qa "$LEGACY_MARKER" "$1"
+}
 
 status() {
   if is_ours "$LIVE" && { [ -f "$REAL" ] || [ -f "$LEGACY_REAL" ]; }; then echo installed
