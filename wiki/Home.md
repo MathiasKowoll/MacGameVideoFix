@@ -15,15 +15,20 @@ dereferences a null vtable and the game dies. H.264 and H.265 can avoid the
 buffer pool through a CVar; VPx has no equivalent, so VP9 on D3D12 has no way
 out through configuration.
 
-→ Fixed. See [Games](Games.md) for which titles this applies to.
+→ Fixed. See [Mortal Shell 2](Mortal-Shell-2.md).
 
 **The black screen.** The game reaches the cutscene, shows nothing, and does
 not crash. Nothing returns an error, so there is no crash log and nothing to
 grep for — the failure has to be traced through the code.
 
-→ Fixed on DYNASTY WARRIORS: ORIGINS, where it turned out to be five separate
-faults in a row, ending in a frame that decoded correctly and had no way to
-reach the renderer that draws it. See [Games](Games.md).
+→ Fixed on [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md), where it
+turned out to be five separate faults in a row, ending in a frame that decoded
+correctly and had no way to reach the renderer that draws it.
+
+**A third mode has nothing to do with video at all.** Both Life is Strange
+titles run fine and then freeze, anywhere, because Unreal walks the GPU's
+memory nodes and D3DMetal never tells it to stop. It is listed here because it
+is the same toolkit, not because it is the same problem.
 
 ## Is my game affected?
 
@@ -49,7 +54,30 @@ may have hundreds. And a game that packs its movies in a proprietary archive is
 invisible to it — `0` means "none found loose or in a readable pak", never "no
 videos".
 
+## Games
+
+<!-- games:begin -->
+
+| Game | Engine | Symptom | Fix | winevideo | Status |
+| --- | --- | --- | --- | --- | --- |
+| [Mortal Shell 2](Mortal-Shell-2.md) | Unreal Engine 5.6.1 | Crash on the first cutscene | Runtime patch, 4 sites | No <sup>1</sup> | Fixed |
+| [Life is Strange: Reunion](Life-is-Strange-Reunion.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard | No | Fixed |
+| [Life is Strange: Double Exposure](Life-is-Strange-Double-Exposure.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard, same DLL | No | Installed, not yet confirmed in play |
+| [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | Video bridge, D3D11 to D3D12 | **Yes** | Fixed |
+
+<sup>1</sup> Expected rather than measured: VP9 never reaches Media Foundation
+in that game, but it has not been run on a CrossOver without winevideo.
+
+Every row is a title we deliberately took on, and every claim on the linked
+page comes from a measurement on an installed copy. Where something was
+established by reading the executable rather than by playing to the failure,
+the page says so.
+
+<!-- games:end -->
+
+Each row links to a page with the findings and the fix for that title.
+
 ## Pages
 
-- [Games](Games.md) — what was measured, per title
+- [Games](Games.md) — the table above, plus how a row gets added
 - [Diagnosing a new game](Diagnosing-a-new-game.md) — the tools, and what each one answers
