@@ -283,6 +283,10 @@ static struct stub_object stub_vp_output_view;
 static struct stub_object stub_dxgi_buffer;
 
 static const char *dxgi_format_name(UINT f);
+static void log_guid(const char *label, const GUID *g);
+
+/* The handle handed to the game in place of the one D3DMetal will not make. */
+#define BRIDGE_HANDLE ((HANDLE)(ULONG_PTR)0xD3D12B21D)
 static void *patch_vtable_slot(void *object, unsigned slot, void *replacement);
 static void upload_frame(IMFSample *sample);
 
@@ -766,9 +770,18 @@ static HRESULT (WINAPI *real_res_get_shared_handle)(void *, HANDLE *);
 static HRESULT WINAPI res_get_shared_handle(void *self, HANDLE *handle)
 {
     HRESULT hr = real_res_get_shared_handle(self, handle);
-    logf_("IDXGIResource::GetSharedHandle -> %s", SUCCEEDED(hr) ? "ok" : "FAILED");
-    if (SUCCEEDED(hr) && handle) logf_("    handle: %p", *handle);
-    else log_hr("    result", hr);
+
+    if (FAILED(hr) && handle)
+    {
+        /* It refuses with E_NOTIMPL here, every time. Answer with a handle of
+         * our own and see whether the game carries it to the other side. */
+        *handle = BRIDGE_HANDLE;
+        stub_called("GetSharedHandle refused -> handed the game our own handle");
+        return S_OK;
+    }
+
+    logf_("IDXGIResource::GetSharedHandle -> ok");
+    if (handle) logf_("    handle: %p", *handle);
     return hr;
 }
 
@@ -785,6 +798,58 @@ static HRESULT WINAPI texture_qi(void *self, REFIID iid, void **out)
             logf_("  GetSharedHandle watch: %s",
                   real_res_get_shared_handle ? "installed" : "COULD NOT PATCH");
         }
+    }
+    return hr;
+}
+
+/*
+ * The bridge.
+ *
+ * The game hands its D3D12 renderer a shared handle for the D3D11 texture the
+ * video lands in, and D3DMetal has no way to produce one: GetSharedHandle is
+ * E_NOTIMPL and IDXGIResource1, whose CreateSharedHandle would replace it, is
+ * absent. So D3D12 never opens the texture and the video quad samples
+ * something never written.
+ *
+ * winevideo met the same wall for D3D9 under DXMT and went around it rather
+ * than waiting for the platform: it manufactures the handle itself and owns
+ * the far side. That is what these two hooks are for. This build only
+ * establishes whether the route is open -- whether a game given a handle
+ * actually goes on to call OpenSharedHandle -- because everything after
+ * depends on that and nothing measured so far settles it.
+ */
+static HRESULT (WINAPI *real_D3D12CreateDevice)(void *, UINT, REFIID, void **);
+static HRESULT (WINAPI *real_open_shared_handle)(void *, HANDLE, REFIID, void **);
+
+static HRESULT WINAPI d3d12_open_shared_handle(void *self, HANDLE handle,
+                                               REFIID iid, void **out)
+{
+    if (handle == BRIDGE_HANDLE)
+    {
+        logf_("ID3D12Device::OpenSharedHandle with OUR handle -- the route is open");
+        log_guid("  asked for", iid);
+        /* Nothing to give it yet; refusing is honest and leaves the game no
+         * worse off than the E_NOTIMPL it gets today. */
+        if (out) *out = NULL;
+        return E_NOTIMPL;
+    }
+    logf_("ID3D12Device::OpenSharedHandle with a handle of its own: %p", handle);
+    return real_open_shared_handle(self, handle, iid, out);
+}
+
+static HRESULT WINAPI my_D3D12CreateDevice(void *adapter, UINT feature_level,
+                                           REFIID iid, void **device)
+{
+    HRESULT hr = real_D3D12CreateDevice(adapter, feature_level, iid, device);
+
+    logf_("D3D12CreateDevice");
+    log_hr("  result", hr);
+    if (SUCCEEDED(hr) && device && *device && !real_open_shared_handle)
+    {
+        /* ID3D12Device slot 32 is OpenSharedHandle. */
+        real_open_shared_handle = patch_vtable_slot(*device, 32, d3d12_open_shared_handle);
+        logf_("  OpenSharedHandle watch: %s",
+              real_open_shared_handle ? "installed" : "COULD NOT PATCH");
     }
     return hr;
 }
@@ -1849,6 +1914,52 @@ static void *hook_import(const char *dll, const char *func, void *replacement)
     return NULL;
 }
 
+/*
+ * The same, for an import the game brings in by ordinal rather than by name.
+ * DYNASTY WARRIORS: ORIGINS imports D3D12CreateDevice as d3d12.dll #101, so
+ * the name walk above never sees it.
+ */
+static void *hook_import_ordinal(const char *dll, WORD ordinal, void *replacement)
+{
+    BYTE *base = (BYTE *)GetModuleHandleA(NULL);
+    IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;
+    IMAGE_NT_HEADERS *nt;
+    IMAGE_IMPORT_DESCRIPTOR *desc;
+    DWORD rva;
+
+    if (!base || dos->e_magic != IMAGE_DOS_SIGNATURE) return NULL;
+    nt = (IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
+    rva = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+    if (!rva) return NULL;
+
+    for (desc = (IMAGE_IMPORT_DESCRIPTOR *)(base + rva); desc->Name; ++desc)
+    {
+        IMAGE_THUNK_DATA *names, *addrs;
+
+        if (lstrcmpiA((const char *)(base + desc->Name), dll)) continue;
+        if (!desc->OriginalFirstThunk) continue;
+
+        names = (IMAGE_THUNK_DATA *)(base + desc->OriginalFirstThunk);
+        addrs = (IMAGE_THUNK_DATA *)(base + desc->FirstThunk);
+
+        for (; names->u1.AddressOfData; ++names, ++addrs)
+        {
+            void *previous;
+            DWORD old;
+
+            if (!IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal)) continue;
+            if (IMAGE_ORDINAL(names->u1.Ordinal) != ordinal) continue;
+
+            previous = (void *)addrs->u1.Function;
+            if (!VirtualProtect(addrs, sizeof(*addrs), PAGE_READWRITE, &old)) return NULL;
+            addrs->u1.Function = (ULONGLONG)(ULONG_PTR)replacement;
+            VirtualProtect(addrs, sizeof(*addrs), old, &old);
+            return previous;
+        }
+    }
+    return NULL;
+}
+
 #define HOOK(dll, name)                                                       \
     do {                                                                      \
         real_##name = hook_import(dll, #name, (void *)my_##name);             \
@@ -1970,6 +2081,9 @@ static DWORD WINAPI worker(LPVOID unused)
     logf_("");
     logf_("=== mf-probe attached ===");
     HOOK("d3d11.dll", D3D11CreateDevice);
+    real_D3D12CreateDevice = hook_import_ordinal("d3d12.dll", 101, my_D3D12CreateDevice);
+    logf_("  %-40s %s", "D3D12CreateDevice (ordinal 101)",
+          real_D3D12CreateDevice ? "hooked" : "not imported");
     HOOK("KERNEL32.dll", GetProcAddress);
     HOOK("KERNEL32.dll", CreateFileW);
     HOOK("KERNEL32.dll", FindFirstFileW);
