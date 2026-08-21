@@ -83,18 +83,65 @@ private func runStreaming(_ executable: String,
 // MARK: - Model
 
 /// The two ways to stop the crash. They are alternatives, never combined.
+/// Which game a chosen folder turns out to be. Each has its own fixes, and
+/// nothing is offered that does not apply to what was actually found.
+enum Title {
+    case unrealVP9(GameFolder)      // any UE5 title with VP9 cutscenes
+    case dynastyWarriors(URL)       // DYNASTY WARRIORS: ORIGINS
+
+    var name: String {
+        switch self {
+        case .unrealVP9:      return "Unreal Engine title with VP9 cutscenes"
+        case .dynastyWarriors: return "DYNASTY WARRIORS: ORIGINS"
+        }
+    }
+
+    var path: String {
+        switch self {
+        case .unrealVP9(let g):    return g.content.path
+        case .dynastyWarriors(let u): return u.path
+        }
+    }
+
+    var modes: [Mode] {
+        switch self {
+        case .unrealVP9:       return [.runtime, .transcode]
+        case .dynastyWarriors: return [.videoBridge]
+        }
+    }
+
+    /// Looks at the folder itself and one level down, so dropping either the
+    /// game folder or the library folder above it works.
+    static func detect(from url: URL) -> Title? {
+        let fm = FileManager.default
+        var candidates = [url]
+        if let subs = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
+            candidates += subs
+        }
+        for c in candidates where fm.fileExists(atPath: c.appendingPathComponent("DWORIGINS.exe").path) {
+            return .dynastyWarriors(c)
+        }
+        if let g = GameFolder.locate(from: url) { return .unrealVP9(g) }
+        return nil
+    }
+}
+
+
 enum Mode: String, CaseIterable, Identifiable {
     /// Patch Electra in memory as the game starts. Nothing on disk changes.
     case runtime
     /// Re-encode the cutscenes to H.264 and hide the pak's VP9 copies.
     case transcode
+    /// Carry the decoded frame from the D3D11 decoder to the D3D12 renderer.
+    case videoBridge
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .runtime:   return "Runtime patch"
-        case .transcode: return "Re-encode cutscenes"
+        case .runtime:     return "Runtime patch"
+        case .transcode:   return "Re-encode cutscenes"
+        case .videoBridge: return "Video bridge"
         }
     }
 
@@ -106,6 +153,10 @@ enum Mode: String, CaseIterable, Identifiable {
         case .transcode:
             return "Converts every cutscene to H.264 and edits the pak index. "
                  + "Slower, needs ffmpeg, and slightly softens the picture."
+        case .videoBridge:
+            return "Adds one small DLL beside the game's own. The game decodes "
+                 + "video on a D3D11 device and draws with D3D12, and under "
+                 + "D3DMetal the frame cannot cross between them; this carries it."
         }
     }
 }
@@ -114,6 +165,7 @@ enum Mode: String, CaseIterable, Identifiable {
 enum Phase {
     case idle, transcoding, patchingPak, restoringPak, restoringMovies
     case installingRuntime, removingRuntime
+    case installingBridge, removingBridge
 
     var label: String {
         switch self {
@@ -124,6 +176,8 @@ enum Phase {
         case .restoringMovies:   return "Restoring the original cutscenes"
         case .installingRuntime: return "Installing the runtime patch"
         case .removingRuntime:   return "Removing the runtime patch"
+        case .installingBridge:  return "Installing the video bridge"
+        case .removingBridge:    return "Removing the video bridge"
         }
     }
 
@@ -137,7 +191,9 @@ enum Phase {
         case .restoringPak:      return 0...0.15
         case .restoringMovies:   return 0.15...1
         case .installingRuntime,
-             .removingRuntime:   return 0...1
+             .removingRuntime,
+             .installingBridge,
+             .removingBridge:    return 0...1
         }
     }
 }
@@ -195,10 +251,22 @@ final class Runner: ObservableObject {
     @Published var runtimeUnavailable = false
     @Published var runtimeState: FixState = .unknown
     @Published var transcodeState: FixState = .unknown
+    @Published var bridgeState: FixState = .unknown
     @Published var log: [String] = []
     @Published var busy = false
-    @Published var game: GameFolder?
+    @Published var title: Title?
     @Published var status = "Choose your game folder to begin."
+
+    /// The Unreal paths still work in terms of a Content folder; this is where
+    /// they get it, and it is nil for anything that is not an Unreal title.
+    var game: GameFolder? {
+        if case .unrealVP9(let g) = title { return g }
+        return nil
+    }
+    var dwFolder: URL? {
+        if case .dynastyWarriors(let u) = title { return u }
+        return nil
+    }
 
     @Published var progress: Double = 0
     @Published var indeterminate = true
@@ -211,8 +279,22 @@ final class Runner: ObservableObject {
     private var statusAnswer = ""
 
     /// The selected mode's own state, and the other one's.
-    var state: FixState { mode == .runtime ? runtimeState : transcodeState }
-    var otherState: FixState { mode == .runtime ? transcodeState : runtimeState }
+    var state: FixState {
+        switch mode {
+        case .runtime:     return runtimeState
+        case .transcode:   return transcodeState
+        case .videoBridge: return bridgeState
+        }
+    }
+
+    /// Only the two Unreal modes exclude each other; the bridge has no rival.
+    var otherState: FixState {
+        switch mode {
+        case .runtime:     return transcodeState
+        case .transcode:   return runtimeState
+        case .videoBridge: return .notApplied
+        }
+    }
 
     /// Both fixes cure the same crash, so having both in place is never useful
     /// and makes reverting ambiguous. Offer Apply only when the other is clear.
@@ -244,18 +326,55 @@ final class Runner: ObservableObject {
     }
 
     func select(_ url: URL) {
-        guard let g = GameFolder.locate(from: url) else {
-            status = "That folder has no Content/Movies and Content/Paks inside."
-            game = nil
+        guard let t = Title.detect(from: url) else {
+            status = "That folder is not a game this knows how to fix."
+            title = nil
             return
         }
-        game = g
+        title = t
+        mode = t.modes.first ?? .runtime
         runtimeState = .unknown
         transcodeState = .unknown
         log.removeAll()
         resetProgress()
-        note("Game content: \(g.content.path)")
-        Task { await inspect(g) }
+        note("\(t.name)")
+        note(t.path)
+        Task { await inspectTitle() }
+    }
+
+    /// Dispatches to whichever inspection the detected game needs.
+    func inspectTitle() async {
+        switch title {
+        case .unrealVP9(let g):     await inspect(g)
+        case .dynastyWarriors(let u): await inspectBridge(u)
+        case .none:                 break
+        }
+    }
+
+    private func inspectBridge(_ folder: URL) async {
+        let script = resources.appendingPathComponent("install-dwo-bridge.sh").path
+        statusAnswer = ""
+        let code = await runStreaming("/bin/bash", [script, folder.path, "--status"]) { line in
+            Task { @MainActor [weak self] in
+                guard let self, self.statusAnswer.isEmpty else { return }
+                self.statusAnswer = line
+            }
+        }
+        await Task.yield()
+
+        guard code == 0 else {
+            bridgeState = .notApplied
+            status = "This copy has no libxess.dll for the bridge to ride on."
+            return
+        }
+        switch statusAnswer.split(separator: " ", maxSplits: 1).first.map(String.init) {
+        case "installed": bridgeState = .applied
+        case "broken":    bridgeState = .partial
+        default:          bridgeState = .notApplied
+        }
+        status = bridgeState == .applied
+            ? "Bridge installed. Cutscenes should play."
+            : "Not patched yet."
     }
 
     func inspect(_ g: GameFolder) async {
@@ -376,15 +495,45 @@ final class Runner: ObservableObject {
 
     func apply() {
         switch mode {
-        case .runtime:   applyRuntime()
-        case .transcode: applyTranscode()
+        case .runtime:     applyRuntime()
+        case .transcode:   applyTranscode()
+        case .videoBridge: runBridge(install: true)
         }
     }
 
     func revert() {
         switch mode {
-        case .runtime:   revertRuntime()
-        case .transcode: revertTranscode()
+        case .runtime:     revertRuntime()
+        case .transcode:   revertTranscode()
+        case .videoBridge: runBridge(install: false)
+        }
+    }
+
+    // MARK: Video bridge
+
+    private func runBridge(install: Bool) {
+        guard let folder = dwFolder else { return }
+        busy = true
+        Task {
+            defer { busy = false; indeterminate = false; phaseLabel = ""; detail = "" }
+            status = install ? "Working…" : "Reverting…"
+            progress = 0
+
+            let script = resources.appendingPathComponent("install-dwo-bridge.sh").path
+            let args = install ? [script, folder.path] : [script, folder.path, "--restore"]
+            let ok = await run(install ? .installingBridge : .removingBridge, "/bin/bash", args)
+
+            progress = 1
+            note("")
+            if ok && install {
+                note("Done. Launch the game — the cutscenes should play.")
+                note("CrossOver has to be patched with winevideo, or there is nothing")
+                note("to decode them: this presents frames, it does not decode.")
+                note("Note: Steam's \"verify integrity of game files\" undoes this.")
+            } else if ok {
+                note("Reverted. The game is back to its original files.")
+            }
+            await inspectTitle()
         }
     }
 
@@ -409,7 +558,7 @@ final class Runner: ObservableObject {
             note("")
             note("Done. Launch the game — the original cutscenes should play.")
             note("Note: Steam's \"verify integrity of game files\" undoes this.")
-            await inspect(g)
+            await inspectTitle()
         }
     }
 
@@ -427,7 +576,7 @@ final class Runner: ObservableObject {
             progress = 1
             note("")
             note("Reverted. The game is back to its original files.")
-            await inspect(g)
+            await inspectTitle()
         }
     }
 
@@ -465,7 +614,7 @@ final class Runner: ObservableObject {
             note("")
             note("Done. Launch the game — the cutscenes should play.")
             note("Note: Steam's \"verify integrity of game files\" undoes this.")
-            await inspect(g)
+            await inspectTitle()
         }
     }
 
@@ -486,7 +635,7 @@ final class Runner: ObservableObject {
             progress = 1
             note("")
             note("Reverted. The game is back to its original files.")
-            await inspect(g)
+            await inspectTitle()
         }
     }
 
@@ -510,8 +659,9 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 16) {
             header
             dropZone
-            if runner.game != nil {
-                modePicker
+            if let t = runner.title {
+                detected(t)
+                if t.modes.count > 1 { modePicker(t) }
                 actions
             }
             if runner.busy || runner.progress > 0 { progressBar }
@@ -525,7 +675,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("MacGameVideoFix")
                 .font(.system(size: 22, weight: .semibold))
-            Text("Restores VP9 cutscenes in UE5 games running under CrossOver.")
+            Text("Makes Windows games show their cutscenes under CrossOver on Apple silicon.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
@@ -542,7 +692,7 @@ struct ContentView: View {
             .frame(height: 88)
             .overlay(
                 VStack(spacing: 6) {
-                    Text(runner.game.map { $0.content.path } ?? "Drop your game folder here")
+                    Text(runner.title.map { $0.path } ?? "Drop your game folder here")
                         .font(.system(size: 13, design: runner.game == nil ? .default : .monospaced))
                         .lineLimit(2)
                         .truncationMode(.head)
@@ -563,10 +713,25 @@ struct ContentView: View {
             }
     }
 
-    private var modePicker: some View {
+    /// What the folder turned out to be. With more than one game supported,
+    /// saying so is the difference between confidence and a guess.
+    private func detected(_ t: Title) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "checkmark.seal")
+                .foregroundStyle(.secondary)
+            Text(t.name)
+                .font(.callout.weight(.medium))
+            Spacer()
+            Text(t.modes.count > 1 ? "\(t.modes.count) fixes" : "1 fix")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func modePicker(_ t: Title) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Picker("", selection: $runner.mode) {
-                ForEach(Mode.allCases) { m in Text(m.title).tag(m) }
+                ForEach(t.modes) { m in Text(m.title).tag(m) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -607,8 +772,9 @@ struct ContentView: View {
             return "Revert the other fix first — the two solve the same problem."
         }
         switch runner.mode {
-        case .runtime:   return "Install the proxy DLL that patches Electra at startup."
-        case .transcode: return "Re-encode the cutscenes and hide the pak's copies."
+        case .runtime:     return "Install the proxy DLL that patches Electra at startup."
+        case .transcode:   return "Re-encode the cutscenes and hide the pak's copies."
+        case .videoBridge: return "Install the DLL that carries frames from the decoder to the renderer."
         }
     }
 
@@ -682,7 +848,7 @@ struct ContentView: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.message = "Select the game folder (the one containing Content)."
+        panel.message = "Select the game folder."
         panel.prompt = "Select"
         if panel.runModal() == .OK, let url = panel.url {
             runner.select(url)

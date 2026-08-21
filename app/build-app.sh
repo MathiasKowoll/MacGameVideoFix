@@ -63,14 +63,19 @@ chmod +x "$RES/transcode-movies.sh" "$RES/pak-hide-videos.py"
 
 # The runtime patch: the installer resolves the proxy and the PE reader next to
 # itself, so all three have to land in the same folder.
-cp "$ROOT/runtime/install-runtime-fix.sh" "$ROOT/runtime/pe.py" "$RES/"
-chmod +x "$RES/install-runtime-fix.sh" "$RES/pe.py"
-if [ -f "$ROOT/runtime/libogg_64.dll" ]; then
-  cp "$ROOT/runtime/libogg_64.dll" "$RES/"
-else
-  echo "    warning: runtime/libogg_64.dll missing — the runtime mode will not work."
-  echo "    build it with: runtime/build-proxy.sh <the game's libogg_64.dll>"
-fi
+cp "$ROOT/runtime/install-runtime-fix.sh" "$ROOT/runtime/install-dwo-bridge.sh" \
+   "$ROOT/runtime/pe.py" "$RES/"
+chmod +x "$RES/install-runtime-fix.sh" "$RES/install-dwo-bridge.sh" "$RES/pe.py"
+
+# One prebuilt carrier per game. Missing one disables that game's fix rather
+# than failing the build, so the app is still usable for the other.
+for dll in libogg_64.dll libxess.dll; do
+  if [ -f "$ROOT/runtime/$dll" ]; then
+    cp "$ROOT/runtime/$dll" "$RES/"
+  else
+    echo "    warning: runtime/$dll missing — the fix that uses it will not work."
+  fi
+done
 
 # Signing.
 #   Ad-hoc by default: works locally, but macOS blocks the first launch for

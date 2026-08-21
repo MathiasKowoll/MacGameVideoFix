@@ -60,12 +60,15 @@ done
 [ -n "$OGG" ] || { echo "error: no libogg_64.dll under $ROOT/Engine/Binaries/ThirdParty/Ogg/Win64" >&2; exit 1; }
 
 LIVE="$OGG/libogg_64.dll"
-REAL="$OGG/libogg_real.dll"
+REAL="$OGG/libogg_64_real.dll"
+# Releases up to 3.0 used this name. Restore has to know about it, or an
+# upgrade would leave the original stranded under a name nothing looks for.
+LEGACY_REAL="$OGG/libogg_real.dll"
 
 is_ours() { [ -f "$1" ] && LC_ALL=C grep -qa "$MARKER" "$1"; }
 
 status() {
-  if is_ours "$LIVE" && [ -f "$REAL" ]; then echo installed
+  if is_ours "$LIVE" && { [ -f "$REAL" ] || [ -f "$LEGACY_REAL" ]; }; then echo installed
   elif is_ours "$LIVE"; then echo broken       # proxy present, original missing
   else echo absent
   fi
@@ -89,8 +92,8 @@ case "$MODE" in
     exit 1
   fi
   echo "[1/2] restoring the original libogg_64.dll"
-  mv -f "$REAL" "$LIVE"
-  rm -f "$OGG/libogg_64.dll.orig"
+  if [ -f "$REAL" ]; then mv -f "$REAL" "$LIVE"; else mv -f "$LEGACY_REAL" "$LIVE"; fi
+  rm -f "$OGG/libogg_64.dll.orig" "$LEGACY_REAL" "$REAL"
   echo "[2/2] done — the game is back to stock"
   ;;
 
@@ -124,7 +127,7 @@ case "$MODE" in
     exit 1
   fi
 
-  echo "[3/4] moving the original aside as libogg_real.dll"
+  echo "[3/4] moving the original aside as $(basename "$REAL")"
   mv -f "$LIVE" "$REAL"
 
   echo "[4/4] installing the proxy"

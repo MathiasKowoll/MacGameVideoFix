@@ -8,13 +8,21 @@
 		<data>
 		LajWBiZ1zvJoBMjYyVtzzaUkg50=
 		</data>
+		<key>Resources/install-dwo-bridge.sh</key>
+		<data>
+		5o7btn9JI16S7VhqzBFr95cOrjQ=
+		</data>
 		<key>Resources/install-runtime-fix.sh</key>
 		<data>
-		VgNroRyPe8qSfm459lqnLWMzmFY=
+		/9XPXC/BtwTKf5xnh/xsh1NT/h8=
 		</data>
 		<key>Resources/libogg_64.dll</key>
 		<data>
-		WshZfkW8oGY7mrV9D/G6Z0eqmPI=
+		t8ihtSxgQD96K1SaAWJEU2MGsoI=
+		</data>
+		<key>Resources/libxess.dll</key>
+		<data>
+		ByXOvUs6NWytPP7LHkPxzXb6a90=
 		</data>
 		<key>Resources/pak-hide-videos.py</key>
 		<data>
@@ -38,18 +46,32 @@
 			xCCIocTDQ9fWW0k6sKTaG5uEXQf8xLF4FOv+3/oYXDg=
 			</data>
 		</dict>
+		<key>Resources/install-dwo-bridge.sh</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			p0qHqm0BzHXp7XnzR42T8kie02AiDhqRsQb/qsgY2Uc=
+			</data>
+		</dict>
 		<key>Resources/install-runtime-fix.sh</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			ekI9kd/inYtIa7heQ3aCzRM1DdO6OM/mG6KFMw2vryk=
+			FDiwk2w+dNmhqhrp/te8Ps+kmGZkchRNV6AmVwwoRgE=
 			</data>
 		</dict>
 		<key>Resources/libogg_64.dll</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			id/ibXPzG0J2IRUvAY/QZa2hQrJs8XPD3OIHK4z20LE=
+			zRLZjVbhIi3TvOVzntuvvOMph9GVYE/38fc3bSl4o58=
+			</data>
+		</dict>
+		<key>Resources/libxess.dll</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			4b1ydY0Gruqy1RZIQ7tdJGA+JvNk1CSmptde0T13TQ0=
 			</data>
 		</dict>
 		<key>Resources/pak-hide-videos.py</key>

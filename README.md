@@ -1,15 +1,73 @@
 # MacGameVideoFix
 
-Restores the VP9 cutscenes in Unreal Engine 5 games running under CrossOver on
-Apple Silicon, without giving up D3D12.
+Makes Windows games show their cutscenes under CrossOver on Apple Silicon.
 
-Built and tested against **Mortal Shell 2** (UE 5.6.1) on CrossOver 26.2 with
-Game Porting Toolkit 4.0b2, on an M4 Max running macOS 27. The same bug affects
-any UE5 title whose cutscenes are VP9, so the tooling is written to be generic.
+Two games are fixed so far, and they fail for entirely different reasons. Both
+fixes install the same way: point the app at the game's folder, pick a fix,
+press Apply.
+
+| Game | Symptom | Fix |
+| --- | --- | --- |
+| **Mortal Shell 2** and other UE5 titles with VP9 cutscenes | Crash on the first cutscene | Runtime patch, or re-encode |
+| **DYNASTY WARRIORS: ORIGINS** | Cutscene plays with sound, picture black | Video bridge |
+
+Both need CrossOver patched with
+[winevideo](https://github.com/Jfishin/winevideo). Neither fix decodes
+anything: they get an already-decoded frame to where the game can use it.
+
+Tested on an M4 Max, macOS 27, CrossOver 26.2 with Game Porting Toolkit 4.0b2.
 
 ---
 
-## The crash
+## DYNASTY WARRIORS: ORIGINS
+
+The game decodes VP9 with Media Foundation on a D3D11 device kept only for
+video, and draws with a D3D12 renderer. Five things stop that under D3DMetal,
+and each hides the next:
+
+1. `ID3D11VideoDevice` and `ID3D11VideoContext` are not implemented, and the
+   player refuses to start without both.
+2. It asks the source reader to decode into D3D video textures, which
+   D3DMetal cannot produce.
+3. It requires a video processor advertising `DEINTERLACE_BOB`, and returns
+   `E_FAIL` when none does.
+4. It can only present a sample backed by a D3D texture — it queries the
+   buffer for `IMFDXGIBuffer` and has no path for anything else.
+5. It hands that texture to its D3D12 renderer by shared handle, and
+   `IDXGIResource::GetSharedHandle` returns **`E_NOTIMPL`**. Nothing written
+   on the D3D11 side can be seen by D3D12, so the video quad samples a texture
+   nobody ever wrote.
+
+The fix supplies the interfaces, moves decoding to software, and carries the
+frame across the gap itself: a handle of ours where D3DMetal refuses,
+recognised again at `ID3D12Device::OpenSharedHandle`, answered with a texture
+created on the game's own D3D12 device and filled each frame over a copy queue
+with a fence wait.
+
+It never modifies the game's code. One DLL is renamed and one is added:
+
+```
+libxess.dll       <- the bridge, forwards all 27 exports to the original
+libxess_real.dll  <- the game's own, untouched
+```
+
+`libxess` is Intel's XeSS upscaler. It carries the fix because the game loads
+it directly and it has nothing to do with video, so a proxy in front of it
+cannot disturb what it does.
+
+```bash
+runtime/install-dwo-bridge.sh "/path/to/steamapps/common/DWORIGINS"
+runtime/install-dwo-bridge.sh "/path/to/steamapps/common/DWORIGINS" --restore
+```
+
+The [wiki](../../wiki/Games) has the full account, including the eight
+hypotheses that were wrong on the way there.
+
+---
+
+## Mortal Shell 2, and UE5 titles with VP9 cutscenes
+
+### The crash
 
 A few seconds after launch, the game dies with:
 
@@ -23,7 +81,7 @@ Crash in runnable thread ElectraPlayer::Video decoder
 
 If your crash names a different function, this tool will not help you.
 
-## Root cause
+### Root cause
 
 Apple's D3DMetal does not implement `ID3DDestructionNotifier`. Unreal asks for
 it and uses the result without checking the HRESULT — line 276 of that header is:
@@ -38,7 +96,7 @@ Res = Notifier->RegisterDestructionCallback(...);   // null vtable deref
 `QueryInterface` returns `E_NOINTERFACE`, `Notifier` stays null, the `check()`
 does not exist in a shipping build, and the next line reads address 0.
 
-### Why only VP9, and only D3D12
+#### Why only VP9, and only D3D12
 
 Every Electra decoder gates the D3D12 output buffer pool on the same condition.
 The difference is who guards it:
@@ -55,7 +113,7 @@ for one) never do: the same bug is there, just unreachable.
 turns up only `Electra.Win.H264UseOldOutputPath` and
 `Electra.Win.H265UseOldOutputPath`. VP9 on D3D12 has no configuration escape.
 
-## The fix
+### The two fixes
 
 Two of them. Both keep D3D12 active, so you keep PSO precompilation. (`-dx11`
 also dodges the crash, but Unreal does not precompile PSOs on the D3D11 RHI,
@@ -109,17 +167,23 @@ expectation and not as a fact.
 1. Download `MacGameVideoFix.app` from
    [Releases](../../releases), or build it yourself with `app/build-app.sh`.
 2. Create the user `Engine.ini` described below.
-3. Open the app, drop the game folder on it, pick a mode, and press
-   **Apply Fix**. Leave it on **Runtime patch** unless the app tells you the
-   game ships no `libogg`.
+3. Open the app, drop the game folder on it, and press **Apply Fix**.
+
+The app works out which game it is and offers only the fixes that apply. For
+an Unreal title that means a choice of two — leave it on **Runtime patch**
+unless the app says the game ships no `libogg`. For DYNASTY WARRIORS: ORIGINS
+there is one, and step 2 below does not apply.
 
 The two modes solve the same problem, so the app will not let you apply one
 while the other is in place. **Revert** puts everything back either way.
 
 ### Which folder to pick
 
-Pick the folder that **contains `Content`** — not `Content/Movies`, and not
-your Steam library root.
+For **DYNASTY WARRIORS: ORIGINS**, the folder holding `DWORIGINS.exe` —
+usually `steamapps/common/DWORIGINS`.
+
+For an **Unreal title**, the folder that **contains `Content`** — not
+`Content/Movies`, and not your Steam library root.
 
 For Mortal Shell 2 that is `MortalShell2`, the folder inside Steam's `Sparta`
 directory:

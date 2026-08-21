@@ -12,10 +12,16 @@
 # with PE export forwarders, so at runtime the real libogg is what actually
 # answers every call. We only get DllMain.
 #
-#   build-proxy.sh <reference libogg_64.dll> [output dir]
+#   build-proxy.sh <the game's carrier DLL> [source.c] [output dir]
 #
-# The reference is the game's own untouched libogg_64.dll -- exports are read
-# from it so the forwarder list matches exactly.
+# The carrier is the game's own untouched copy: its exports are read from it so
+# the forwarder list matches exactly. The source defaults to the Unreal fix.
+#
+#   runtime/build-proxy.sh .../libogg_64.dll                          Unreal
+#   runtime/build-proxy.sh .../libxess.dll dwo-video-bridge.c         DW: Origins
+#
+# CARRIER_NAME overrides the name the proxy is built as, for when the file on
+# disk is already the renamed original.
 #
 # Needs llvm-mingw (or any x86_64-w64-mingw32 toolchain) on PATH or in
 # MINGW_BIN. Users never run this; the built DLL ships in the release.
@@ -30,8 +36,15 @@ usage() { sed -n '3,20p' "$0" >&2; exit 1; }
 [ $# -ge 1 ] || usage
 
 REF="$1"
-OUT="${2:-$HERE/build}"
+SOURCE="${2:-ue5-vpx-cpupath.c}"
+OUT="${3:-$HERE/build}"
 [ -f "$REF" ] || { echo "error: no such file: $REF" >&2; exit 1; }
+case "$SOURCE" in /*) ;; *) SOURCE="$HERE/$SOURCE" ;; esac
+[ -f "$SOURCE" ] || { echo "error: no such source: $SOURCE" >&2; exit 1; }
+
+NAME="${CARRIER_NAME:-$(basename "$REF")}"
+STEM="${NAME%.*}"
+REAL="${STEM}_real"
 
 MINGW_BIN="${MINGW_BIN:-$HOME/.local/cxge/toolchains/llvm-mingw/bin}"
 CC=""
@@ -49,28 +62,30 @@ done
 }
 
 mkdir -p "$OUT"
-DEF="$OUT/libogg_64.def"
-DLL="$OUT/libogg_64.dll"
+DEF="$OUT/$STEM.def"
+DLL="$OUT/$NAME"
 
 # Generate the forwarder table from the reference. Each line says "our export
 # named X is really libogg_real.X" -- the Windows loader resolves it on demand,
 # so no thunk code runs and nothing can go wrong in the hot path.
 {
-  echo "LIBRARY libogg_64.dll"
+  echo "LIBRARY $NAME"
   echo "EXPORTS"
   python3 "$HERE/pe.py" exports "$REF" --ordinals |
-    while read -r ordinal name; do
-      printf '    %s = libogg_real.%s @%s\n' "$name" "$name" "$ordinal"
+    while read -r ordinal sym; do
+      printf '    %s = %s.%s @%s\n' "$sym" "$REAL" "$sym" "$ordinal"
     done
 } > "$DEF"
 
 count=$(($(wc -l < "$DEF") - 2))
 [ "$count" -gt 0 ] || { echo "error: $REF exports nothing to forward" >&2; exit 1; }
 
-"$CC" -shared -O2 -municode \
-  -o "$DLL" "$HERE/ue5-vpx-cpupath.c" "$DEF" \
-  -Wl,--enable-stdcall-fixup -lkernel32 -static-libgcc
+"$CC" -shared -O2 -I"$HERE" \
+  -o "$DLL" "$SOURCE" "$DEF" \
+  -Wl,--enable-stdcall-fixup \
+  -lmfuuid -lole32 -luuid -lshlwapi -lkernel32 -static-libgcc
 
 echo "built $DLL"
-echo "  $count forwarders to libogg_real.dll"
+echo "  $count forwarders to $REAL.dll"
+echo "  source: $(basename "$SOURCE")"
 echo "  compiler: $CC"
