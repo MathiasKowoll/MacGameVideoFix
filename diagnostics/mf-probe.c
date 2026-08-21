@@ -293,6 +293,8 @@ static HRESULT WINAPI my_D3D12CreateDevice(void *adapter, UINT feature_level,
 #define BRIDGE_HANDLE ((HANDLE)(ULONG_PTR)0xD3D12B21D)
 static void *patch_vtable_slot(void *object, unsigned slot, void *replacement);
 static void upload_frame(IMFSample *sample);
+static void nv12_to_bgra(const BYTE *nv12, UINT stride, BYTE *bgra, UINT dst_pitch,
+                         UINT width, UINT height);
 
 /* The frame we put in front of the game, and the device it belongs to. */
 static ID3D11Device *video_device;
@@ -562,6 +564,21 @@ static HRESULT WINAPI vc_VideoProcessorBlt(void *self, void *processor, void *ou
      * Both sides are BGRA of the same size, so the conversion the real
      * processor would do is already done: copy.
      */
+    /*
+     * Nothing to copy any more. The frame reaches the renderer through the
+     * D3D12 bridge, so the two copies that used to happen here -- into the
+     * render target and into the shared texture -- moved twenty-eight
+     * megabytes a frame between textures that are no longer read.
+     */
+    return S_OK;
+}
+
+static HRESULT WINAPI vc_VideoProcessorBlt_unused(void *self, void *processor,
+                                                  void *output_view, UINT frame,
+                                                  UINT stream_count, const void *streams)
+{
+    (void)self; (void)processor; (void)output_view; (void)frame;
+    (void)stream_count; (void)streams;
     EnterCriticalSection(&frame_lock);
     if (frame_texture && video_context)
     {
@@ -919,20 +936,30 @@ static HRESULT bridge_create(ID3D12Device *device, UINT width, UINT height)
     return S_OK;
 }
 
-/* Copy one converted frame across. Rows are re-pitched: D3D12 wants each row
- * of the upload buffer aligned, and ours are packed. */
-static void bridge_upload_frame(const BYTE *bgra, UINT width, UINT height)
+/*
+ * Convert one frame straight into the upload buffer and copy it across.
+ *
+ * The conversion writes at the buffer's own row pitch rather than into a
+ * packed scratch that then has to be re-pitched into it. D3D12 wants each row
+ * aligned; obliging it during the conversion costs nothing and removes a
+ * fourteen-megabyte pass per frame.
+ */
+static BOOL bridge_upload_frame(const BYTE *nv12, UINT stride, UINT width, UINT height)
 {
     D3D12_TEXTURE_COPY_LOCATION dst = { 0 }, src = { 0 };
     BYTE *mapped = NULL;
-    UINT y;
 
-    if (!bridge_texture || !bridge_upload || !bridge_list) return;
+    if (!bridge_texture || !bridge_upload || !bridge_list) return FALSE;
     if (FAILED(ID3D12Resource_Map(bridge_upload, 0, NULL, (void **)&mapped)) || !mapped)
-        return;
-    for (y = 0; y < height; ++y)
-        memcpy(mapped + (size_t)bridge_footprint.Footprint.RowPitch * y,
-               bgra + (size_t)width * 4 * y, (size_t)width * 4);
+        return FALSE;
+    {
+        ULONGLONG started = GetTickCount64();
+        nv12_to_bgra(nv12, stride, mapped, bridge_footprint.Footprint.RowPitch,
+                     width, height);
+        if (frames_uploaded <= 3)
+            logf_("  convert+write took %llums",
+                  (unsigned long long)(GetTickCount64() - started));
+    }
     ID3D12Resource_Unmap(bridge_upload, 0, NULL);
 
     ID3D12CommandAllocator_Reset(bridge_alloc);
@@ -960,6 +987,7 @@ static void bridge_upload_frame(const BYTE *bgra, UINT width, UINT height)
         ID3D12Fence_SetEventOnCompletion(bridge_fence, bridge_fence_value, bridge_event);
         WaitForSingleObject(bridge_event, 1000);
     }
+    return TRUE;
 }
 
 static HRESULT WINAPI d3d12_open_shared_handle(void *self, HANDLE handle,
@@ -1142,7 +1170,23 @@ static HRESULT WINAPI buffer_qi(void *self, REFIID iid, void **out)
  * BT.709 limited range, which is what 2560x1440 content is, in integer
  * arithmetic. Coefficients are the usual ones scaled by 256.
  */
-static void nv12_to_bgra(const BYTE *nv12, UINT stride, BYTE *bgra, UINT width, UINT height)
+/* Saturation without branches. The widest a term can reach either side of
+ * 0..255 is well inside this, so one table covers every channel. */
+#define CLAMP_BIAS 512
+static BYTE clamp8[1024 + 512];
+
+static void build_clamp_table(void)
+{
+    int i;
+    for (i = 0; i < (int)ARRAY_COUNT(clamp8); ++i)
+    {
+        int v = i - CLAMP_BIAS;
+        clamp8[i] = (BYTE)(v < 0 ? 0 : v > 255 ? 255 : v);
+    }
+}
+
+static void nv12_to_bgra(const BYTE *nv12, UINT stride, BYTE *bgra, UINT dst_pitch,
+                         UINT width, UINT height)
 {
     const BYTE *chroma = nv12 + (size_t)stride * height;
     UINT x, y;
@@ -1151,22 +1195,44 @@ static void nv12_to_bgra(const BYTE *nv12, UINT stride, BYTE *bgra, UINT width, 
     {
         const BYTE *luma_row = nv12 + (size_t)stride * y;
         const BYTE *chroma_row = chroma + (size_t)stride * (y / 2);
-        BYTE *out = bgra + (size_t)width * 4 * y;
+        BYTE *out = bgra + (size_t)dst_pitch * y;
 
-        for (x = 0; x < width; ++x)
+        /*
+         * Two pixels at a time, because the chroma is subsampled 2:1 across
+         * and both of them read the same pair. The three chroma terms are
+         * computed once instead of six times, and the clamp is a table lookup
+         * rather than two branches per channel -- at 3.7 million pixels a
+         * frame the difference is the whole cost.
+         */
+        for (x = 0; x + 1 < width; x += 2)
         {
-            int c = luma_row[x] - 16;
-            int d = chroma_row[(x & ~1u)] - 128;
-            int e = chroma_row[(x & ~1u) + 1] - 128;
-            int r = (298 * c + 459 * e + 128) >> 8;
-            int g = (298 * c - 55 * d - 136 * e + 128) >> 8;
-            int b = (298 * c + 541 * d + 128) >> 8;
+            int d = chroma_row[x] - 128;
+            int e = chroma_row[x + 1] - 128;
+            int r_add = 459 * e + 128;
+            int g_add = -55 * d - 136 * e + 128;
+            int b_add = 541 * d + 128;
+            int c0 = 298 * (luma_row[x] - 16);
+            int c1 = 298 * (luma_row[x + 1] - 16);
 
-            out[0] = (BYTE)(b < 0 ? 0 : b > 255 ? 255 : b);
-            out[1] = (BYTE)(g < 0 ? 0 : g > 255 ? 255 : g);
-            out[2] = (BYTE)(r < 0 ? 0 : r > 255 ? 255 : r);
+            out[0] = clamp8[((c0 + b_add) >> 8) + CLAMP_BIAS];
+            out[1] = clamp8[((c0 + g_add) >> 8) + CLAMP_BIAS];
+            out[2] = clamp8[((c0 + r_add) >> 8) + CLAMP_BIAS];
             out[3] = 0xff;
-            out += 4;
+            out[4] = clamp8[((c1 + b_add) >> 8) + CLAMP_BIAS];
+            out[5] = clamp8[((c1 + g_add) >> 8) + CLAMP_BIAS];
+            out[6] = clamp8[((c1 + r_add) >> 8) + CLAMP_BIAS];
+            out[7] = 0xff;
+            out += 8;
+        }
+        if (x < width)                       /* odd width, one left over */
+        {
+            int d = chroma_row[x & ~1u] - 128;
+            int e = chroma_row[(x & ~1u) + 1] - 128;
+            int c = 298 * (luma_row[x] - 16);
+            out[0] = clamp8[((c + 541 * d + 128) >> 8) + CLAMP_BIAS];
+            out[1] = clamp8[((c - 55 * d - 136 * e + 128) >> 8) + CLAMP_BIAS];
+            out[2] = clamp8[((c + 459 * e + 128) >> 8) + CLAMP_BIAS];
+            out[3] = 0xff;
         }
     }
 }
@@ -1302,7 +1368,16 @@ static void upload_frame(IMFSample *sample)
                                           : "there is a picture here");
                 }
 
-                nv12_to_bgra(data, stride, frame_scratch, frame_width, frame_height);
+                /*
+                 * Straight into the D3D12 upload buffer.
+                 *
+                 * The D3D11 texture is still handed to the game -- it asks for
+                 * one through IMFDXGIBuffer and drops the frame without it --
+                 * but nothing reads its contents now that the picture arrives
+                 * over the bridge. Filling it, and copying it twice more in
+                 * the blit, was forty megabytes a frame of work for nobody.
+                 */
+                bridge_upload_frame(data, stride, frame_width, frame_height);
 
                 /*
                  * One question is still open and everything else depends on
@@ -1325,10 +1400,6 @@ static void upload_frame(IMFSample *sample)
                     while (px--) { q[0] = 0xff; q[1] = 0x00; q[2] = 0xff; q[3] = 0xff; q += 4; }
                     if (n <= 1) logf_("  PROBE: frame replaced with solid magenta");
                 }
-                ID3D11DeviceContext_UpdateSubresource(video_context,
-                        (ID3D11Resource *)frame_texture, 0, NULL,
-                        frame_scratch, frame_width * 4, 0);
-                bridge_upload_frame(frame_scratch, frame_width, frame_height);
                 if (n <= 3)
                     logf_("  frame %ld converted and uploaded (%lu bytes in)",
                           n, (unsigned long)length);
@@ -2357,6 +2428,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
     {
         InitializeCriticalSection(&log_lock);
         InitializeCriticalSection(&frame_lock);
+        build_clamp_table();
         DisableThreadLibraryCalls(inst);
 
         /*
