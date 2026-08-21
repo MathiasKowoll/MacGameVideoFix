@@ -210,7 +210,21 @@ static LONG frames_out, output_calls, input_calls;
  * produce.
  *
  * Set BEAST_NO_NV12=1 to watch without intervening. */
-static BOOL restore_nv12 = TRUE;
+/* Off by default now. With the D3D manager withheld from the MFT, NV12 should
+ * be offered on its own -- CrossOver's censoring is conditioned on macOS alone,
+ * but winevideo's reading of the same code is that the format is only unusable
+ * when bound to a D3D device. Leaving this off makes the log answer whether
+ * that is true here rather than hiding it behind a relabel. */
+static BOOL restore_nv12 = FALSE;
+
+/* Withhold the D3D manager from the decoder, without denying it to the game.
+ *
+ * Refusing MFCreateDXGIDeviceManager outright was too blunt: the game gave up
+ * on video entirely and never touched the decoder. The manager it wants is for
+ * its own renderer as much as for decoding, so it gets to have one -- the
+ * decoder simply never hears about it, which is the state in which NV12 is not
+ * censored and system-memory output is the honest answer. */
+static BOOL withhold_d3d_from_mft = TRUE;
 
 static const GUID guid_MFVideoFormat_NV12 =
     { 0x3231564e, 0x0000, 0x0010, { 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71 } };
@@ -286,8 +300,10 @@ static HRESULT WINAPI my_GetOutputStreamInfo(void *self, DWORD stream, void *inf
         /* MFT_OUTPUT_STREAM_INFO: dwFlags at offset 4. Bit 0x100 =
          * PROVIDES_SAMPLES, which decides who allocates the frame. */
         DWORD flags = *(DWORD *)((BYTE *)info + 4);
-        logf_("GetOutputStreamInfo: flags=0x%lx (%s allocates the frame)",
-              flags, (flags & 0x100) ? "the decoder" : "the caller");
+        logf_("GetOutputStreamInfo: flags=0x%lx -- %s allocates the frame%s",
+              flags, (flags & 0x100) ? "the DECODER" : "the CALLER",
+              (flags & 0x100) ? "" : "   << a caller buffer is not IMF2DBuffer, "
+              "and Electra rejects every frame that is not");
     }
     return hr;
 }
@@ -350,8 +366,16 @@ static HRESULT WINAPI my_SetOutputType(void *self, DWORD stream, void *type, DWO
 
 static HRESULT WINAPI my_ProcessMessage(void *self, DWORD message, ULONG_PTR param)
 {
-    HRESULT hr = real_ProcessMessage(self, message, param);
-    if (message == 0x00000002) /* MFT_MESSAGE_SET_D3D_MANAGER */
+    HRESULT hr;
+    if (message == 0x00000002 && withhold_d3d_from_mft) /* MFT_MESSAGE_SET_D3D_MANAGER */
+    {
+        logf_("ProcessMessage(SET_D3D_MANAGER, %p) -- WITHHELD from the decoder; "
+              "the game keeps its manager, the decoder stays on system memory",
+              (void *)param);
+        return S_OK;
+    }
+    hr = real_ProcessMessage(self, message, param);
+    if (message == 0x00000002)
         logf_("ProcessMessage(SET_D3D_MANAGER, %p) -> 0x%08lx", (void *)param, hr);
     return hr;
 }
@@ -570,11 +594,13 @@ static DWORD WINAPI worker(LPVOID unused)
         if (GetEnvironmentVariableA("BEAST_REFUSE_D3D_MANAGER", v, sizeof(v)) && v[0] == '1')
             refuse_d3d_manager = TRUE;
         v[0] = 0;
-        if (GetEnvironmentVariableA("BEAST_NO_NV12", v, sizeof(v)) && v[0] == '1')
-            restore_nv12 = FALSE;
+        if (GetEnvironmentVariableA("BEAST_FORCE_NV12", v, sizeof(v)) && v[0] == '1')
+            restore_nv12 = TRUE;
     }
-    logf_("---- armed: NV12 %s | DXGI device manager %s ----",
-          restore_nv12 ? "RESTORED" : "left censored",
+    logf_("---- armed: D3D manager %s from the MFT | NV12 relabel %s | "
+          "MFCreateDXGIDeviceManager %s ----",
+          withhold_d3d_from_mft ? "WITHHELD" : "passed",
+          restore_nv12 ? "on" : "off",
           refuse_d3d_manager ? "refused" : "allowed");
     return 0;
 }
