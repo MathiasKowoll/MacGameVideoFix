@@ -38,6 +38,9 @@ LEGACY_MARKER='ue5-vpx-cpupath.log'
 # it: without this it would read as the game's own DLL and be moved over the
 # saved original.
 PROBE_MARKER='electra-probe.log'
+# The Electra H.264 fix rides on the same carrier as the Unreal fix, so the
+# installer has to recognise it as ours too.
+ELECTRA_MARKER='electra-h264-fix.log'
 
 usage() { sed -n '3,25p' "$0" >&2; exit 1; }
 [ $# -ge 1 ] || usage
@@ -79,7 +82,8 @@ is_ours() {
   [ -f "$1" ] || return 1
   LC_ALL=C grep -qa "$MARKER" "$1" \
     || LC_ALL=C grep -qa "$LEGACY_MARKER" "$1" \
-    || LC_ALL=C grep -qa "$PROBE_MARKER" "$1"
+    || LC_ALL=C grep -qa "$PROBE_MARKER" "$1" \
+    || LC_ALL=C grep -qa "$ELECTRA_MARKER" "$1"
 }
 
 status() {
