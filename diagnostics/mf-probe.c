@@ -1145,6 +1145,69 @@ static void hook_remaining_mfplat(void)
     }
 }
 
+/*
+ * Force the video player past its own abort branches.
+ *
+ * Every call it makes succeeds -- Media Foundation, the textures, the shared
+ * one -- and it still gives up, so the check that stops it is one this probe
+ * cannot see the inside of. Rather than keep guessing which, neutralise all
+ * four branches at once and find out whether frames start.
+ *
+ *   +0x27930fc  je   after the open call
+ *   +0x2793121  js   after MFCreateMFVideoFormatFromMFMediaType
+ *   +0x279312e  js   after the texture allocation
+ *   +0x279313b  js   after the third call
+ *
+ * All four are two-byte short jumps to the same failure block, so a two-byte
+ * nop covers each exactly. If ReadSample starts being called, the blocker is
+ * one of these and they can be re-enabled one at a time to say which. If
+ * nothing changes, it is somewhere else entirely and this experiment is over
+ * in one run rather than four.
+ *
+ * Offsets are from this build. Each is verified against the bytes expected
+ * there and skipped if they differ, so a different build patches nothing
+ * rather than something arbitrary.
+ */
+static const struct { DWORD rva; BYTE opcode, rel; const char *what; } abort_branches[] =
+{
+    { 0x27930fc, 0x74, 0x7e, "je  after the open" },
+    { 0x2793121, 0x78, 0x59, "js  after MFCreateMFVideoFormatFromMFMediaType" },
+    { 0x279312e, 0x78, 0x4c, "js  after the textures" },
+    { 0x279313b, 0x78, 0x3f, "js  after the third call" },
+};
+
+static void defeat_abort_branches(void)
+{
+    BYTE *base = (BYTE *)GetModuleHandleA(NULL);
+    unsigned i;
+
+    logf_("");
+    logf_("=== forcing the player past its abort branches ===");
+    for (i = 0; i < ARRAY_COUNT(abort_branches); ++i)
+    {
+        BYTE *at = base + abort_branches[i].rva;
+        DWORD old;
+
+        if (at[0] != abort_branches[i].opcode || at[1] != abort_branches[i].rel)
+        {
+            logf_("  +0x%lx: expected %02x %02x, found %02x %02x -- left alone",
+                  (unsigned long)abort_branches[i].rva,
+                  abort_branches[i].opcode, abort_branches[i].rel, at[0], at[1]);
+            continue;
+        }
+        if (!VirtualProtect(at, 2, PAGE_EXECUTE_READWRITE, &old))
+        {
+            logf_("  +0x%lx: could not make writable", (unsigned long)abort_branches[i].rva);
+            continue;
+        }
+        at[0] = 0x66; at[1] = 0x90;            /* the canonical two-byte nop */
+        VirtualProtect(at, 2, old, &old);
+        FlushInstructionCache(GetCurrentProcess(), at, 2);
+        logf_("  +0x%lx: %s -- neutralised",
+              (unsigned long)abort_branches[i].rva, abort_branches[i].what);
+    }
+}
+
 static DWORD WINAPI worker(LPVOID unused)
 {
     (void)unused;
@@ -1164,6 +1227,7 @@ static DWORD WINAPI worker(LPVOID unused)
     HOOK("MFPlat.DLL", MFTEnumEx);
     HOOK("MFReadWrite.dll", MFCreateSourceReaderFromByteStream);
     hook_remaining_mfplat();
+    defeat_abort_branches();
     logf_("");
     return 0;
 }
