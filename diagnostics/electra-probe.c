@@ -229,18 +229,60 @@ static void load_mfplat(void)
         logf_("mfplat has no MFCreate2DMediaBuffer -- cannot build a 2D frame");
 }
 
-/* IMFSample::AddBuffer is slot 3(IUnknown) + 30(IMFAttributes) + 3 = 36. */
-static HRESULT sample_add_buffer(void *sample, void *buffer)
-{
-    HRESULT (WINAPI *add)(void *, void *) =
-        (HRESULT (WINAPI *)(void *, void *))(*(void ***)sample)[36];
-    return add(sample, buffer);
-}
-
 static void release_obj(void *p)
 {
     ULONG (WINAPI *rel)(void *) = (ULONG (WINAPI *)(void *))(*(void ***)p)[2];
     rel(p);
+}
+
+/* IMFSample sits on IMFAttributes, so its own methods start at 3 + 30 = 33:
+ * GetSampleFlags 33, SetSampleFlags 34, GetSampleTime 35, SetSampleTime 36,
+ * GetSampleDuration 37, SetSampleDuration 38, GetBufferCount 39,
+ * GetBufferByIndex 40, ConvertToContiguousBuffer 41, AddBuffer 42,
+ * RemoveBufferByIndex 43, RemoveAllBuffers 44.
+ *
+ * An earlier version of this file used 36 for AddBuffer, which is SetSampleTime
+ * -- it would have called it with a buffer pointer as a timestamp. The branch
+ * never ran, so it never did any harm, but the arithmetic was wrong. */
+#define SLOT_SAMPLE_ADD_BUFFER     42
+#define SLOT_SAMPLE_REMOVE_ALL     44
+
+static HRESULT sample_add_buffer(void *sample, void *buffer)
+{
+    HRESULT (WINAPI *add)(void *, void *) =
+        (HRESULT (WINAPI *)(void *, void *))(*(void ***)sample)[SLOT_SAMPLE_ADD_BUFFER];
+    return add(sample, buffer);
+}
+
+static HRESULT sample_remove_all(void *sample)
+{
+    HRESULT (WINAPI *rm)(void *) =
+        (HRESULT (WINAPI *)(void *))(*(void ***)sample)[SLOT_SAMPLE_REMOVE_ALL];
+    return rm(sample);
+}
+
+/* Swap the caller's flat buffer for a 2D one, in the caller's own sample.
+ *
+ * Claiming PROVIDES_SAMPLES was not enough: Electra reads the flag and
+ * allocates anyway. It keeps its sample either way, and it is the buffer inside
+ * that it rejects -- so the buffer is what gets replaced, and the sample object
+ * it tracks stays exactly the one it made. */
+static BOOL give_sample_a_2d_buffer(void *sample)
+{
+    void *buffer = NULL;
+    load_mfplat();
+    if (!pMFCreate2DMediaBuffer || !frame_w || !frame_h) return FALSE;
+    if (FAILED(pMFCreate2DMediaBuffer(frame_w, frame_h, 0x3231564e /* NV12 */,
+                                      FALSE, &buffer)))
+        return FALSE;
+    sample_remove_all(sample);
+    if (FAILED(sample_add_buffer(sample, buffer)))
+    {
+        release_obj(buffer);
+        return FALSE;
+    }
+    release_obj(buffer);          /* the sample holds its own reference now */
+    return TRUE;
 }
 
 static HRESULT (WINAPI *real_GetOutputAvailableType)(void *, DWORD, DWORD, void **);
@@ -405,6 +447,19 @@ static HRESULT WINAPI my_ProcessOutput(void *self, DWORD flags, DWORD count,
 
     /* The caller believed us and passed nothing, so build the frame it would
      * have built -- on a 2D buffer, which is the whole point. */
+    if (provide_samples && out && count >= 1 && out[0].pSample)
+    {
+        static LONG told, failed;
+        if (give_sample_a_2d_buffer(out[0].pSample))
+        {
+            if (InterlockedIncrement(&told) == 1)
+                logf_("the caller allocates anyway, so its flat buffer is swapped "
+                      "for a 2D NV12 one of %ux%u -- same sample, different buffer",
+                      frame_w, frame_h);
+        }
+        else if (InterlockedIncrement(&failed) == 1)
+            logf_("could not swap in a 2D buffer (%ux%u)", frame_w, frame_h);
+    }
     if (provide_samples && out && count >= 1 && !out[0].pSample && frame_w && frame_h)
     {
         load_mfplat();
