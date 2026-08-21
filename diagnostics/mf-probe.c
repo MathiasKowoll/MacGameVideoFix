@@ -173,6 +173,8 @@ static LONG mf_shutdowns;
 /* The game builds movie paths from "DATA:" + "FILE/MOVIE" + "%s/%s/%s" +
  * ".webm", so match on the folder as well as the extension -- a lookup that
  * never reaches the filename still tells us it tried. */
+#define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
+
 static BOOL is_movie_path(const WCHAR *p)
 {
     static const WCHAR *needles[] = { L"MOVIE", L"movie", L"Movie", L"webm", L"WEBM" };
@@ -228,6 +230,136 @@ static void probe_interface(const char *label, IUnknown *obj, const GUID *iid)
     }
 }
 
+/* ------------------------------------------------------- video stubs --- */
+
+/*
+ * The game refuses to start its video player unless the D3D11 device hands it
+ * ID3D11VideoDevice and its context ID3D11VideoContext. Under D3DMetal both
+ * come back E_NOINTERFACE, so the player gives up before opening a file.
+ *
+ * Answering those two queries with stubs does not implement video. It answers
+ * the question that decides whether implementing it is worth doing: which of
+ * the eighty-odd methods does the game actually call once it gets past the
+ * gate? Every stub logs its own name and refuses.
+ *
+ * One vtable slot is replaced -- QueryInterface -- rather than proxying the
+ * whole device. Routing an entire D3D interface through this module is what
+ * broke rendering when it was tried on Mortal Shell 2.
+ */
+
+/* Literal pointers, so a per-frame call does not write the log a thousand times. */
+static const char *seen_stubs[128];
+static LONG seen_count;
+
+static void stub_called(const char *what)
+{
+    LONG i, n = seen_count;
+    for (i = 0; i < n && i < (LONG)ARRAY_COUNT(seen_stubs); ++i)
+        if (seen_stubs[i] == what) return;
+    if (n < (LONG)ARRAY_COUNT(seen_stubs))
+    {
+        seen_stubs[n] = what;
+        seen_count = n + 1;
+        logf_("STUB  %s", what);
+    }
+}
+
+struct stub_object
+{
+    void **vtbl;
+    LONG refcount;
+};
+
+static struct stub_object stub_video_device;
+static struct stub_object stub_video_context;
+
+static HRESULT WINAPI stub_QueryInterface(void *self, REFIID iid, void **out)
+{
+    struct stub_object *obj = self;
+    if (IsEqualGUID(iid, &IID_IUnknown)
+        || (obj == &stub_video_device  && IsEqualGUID(iid, &iid_video_device))
+        || (obj == &stub_video_context && IsEqualGUID(iid, &iid_video_context)))
+    {
+        InterlockedIncrement(&obj->refcount);
+        *out = obj;
+        return S_OK;
+    }
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI stub_AddRef(void *self)
+{
+    return InterlockedIncrement(&((struct stub_object *)self)->refcount);
+}
+
+static ULONG WINAPI stub_Release(void *self)
+{
+    LONG n = InterlockedDecrement(&((struct stub_object *)self)->refcount);
+    return n < 0 ? 0 : n;      /* static objects: never actually freed */
+}
+
+#include "video-stubs.h"
+
+/* Slot 0 of the real objects, saved so everything else still works. */
+static HRESULT (WINAPI *real_device_qi)(void *, REFIID, void **);
+static HRESULT (WINAPI *real_context_qi)(void *, REFIID, void **);
+
+static HRESULT WINAPI device_qi(void *self, REFIID iid, void **out)
+{
+    if (IsEqualGUID(iid, &iid_video_device))
+    {
+        stub_called("ID3D11Device::QueryInterface(ID3D11VideoDevice) -> stub");
+        InterlockedIncrement(&stub_video_device.refcount);
+        *out = &stub_video_device;
+        return S_OK;
+    }
+    return real_device_qi(self, iid, out);
+}
+
+static HRESULT WINAPI context_qi(void *self, REFIID iid, void **out)
+{
+    if (IsEqualGUID(iid, &iid_video_context))
+    {
+        stub_called("ID3D11DeviceContext::QueryInterface(ID3D11VideoContext) -> stub");
+        InterlockedIncrement(&stub_video_context.refcount);
+        *out = &stub_video_context;
+        return S_OK;
+    }
+    return real_context_qi(self, iid, out);
+}
+
+/* Replace one entry in an object's vtable, returning what was there. */
+static void *patch_vtable_slot(void *object, unsigned slot, void *replacement)
+{
+    void **vtbl = *(void ***)object;
+    void *previous;
+    DWORD old;
+
+    if (!VirtualProtect(&vtbl[slot], sizeof(void *), PAGE_READWRITE, &old)) return NULL;
+    previous = vtbl[slot];
+    vtbl[slot] = replacement;
+    VirtualProtect(&vtbl[slot], sizeof(void *), old, &old);
+    return previous;
+}
+
+static void install_video_stubs(void *device, void *context)
+{
+    stub_video_device.vtbl = vd_vtbl;
+    stub_video_context.vtbl = vc_vtbl;
+
+    if (device && !real_device_qi)
+    {
+        real_device_qi = patch_vtable_slot(device, 0, device_qi);
+        logf_("  video device stub: %s", real_device_qi ? "installed" : "COULD NOT PATCH");
+    }
+    if (context && !real_context_qi)
+    {
+        real_context_qi = patch_vtable_slot(context, 0, context_qi);
+        logf_("  video context stub: %s", real_context_qi ? "installed" : "COULD NOT PATCH");
+    }
+}
+
 static HRESULT WINAPI my_D3D11CreateDevice(void *adapter, UINT driver_type, HMODULE software,
                                            UINT flags, const UINT *levels, UINT num_levels,
                                            UINT sdk, void **device, UINT *level, void **context)
@@ -243,6 +375,8 @@ static HRESULT WINAPI my_D3D11CreateDevice(void *adapter, UINT driver_type, HMOD
                         &iid_video_device);
         probe_interface("ID3D11VideoContext", context ? *(IUnknown **)context : NULL,
                         &iid_video_context);
+        install_video_stubs(device ? *(void **)device : NULL,
+                            context ? *(void **)context : NULL);
     }
     return hr;
 }
