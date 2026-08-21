@@ -9,13 +9,6 @@ static ULONG_PTR WINAPI vd_3(void *self, void *a, void *b, void *c,
     stub_called("ID3D11VideoDevice::CreateVideoDecoder");
     return (ULONG_PTR)E_NOTIMPL;
 }
-static ULONG_PTR WINAPI vd_4(void *self, void *a, void *b, void *c,
-                                     void *d, void *e, void *f)
-{
-    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
-    stub_called("ID3D11VideoDevice::CreateVideoProcessor");
-    return (ULONG_PTR)E_NOTIMPL;
-}
 static ULONG_PTR WINAPI vd_5(void *self, void *a, void *b, void *c,
                                      void *d, void *e, void *f)
 {
@@ -35,27 +28,6 @@ static ULONG_PTR WINAPI vd_7(void *self, void *a, void *b, void *c,
 {
     (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
     stub_called("ID3D11VideoDevice::CreateVideoDecoderOutputView");
-    return (ULONG_PTR)E_NOTIMPL;
-}
-static ULONG_PTR WINAPI vd_8(void *self, void *a, void *b, void *c,
-                                     void *d, void *e, void *f)
-{
-    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
-    stub_called("ID3D11VideoDevice::CreateVideoProcessorInputView");
-    return (ULONG_PTR)E_NOTIMPL;
-}
-static ULONG_PTR WINAPI vd_9(void *self, void *a, void *b, void *c,
-                                     void *d, void *e, void *f)
-{
-    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
-    stub_called("ID3D11VideoDevice::CreateVideoProcessorOutputView");
-    return (ULONG_PTR)E_NOTIMPL;
-}
-static ULONG_PTR WINAPI vd_10(void *self, void *a, void *b, void *c,
-                                     void *d, void *e, void *f)
-{
-    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
-    stub_called("ID3D11VideoDevice::CreateVideoProcessorEnumerator");
     return (ULONG_PTR)E_NOTIMPL;
 }
 static ULONG_PTR WINAPI vd_11(void *self, void *a, void *b, void *c,
@@ -126,13 +98,13 @@ static void *vd_vtbl[] =
 {
     stub_QueryInterface, stub_AddRef, stub_Release,
     vd_3,
-    vd_4,
+    vd_CreateVideoProcessor,   /* hand-written */
     vd_5,
     vd_6,
     vd_7,
-    vd_8,
-    vd_9,
-    vd_10,
+    vd_CreateVideoProcessorInputView,   /* hand-written */
+    vd_CreateVideoProcessorOutputView,   /* hand-written */
+    vd_CreateVideoProcessorEnumerator,   /* hand-written */
     vd_11,
     vd_12,
     vd_13,
@@ -495,13 +467,6 @@ static ULONG_PTR WINAPI vc_52(void *self, void *a, void *b, void *c,
     stub_called("ID3D11VideoContext::VideoProcessorGetStreamExtension");
     return (ULONG_PTR)E_NOTIMPL;
 }
-static ULONG_PTR WINAPI vc_53(void *self, void *a, void *b, void *c,
-                                     void *d, void *e, void *f)
-{
-    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
-    stub_called("ID3D11VideoContext::VideoProcessorBlt");
-    return (ULONG_PTR)E_NOTIMPL;
-}
 static ULONG_PTR WINAPI vc_54(void *self, void *a, void *b, void *c,
                                      void *d, void *e, void *f)
 {
@@ -633,7 +598,7 @@ static void *vc_vtbl[] =
     vc_50,
     vc_51,
     vc_52,
-    vc_53,
+    vc_VideoProcessorBlt,   /* hand-written */
     vc_54,
     vc_55,
     vc_56,
@@ -645,5 +610,215 @@ static void *vc_vtbl[] =
     vc_62,
     vc_63,
     vc_64,
+};
+
+/* ---- ID3D11VideoProcessorEnumerator: 13 methods ---- */
+static ULONG_PTR WINAPI vpe_3(void *self, void *a, void *b, void *c,
+                                     void *d, void *e, void *f)
+{
+    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    stub_called("ID3D11VideoProcessorEnumerator::GetDevice");
+    return (ULONG_PTR)E_NOTIMPL;
+}
+static ULONG_PTR WINAPI vpe_4(void *self, void *a, void *b, void *c,
+                                     void *d, void *e, void *f)
+{
+    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    stub_called("ID3D11VideoProcessorEnumerator::GetPrivateData");
+    return (ULONG_PTR)E_NOTIMPL;
+}
+static ULONG_PTR WINAPI vpe_5(void *self, void *a, void *b, void *c,
+                                     void *d, void *e, void *f)
+{
+    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    stub_called("ID3D11VideoProcessorEnumerator::SetPrivateData");
+    return (ULONG_PTR)E_NOTIMPL;
+}
+static ULONG_PTR WINAPI vpe_6(void *self, void *a, void *b, void *c,
+                                     void *d, void *e, void *f)
+{
+    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    stub_called("ID3D11VideoProcessorEnumerator::SetPrivateDataInterface");
+    return (ULONG_PTR)E_NOTIMPL;
+}
+static ULONG_PTR WINAPI vpe_11(void *self, void *a, void *b, void *c,
+                                     void *d, void *e, void *f)
+{
+    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    stub_called("ID3D11VideoProcessorEnumerator::GetVideoProcessorCustomRate");
+    return (ULONG_PTR)E_NOTIMPL;
+}
+static ULONG_PTR WINAPI vpe_12(void *self, void *a, void *b, void *c,
+                                     void *d, void *e, void *f)
+{
+    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    stub_called("ID3D11VideoProcessorEnumerator::GetVideoProcessorFilterRange");
+    return (ULONG_PTR)E_NOTIMPL;
+}
+
+static void *vpe_vtbl[] =
+{
+    stub_QueryInterface, stub_AddRef, stub_Release,
+    vpe_3,
+    vpe_4,
+    vpe_5,
+    vpe_6,
+    vpe_GetVideoProcessorContentDesc,   /* hand-written */
+    vpe_CheckVideoProcessorFormat,   /* hand-written */
+    vpe_GetVideoProcessorCaps,   /* hand-written */
+    vpe_GetVideoProcessorRateConversionCaps,   /* hand-written */
+    vpe_11,
+    vpe_12,
+};
+
+/* ---- ID3D11VideoProcessor: 9 methods ---- */
+static ULONG_PTR WINAPI vp_3(void *self, void *a, void *b, void *c,
+                                     void *d, void *e, void *f)
+{
+    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    stub_called("ID3D11VideoProcessor::GetDevice");
+    return (ULONG_PTR)E_NOTIMPL;
+}
+static ULONG_PTR WINAPI vp_4(void *self, void *a, void *b, void *c,
+                                     void *d, void *e, void *f)
+{
+    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    stub_called("ID3D11VideoProcessor::GetPrivateData");
+    return (ULONG_PTR)E_NOTIMPL;
+}
+static ULONG_PTR WINAPI vp_5(void *self, void *a, void *b, void *c,
+                                     void *d, void *e, void *f)
+{
+    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    stub_called("ID3D11VideoProcessor::SetPrivateData");
+    return (ULONG_PTR)E_NOTIMPL;
+}
+static ULONG_PTR WINAPI vp_6(void *self, void *a, void *b, void *c,
+                                     void *d, void *e, void *f)
+{
+    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    stub_called("ID3D11VideoProcessor::SetPrivateDataInterface");
+    return (ULONG_PTR)E_NOTIMPL;
+}
+static ULONG_PTR WINAPI vp_7(void *self, void *a, void *b, void *c,
+                                     void *d, void *e, void *f)
+{
+    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    stub_called("ID3D11VideoProcessor::GetContentDesc");
+    return (ULONG_PTR)E_NOTIMPL;
+}
+static ULONG_PTR WINAPI vp_8(void *self, void *a, void *b, void *c,
+                                     void *d, void *e, void *f)
+{
+    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    stub_called("ID3D11VideoProcessor::GetRateConversionCaps");
+    return (ULONG_PTR)E_NOTIMPL;
+}
+
+static void *vp_vtbl[] =
+{
+    stub_QueryInterface, stub_AddRef, stub_Release,
+    vp_3,
+    vp_4,
+    vp_5,
+    vp_6,
+    vp_7,
+    vp_8,
+};
+
+/* ---- ID3D11VideoProcessorInputView: 9 methods ---- */
+static ULONG_PTR WINAPI vpiv_3(void *self, void *a, void *b, void *c,
+                                     void *d, void *e, void *f)
+{
+    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    stub_called("ID3D11VideoProcessorInputView::GetDevice");
+    return (ULONG_PTR)E_NOTIMPL;
+}
+static ULONG_PTR WINAPI vpiv_4(void *self, void *a, void *b, void *c,
+                                     void *d, void *e, void *f)
+{
+    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    stub_called("ID3D11VideoProcessorInputView::GetPrivateData");
+    return (ULONG_PTR)E_NOTIMPL;
+}
+static ULONG_PTR WINAPI vpiv_5(void *self, void *a, void *b, void *c,
+                                     void *d, void *e, void *f)
+{
+    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    stub_called("ID3D11VideoProcessorInputView::SetPrivateData");
+    return (ULONG_PTR)E_NOTIMPL;
+}
+static ULONG_PTR WINAPI vpiv_6(void *self, void *a, void *b, void *c,
+                                     void *d, void *e, void *f)
+{
+    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    stub_called("ID3D11VideoProcessorInputView::SetPrivateDataInterface");
+    return (ULONG_PTR)E_NOTIMPL;
+}
+static ULONG_PTR WINAPI vpiv_8(void *self, void *a, void *b, void *c,
+                                     void *d, void *e, void *f)
+{
+    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    stub_called("ID3D11VideoProcessorInputView::GetDesc");
+    return (ULONG_PTR)E_NOTIMPL;
+}
+
+static void *vpiv_vtbl[] =
+{
+    stub_QueryInterface, stub_AddRef, stub_Release,
+    vpiv_3,
+    vpiv_4,
+    vpiv_5,
+    vpiv_6,
+    vpiv_GetResource,   /* hand-written */
+    vpiv_8,
+};
+
+/* ---- ID3D11VideoProcessorOutputView: 9 methods ---- */
+static ULONG_PTR WINAPI vpov_3(void *self, void *a, void *b, void *c,
+                                     void *d, void *e, void *f)
+{
+    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    stub_called("ID3D11VideoProcessorOutputView::GetDevice");
+    return (ULONG_PTR)E_NOTIMPL;
+}
+static ULONG_PTR WINAPI vpov_4(void *self, void *a, void *b, void *c,
+                                     void *d, void *e, void *f)
+{
+    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    stub_called("ID3D11VideoProcessorOutputView::GetPrivateData");
+    return (ULONG_PTR)E_NOTIMPL;
+}
+static ULONG_PTR WINAPI vpov_5(void *self, void *a, void *b, void *c,
+                                     void *d, void *e, void *f)
+{
+    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    stub_called("ID3D11VideoProcessorOutputView::SetPrivateData");
+    return (ULONG_PTR)E_NOTIMPL;
+}
+static ULONG_PTR WINAPI vpov_6(void *self, void *a, void *b, void *c,
+                                     void *d, void *e, void *f)
+{
+    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    stub_called("ID3D11VideoProcessorOutputView::SetPrivateDataInterface");
+    return (ULONG_PTR)E_NOTIMPL;
+}
+static ULONG_PTR WINAPI vpov_8(void *self, void *a, void *b, void *c,
+                                     void *d, void *e, void *f)
+{
+    (void)self; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    stub_called("ID3D11VideoProcessorOutputView::GetDesc");
+    return (ULONG_PTR)E_NOTIMPL;
+}
+
+static void *vpov_vtbl[] =
+{
+    stub_QueryInterface, stub_AddRef, stub_Release,
+    vpov_3,
+    vpov_4,
+    vpov_5,
+    vpov_6,
+    vpov_GetResource,   /* hand-written */
+    vpov_8,
 };
 

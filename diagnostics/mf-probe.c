@@ -27,6 +27,7 @@
 #include <mfapi.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
+#include <d3d11.h>
 #include <mferror.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -270,15 +271,25 @@ struct stub_object
     LONG refcount;
 };
 
+static void *vd_vtbl[], *vc_vtbl[], *vpe_vtbl[], *vp_vtbl[], *vpiv_vtbl[], *vpov_vtbl[];
+
 static struct stub_object stub_video_device;
 static struct stub_object stub_video_context;
+static struct stub_object stub_vp_enumerator;
+static struct stub_object stub_vp_processor;
+static struct stub_object stub_vp_input_view;
+static struct stub_object stub_vp_output_view;
+
+static const char *dxgi_format_name(UINT f);
 
 static HRESULT WINAPI stub_QueryInterface(void *self, REFIID iid, void **out)
 {
     struct stub_object *obj = self;
     if (IsEqualGUID(iid, &IID_IUnknown)
         || (obj == &stub_video_device  && IsEqualGUID(iid, &iid_video_device))
-        || (obj == &stub_video_context && IsEqualGUID(iid, &iid_video_context)))
+        || (obj == &stub_video_context && IsEqualGUID(iid, &iid_video_context))
+        || obj == &stub_vp_enumerator || obj == &stub_vp_processor
+        || obj == &stub_vp_input_view || obj == &stub_vp_output_view)
     {
         InterlockedIncrement(&obj->refcount);
         *out = obj;
@@ -297,6 +308,182 @@ static ULONG WINAPI stub_Release(void *self)
 {
     LONG n = InterlockedDecrement(&((struct stub_object *)self)->refcount);
     return n < 0 ? 0 : n;      /* static objects: never actually freed */
+}
+
+/*
+ * A real enough video processor to get the game to the blit.
+ *
+ * With the abort branches defeated the player runs: it decodes, delivers
+ * samples, and plays audio. What it cannot do is put a picture on screen,
+ * because converting the decoded NV12 into the BGRA texture it draws is the
+ * video processor's job, and refusing to create one leaves it with nothing to
+ * convert with.
+ *
+ * So answer those calls. The objects below carry only what their getters have
+ * to give back; everything else still logs and refuses, which keeps the log
+ * honest about what is actually needed.
+ */
+/* The descriptor the enumerator was created from, echoed back on request.
+ * Using the real type rather than a byte count: guessing the size wrong here
+ * writes past the caller's struct, and D3D11_VIDEO_PROCESSOR_CAPS is 36 bytes,
+ * not the 44 an eleven-UINT memset would have written. */
+static D3D11_VIDEO_PROCESSOR_CONTENT_DESC vp_content_desc;
+
+/* The resources the views were created over, so GetResource can answer and
+ * the blit can say what it was handed. */
+static void *input_view_resource;
+static void *output_view_resource;
+
+static HRESULT WINAPI vd_CreateVideoProcessorEnumerator(void *self, const void *desc,
+                                                        void **out)
+{
+    (void)self;
+    stub_called("ID3D11VideoDevice::CreateVideoProcessorEnumerator -> ours");
+    if (desc) vp_content_desc = *(const D3D11_VIDEO_PROCESSOR_CONTENT_DESC *)desc;
+    if (!out) return E_INVALIDARG;
+    InterlockedIncrement(&stub_vp_enumerator.refcount);
+    *out = &stub_vp_enumerator;
+    return S_OK;
+}
+
+static HRESULT WINAPI vd_CreateVideoProcessor(void *self, void *enumerator, UINT rate,
+                                              void **out)
+{
+    (void)self; (void)enumerator; (void)rate;
+    stub_called("ID3D11VideoDevice::CreateVideoProcessor -> ours");
+    if (!out) return E_INVALIDARG;
+    InterlockedIncrement(&stub_vp_processor.refcount);
+    *out = &stub_vp_processor;
+    return S_OK;
+}
+
+static HRESULT WINAPI vd_CreateVideoProcessorInputView(void *self, void *resource,
+                                                       void *enumerator, const void *desc,
+                                                       void **out)
+{
+    (void)self; (void)enumerator; (void)desc;
+    stub_called("ID3D11VideoDevice::CreateVideoProcessorInputView -> ours");
+    input_view_resource = resource;
+    if (!out) return E_INVALIDARG;
+    InterlockedIncrement(&stub_vp_input_view.refcount);
+    *out = &stub_vp_input_view;
+    return S_OK;
+}
+
+static HRESULT WINAPI vd_CreateVideoProcessorOutputView(void *self, void *resource,
+                                                        void *enumerator, const void *desc,
+                                                        void **out)
+{
+    (void)self; (void)enumerator; (void)desc;
+    stub_called("ID3D11VideoDevice::CreateVideoProcessorOutputView -> ours");
+    output_view_resource = resource;
+    if (!out) return E_INVALIDARG;
+    InterlockedIncrement(&stub_vp_output_view.refcount);
+    *out = &stub_vp_output_view;
+    return S_OK;
+}
+
+/*
+ * The check the game gates on. It asks about one format at a time and insists
+ * on D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT, which is bit 1; report both
+ * input and output so either question is answered.
+ */
+static HRESULT WINAPI vpe_CheckVideoProcessorFormat(void *self, UINT format, UINT *flags)
+{
+    (void)self;
+    if (!flags) return E_INVALIDARG;
+    *flags = 0x1 | 0x2;                 /* INPUT | OUTPUT */
+    logf_("  CheckVideoProcessorFormat(%u %s) -> INPUT|OUTPUT",
+          format, dxgi_format_name(format));
+    return S_OK;
+}
+
+static HRESULT WINAPI vpe_GetVideoProcessorCaps(void *self, D3D11_VIDEO_PROCESSOR_CAPS *caps)
+{
+    (void)self;
+    stub_called("ID3D11VideoProcessorEnumerator::GetVideoProcessorCaps");
+    if (!caps) return E_INVALIDARG;
+    memset(caps, 0, sizeof(*caps));
+    /* No optional features, which is true. But a processor that reports no
+     * rate conversions and no input streams is one a caller cannot use, so
+     * claim the single one it needs. */
+    caps->RateConversionCapsCount = 1;
+    caps->MaxInputStreams = 1;
+    caps->MaxStreamStates = 1;
+    return S_OK;
+}
+
+static HRESULT WINAPI vpe_GetVideoProcessorContentDesc(void *self,
+                                                      D3D11_VIDEO_PROCESSOR_CONTENT_DESC *desc)
+{
+    (void)self;
+    stub_called("ID3D11VideoProcessorEnumerator::GetVideoProcessorContentDesc");
+    if (!desc) return E_INVALIDARG;
+    *desc = vp_content_desc;
+    return S_OK;
+}
+
+static HRESULT WINAPI vpe_GetVideoProcessorRateConversionCaps(
+        void *self, UINT index, D3D11_VIDEO_PROCESSOR_RATE_CONVERSION_CAPS *caps)
+{
+    (void)self; (void)index;
+    stub_called("ID3D11VideoProcessorEnumerator::GetVideoProcessorRateConversionCaps");
+    if (!caps) return E_INVALIDARG;
+    memset(caps, 0, sizeof(*caps));   /* no past or future frames, no telecine */
+    return S_OK;
+}
+
+static HRESULT WINAPI vpiv_GetResource(void *self, void **resource)
+{
+    (void)self;
+    if (resource) *resource = input_view_resource;
+    return S_OK;
+}
+
+static HRESULT WINAPI vpov_GetResource(void *self, void **resource)
+{
+    (void)self;
+    if (resource) *resource = output_view_resource;
+    return S_OK;
+}
+
+/* Describe a texture we were handed, so the log says what the conversion is
+ * actually between. ID3D11Texture2D::GetDesc is slot 10. */
+static void describe_resource(const char *label, void *resource)
+{
+    void (WINAPI *get_desc)(void *, UINT *);
+    UINT desc[11] = { 0 };
+
+    if (!resource) { logf_("    %s: (none)", label); return; }
+    get_desc = (*(void ***)resource)[10];
+    get_desc(resource, desc);
+    logf_("    %s: %ux%u format=%u %s bind=0x%x misc=0x%x",
+          label, desc[0], desc[1], desc[4], dxgi_format_name(desc[4]), desc[8], desc[10]);
+}
+
+/*
+ * The conversion itself.
+ *
+ * This build only reports what it was given. The game never created an NV12
+ * texture -- the only two it made are BGRA -- so where the decoded sample
+ * actually lands is the thing to establish before writing a converter for it.
+ * Returning S_OK keeps the player running so the rest of the sequence stays
+ * visible.
+ */
+static LONG blit_calls;
+
+static HRESULT WINAPI vc_VideoProcessorBlt(void *self, void *processor, void *output_view,
+                                           UINT frame, UINT stream_count, const void *streams)
+{
+    (void)self; (void)processor; (void)output_view; (void)streams;
+
+    if (InterlockedIncrement(&blit_calls) <= 3)
+    {
+        logf_("ID3D11VideoContext::VideoProcessorBlt(frame=%u, streams=%u)", frame, stream_count);
+        describe_resource("input ", input_view_resource);
+        describe_resource("output", output_view_resource);
+    }
+    return S_OK;
 }
 
 #include "video-stubs.h"
@@ -424,8 +611,12 @@ static HRESULT WINAPI device_create_rtv(void *self, void *res, const void *desc,
 
 static void install_video_stubs(void *device, void *context)
 {
-    stub_video_device.vtbl = vd_vtbl;
-    stub_video_context.vtbl = vc_vtbl;
+    stub_video_device.vtbl    = vd_vtbl;
+    stub_video_context.vtbl   = vc_vtbl;
+    stub_vp_enumerator.vtbl   = vpe_vtbl;
+    stub_vp_processor.vtbl    = vp_vtbl;
+    stub_vp_input_view.vtbl   = vpiv_vtbl;
+    stub_vp_output_view.vtbl  = vpov_vtbl;
 
     if (device && !real_device_qi)
     {
