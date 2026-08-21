@@ -343,6 +343,34 @@ static void *patch_vtable_slot(void *object, unsigned slot, void *replacement)
     return previous;
 }
 
+/*
+ * The reader accepts NV12 and then the game never asks for a frame, so it
+ * gives up somewhere in between. The obvious suspect is the texture it would
+ * decode into: D3DMetal is known not to handle NV12 video textures -- that is
+ * what winevideo's mfplat patch works around for Electra.
+ *
+ * Slot 5 of ID3D11Device is CreateTexture2D. Log what it is asked for and
+ * whether it succeeds. DXGI_FORMAT_NV12 is 103, P010 is 104.
+ */
+static HRESULT (WINAPI *real_create_texture2d)(void *, const void *, const void *, void **);
+
+static HRESULT WINAPI device_create_texture2d(void *self, const void *desc,
+                                              const void *initial, void **texture)
+{
+    HRESULT hr = real_create_texture2d(self, desc, initial, texture);
+    /* D3D11_TEXTURE2D_DESC: width, height, mips, array, then format. */
+    UINT format = desc ? ((const UINT *)desc)[4] : 0;
+
+    if (FAILED(hr) || format == 103 || format == 104)
+    {
+        const char *name = format == 103 ? "NV12" : format == 104 ? "P010" : "";
+        logf_("ID3D11Device::CreateTexture2D(format=%u %s) %s",
+              format, name, FAILED(hr) ? "FAILED" : "ok");
+        if (FAILED(hr)) log_hr("  result", hr);
+    }
+    return hr;
+}
+
 static void install_video_stubs(void *device, void *context)
 {
     stub_video_device.vtbl = vd_vtbl;
@@ -352,6 +380,8 @@ static void install_video_stubs(void *device, void *context)
     {
         real_device_qi = patch_vtable_slot(device, 0, device_qi);
         logf_("  video device stub: %s", real_device_qi ? "installed" : "COULD NOT PATCH");
+        real_create_texture2d = patch_vtable_slot(device, 5, device_create_texture2d);
+        logf_("  CreateTexture2D watch: %s", real_create_texture2d ? "installed" : "COULD NOT PATCH");
     }
     if (context && !real_context_qi)
     {
@@ -608,11 +638,70 @@ static HRESULT WINAPI reader_read_sample(void *self, DWORD stream, DWORD flags,
     return hr;
 }
 
+/* Between SetCurrentMediaType and the first ReadSample the game reads the
+ * negotiated type back and picks streams. Watch those too, so an empty gap
+ * means the gap is elsewhere. */
+static HRESULT (WINAPI *real_set_stream_selection)(void *, DWORD, BOOL);
+static HRESULT (WINAPI *real_get_native_type)(void *, DWORD, DWORD, IMFMediaType **);
+static HRESULT (WINAPI *real_get_current_type)(void *, DWORD, IMFMediaType **);
+static LONG reader_chatter;
+
+static HRESULT WINAPI reader_set_stream_selection(void *self, DWORD stream, BOOL selected)
+{
+    HRESULT hr = real_set_stream_selection(self, stream, selected);
+    if (InterlockedIncrement(&reader_chatter) <= 12)
+    {
+        logf_("IMFSourceReader::SetStreamSelection(stream=0x%lx, selected=%d)",
+              (unsigned long)stream, selected);
+        log_hr("  result", hr);
+    }
+    return hr;
+}
+
+static HRESULT WINAPI reader_get_native_type(void *self, DWORD stream, DWORD index,
+                                             IMFMediaType **type)
+{
+    HRESULT hr = real_get_native_type(self, stream, index, type);
+    if (InterlockedIncrement(&reader_chatter) <= 12)
+    {
+        logf_("IMFSourceReader::GetNativeMediaType(stream=%lu, index=%lu)",
+              (unsigned long)stream, (unsigned long)index);
+        log_hr("  result", hr);
+    }
+    return hr;
+}
+
+static HRESULT WINAPI reader_get_current_type(void *self, DWORD stream, IMFMediaType **type)
+{
+    HRESULT hr = real_get_current_type(self, stream, type);
+    if (InterlockedIncrement(&reader_chatter) <= 12)
+    {
+        GUID subtype;
+        UINT64 size = 0;
+        logf_("IMFSourceReader::GetCurrentMediaType(stream=%lu)", (unsigned long)stream);
+        if (SUCCEEDED(hr) && type && *type)
+        {
+            if (SUCCEEDED(IMFAttributes_GetGUID((IMFAttributes *)*type, &MF_MT_SUBTYPE, &subtype)))
+                describe_subtype("  subtype", &subtype);
+            if (SUCCEEDED(IMFAttributes_GetUINT64((IMFAttributes *)*type, &MF_MT_FRAME_SIZE, &size)))
+                logf_("  frame size: %lux%lu",
+                      (unsigned long)(size >> 32), (unsigned long)(size & 0xffffffff));
+            else
+                logf_("  frame size: NOT SET  <- a decoder that reports no size is unusable");
+        }
+        log_hr("  result", hr);
+    }
+    return hr;
+}
+
 static void hook_source_reader(void *reader)
 {
     if (!reader || real_read_sample) return;
-    real_set_media_type = patch_vtable_slot(reader, 7, reader_set_media_type);
-    real_read_sample    = patch_vtable_slot(reader, 9, reader_read_sample);
+    real_set_stream_selection = patch_vtable_slot(reader, 4, reader_set_stream_selection);
+    real_get_native_type      = patch_vtable_slot(reader, 5, reader_get_native_type);
+    real_get_current_type     = patch_vtable_slot(reader, 6, reader_get_current_type);
+    real_set_media_type       = patch_vtable_slot(reader, 7, reader_set_media_type);
+    real_read_sample          = patch_vtable_slot(reader, 9, reader_read_sample);
     logf_("  source reader hooks: %s", real_read_sample ? "installed" : "COULD NOT PATCH");
 }
 
