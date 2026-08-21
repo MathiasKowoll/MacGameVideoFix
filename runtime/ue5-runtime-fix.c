@@ -60,6 +60,24 @@
 #define ELECTRA_D3D12_VERSION   0x2EE0        /* 12000 */
 #define UNREACHABLE_VERSION     0x7FFFFFFF
 
+/* The running executable's file name, cached. Used for the log prefix and,
+ * more importantly, to decide which halves of this DLL apply here. */
+static const char *process_name(void)
+{
+    static char who[64];
+    if (!who[0])
+    {
+        char path[MAX_PATH];
+        DWORD len = GetModuleFileNameA(NULL, path, sizeof(path));
+        const char *base = path;
+        while (len-- > 0)
+            if (path[len] == '\\') { base = path + len + 1; break; }
+        lstrcpynA(who, base, sizeof(who));
+        if (!who[0]) lstrcpynA(who, "?", sizeof(who));
+    }
+    return who;
+}
+
 static void logf_(const char *fmt, ...)
 {
     char buf[512];
@@ -68,13 +86,23 @@ static void logf_(const char *fmt, ...)
     va_list ap;
     int n;
 
+    n = snprintf(buf, sizeof(buf) - 2, "[%s] ", process_name());
+    if (n < 0) n = 0;
     va_start(ap, fmt);
-    n = vsnprintf(buf, sizeof(buf) - 2, fmt, ap);
+    {
+        int m = vsnprintf(buf + n, sizeof(buf) - 2 - n, fmt, ap);
+        if (m < 0) { va_end(ap); return; }
+        n += m;
+    }
     va_end(ap);
-    if (n < 0) return;
     buf[n] = '\n';
 
-    /* A game under CrossOver cannot be attached to, so leave a trail. */
+    /* A game under CrossOver cannot be attached to, so leave a trail.
+     *
+     * Every line carries the process name. One bottle usually holds several
+     * games, and a log that does not say who wrote each entry cannot be read
+     * at all once two of them have run -- which is exactly the state it was
+     * found in the first time two titles shared a bottle. */
     h = CreateFileA("C:\\ue5-runtime-fix.log", FILE_APPEND_DATA,
                     FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                     OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -357,11 +385,69 @@ static void install_node_guard(void)
           ? "armed" : "this game creates no DXGI factory by name");
 }
 
+/* Which halves each title actually needs.
+ *
+ * One DLL serves every game, and that is worth keeping: a single file to build,
+ * ship and reason about. What is not worth keeping is every half acting
+ * wherever its byte pattern happens to match, because matching is not the same
+ * as belonging -- and a change made to help one title then silently changes
+ * every other one that matches too.
+ *
+ * So each half is asked to act by name. Narrowing Electra's patch for one game
+ * cannot alter what happens in another, and a title that only ever froze is
+ * never patched for a crash it does not have.
+ *
+ * A title not listed here gets both halves, which is how a new game is tried
+ * for the first time. The log says so, so an unexpected result is traceable to
+ * this table rather than mistaken for a measurement. */
+struct policy
+{
+    const char *exe;
+    BOOL electra;     /* raise Electra's VPx GPU-buffer threshold */
+    BOOL node_guard;  /* refuse adapter nodes that do not exist */
+};
+
+static const struct policy policies[] =
+{
+    { "MortalShell2-Win64-Shipping.exe",         TRUE,  FALSE },
+    { "BeastOfReincarnation-Win64-Shipping.exe", TRUE,  FALSE },
+    { "Iris-Win64-Shipping.exe",                 FALSE, TRUE  },
+    { "Chronos-Win64-Shipping.exe",              FALSE, TRUE  },
+};
+
 static DWORD WINAPI worker(LPVOID unused)
 {
+    const char *me = process_name();
+    size_t i;
+    BOOL known = FALSE;
+    struct policy want = { NULL, TRUE, TRUE };
+
     (void)unused;
-    apply();
-    install_node_guard();
+
+    for (i = 0; i < sizeof(policies) / sizeof(policies[0]); i++)
+    {
+        if (lstrcmpiA(me, policies[i].exe) == 0)
+        {
+            want = policies[i];
+            known = TRUE;
+            break;
+        }
+    }
+
+    if (!known)
+        logf_("not a title this build knows -- arming both halves; "
+              "report what happens rather than trusting it");
+
+    if (want.electra)
+        apply();
+    else
+        logf_("electra patch: not wanted here");
+
+    if (want.node_guard)
+        install_node_guard();
+    else
+        logf_("node guard: not wanted here");
+
     return 0;
 }
 
