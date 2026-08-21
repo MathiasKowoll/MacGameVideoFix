@@ -1,4 +1,4 @@
-# MortalShell2MacFix
+# MacGameVideoFix
 
 Restores the VP9 cutscenes in Unreal Engine 5 games running under CrossOver on
 Apple Silicon, without giving up D3D12.
@@ -106,7 +106,7 @@ expectation and not as a fact.
 
 ## Quick start
 
-1. Download `MortalShell2MacFix.app` from
+1. Download `MacGameVideoFix.app` from
    [Releases](../../releases), or build it yourself with `app/build-app.sh`.
 2. Create the user `Engine.ini` described below.
 3. Open the app, drop the game folder on it, pick a mode, and press
@@ -419,7 +419,7 @@ DXMT's meson handles it for you.
 app/build-app.sh
 ```
 
-Needs Xcode's Swift toolchain. Produces `app/MortalShell2MacFix.app`, ad-hoc
+Needs Xcode's Swift toolchain. Produces `app/MacGameVideoFix.app`, ad-hoc
 signed, targeting arm64 macOS 14+.
 
 ## License

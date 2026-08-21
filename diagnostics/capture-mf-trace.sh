@@ -14,7 +14,7 @@
 #
 # If the game needs Steam, start Steam in that bottle first and leave it up.
 #
-# Part of MortalShell2MacFix — https://github.com/MathiasKowoll/MortalShell2MacFix
+# Part of MacGameVideoFix — https://github.com/MathiasKowoll/MacGameVideoFix
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 set -uo pipefail

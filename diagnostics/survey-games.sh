@@ -15,7 +15,7 @@
 # the compatibility list -- so that list stays a record of what was measured
 # rather than what was remembered.
 #
-# Part of MortalShell2MacFix — https://github.com/MathiasKowoll/MortalShell2MacFix
+# Part of MacGameVideoFix — https://github.com/MathiasKowoll/MacGameVideoFix
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 set -uo pipefail

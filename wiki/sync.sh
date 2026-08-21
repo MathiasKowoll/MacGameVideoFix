@@ -11,7 +11,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-REMOTE="${WIKI_REMOTE:-https://github.com/MathiasKowoll/MortalShell2MacFix.wiki.git}"
+REMOTE="${WIKI_REMOTE:-https://github.com/MathiasKowoll/MacGameVideoFix.wiki.git}"
 MESSAGE="${1:-sync from the repository}"
 
 WORK="$(mktemp -d)"

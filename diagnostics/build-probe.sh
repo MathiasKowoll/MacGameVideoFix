@@ -14,7 +14,7 @@
 #
 # Needs llvm-mingw; set MINGW_BIN if it is not in the default place.
 #
-# Part of MortalShell2MacFix — https://github.com/MathiasKowoll/MortalShell2MacFix
+# Part of MacGameVideoFix — https://github.com/MathiasKowoll/MacGameVideoFix
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 set -euo pipefail

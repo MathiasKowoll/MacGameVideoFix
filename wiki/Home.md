@@ -2,7 +2,7 @@ Cutscenes that crash, or stay black, in Windows games running under CrossOver
 on Apple Silicon — what causes it, which games are affected, and how to find
 out about a game that is not listed yet.
 
-The tooling lives in [MortalShell2MacFix](https://github.com/MathiasKowoll/MortalShell2MacFix).
+The tooling lives in [MacGameVideoFix](https://github.com/MathiasKowoll/MacGameVideoFix).
 
 ## The two failure modes
 

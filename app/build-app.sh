@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Build MortalShell2MacFix.app and bundle the scripts it drives.
+# Build MacGameVideoFix.app and bundle the scripts it drives.
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$HERE")"
-APP="$HERE/MortalShell2MacFix.app"
+APP="$HERE/MacGameVideoFix.app"
 MACOS="$APP/Contents/MacOS"
 RES="$APP/Contents/Resources"
 CACHE="${TMPDIR:-/tmp}/ms2macfix-swift-cache"
@@ -15,8 +15,8 @@ rm -rf "$APP"
 mkdir -p "$MACOS" "$RES" "$CACHE"
 
 echo "==> compiling"
-swiftc "$HERE/MortalShell2MacFix.swift" -O -parse-as-library \
-  -o "$MACOS/MortalShell2MacFix" \
+swiftc "$HERE/MacGameVideoFix.swift" -O -parse-as-library \
+  -o "$MACOS/MacGameVideoFix" \
   -framework SwiftUI -framework AppKit -framework UniformTypeIdentifiers \
   -target arm64-apple-macos14.0 \
   -module-cache-path "$CACHE"
@@ -26,12 +26,12 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleName</key><string>MortalShell2MacFix</string>
-  <key>CFBundleDisplayName</key><string>MortalShell2MacFix</string>
+  <key>CFBundleName</key><string>MacGameVideoFix</string>
+  <key>CFBundleDisplayName</key><string>MacGameVideoFix</string>
   <key>CFBundleIdentifier</key><string>io.github.mortalshell2macfix</string>
   <key>CFBundleVersion</key><string>1.0</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>CFBundleExecutable</key><string>MortalShell2MacFix</string>
+  <key>CFBundleExecutable</key><string>MacGameVideoFix</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
@@ -93,7 +93,7 @@ if [ -n "${SIGN_ID:-}" ]; then
 
   if [ -n "${NOTARY_PROFILE:-}" ]; then
     echo "==> notarising"
-    ZIP="${TMPDIR:-/tmp}/MortalShell2MacFix.zip"
+    ZIP="${TMPDIR:-/tmp}/MacGameVideoFix.zip"
     ditto -c -k --keepParent "$APP" "$ZIP"
     xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
     rm -f "$ZIP"

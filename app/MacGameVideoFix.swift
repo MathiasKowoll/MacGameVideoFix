@@ -1,4 +1,4 @@
-// MortalShell2MacFix — restores VP9 cutscenes in UE5 titles running under
+// MacGameVideoFix — restores VP9 cutscenes in UE5 titles running under
 // CrossOver on Apple Silicon.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -523,7 +523,7 @@ struct ContentView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("MortalShell2MacFix")
+            Text("MacGameVideoFix")
                 .font(.system(size: 22, weight: .semibold))
             Text("Restores VP9 cutscenes in UE5 games running under CrossOver.")
                 .font(.subheadline)
@@ -691,9 +691,9 @@ struct ContentView: View {
 }
 
 @main
-struct MortalShell2MacFixApp: App {
+struct MacGameVideoFixApp: App {
     var body: some Scene {
-        Window("MortalShell2MacFix", id: "main") {
+        Window("MacGameVideoFix", id: "main") {
             ContentView()
         }
         .windowResizability(.contentMinSize)

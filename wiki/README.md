@@ -1,4 +1,4 @@
-Source for the [project wiki](https://github.com/MathiasKowoll/MortalShell2MacFix/wiki),
+Source for the [project wiki](https://github.com/MathiasKowoll/MacGameVideoFix/wiki),
 kept in the repository so it is versioned and reviewable alongside the tooling
 it documents.
 
