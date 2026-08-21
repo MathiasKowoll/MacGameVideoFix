@@ -115,6 +115,11 @@ static const GUID iid_adapter3 = { 0x645967a4, 0x1392, 0x4310,
 
 static HRESULT (WINAPI *real_query_vram)(void *, UINT, DXGI_MEMORY_SEGMENT_GROUP,
                                          DXGI_QUERY_VIDEO_MEMORY_INFO *);
+/* Two gigabytes of headroom: enough that Unreal stops waiting, small enough
+ * that it does not start behaving as though memory were limitless. */
+#define HEADROOM_BYTES (2ull * 1024 * 1024 * 1024)
+static const BOOL grant_headroom = TRUE;
+static LONG grants;
 static LONG vram_calls;
 static ULONGLONG first_call_tick;
 static UINT64 last_budget, last_usage;
@@ -138,7 +143,37 @@ static HRESULT WINAPI my_query_vram(void *self, UINT node,
 
     if (SUCCEEDED(hr) && info)
     {
-        BOOL changed = info->Budget != last_budget || info->CurrentUsage != last_usage;
+        BOOL over = info->CurrentUsage >= info->Budget;
+        BOOL changed;
+
+        /*
+         * If the answer is "you are out of memory", give it room.
+         *
+         * Waiting for the freeze to happen on its own costs a play session per
+         * experiment. This tests the mechanism the other way round: the loop
+         * Unreal is spinning in exists to wait for usage to fall below budget,
+         * so if raising the budget above usage makes the freeze go away, the
+         * mechanism is confirmed and this is also the fix. If it does not, the
+         * theory was wrong and the log still says what the real numbers were.
+         *
+         * Only when the reported state is already full -- a healthy answer is
+         * passed through untouched, so nothing is invented while the game is
+         * behaving.
+         */
+        if (over && grant_headroom)
+        {
+            UINT64 raised = info->CurrentUsage + HEADROOM_BYTES;
+            if (InterlockedIncrement(&grants) <= 3)
+                logf_("  over budget (%llu MB used of %llu MB) -> raising budget to %llu MB",
+                      (unsigned long long)(info->CurrentUsage / 1048576),
+                      (unsigned long long)(info->Budget / 1048576),
+                      (unsigned long long)(raised / 1048576));
+            info->Budget = raised;
+            if (info->AvailableForReservation < HEADROOM_BYTES)
+                info->AvailableForReservation = HEADROOM_BYTES;
+        }
+
+        changed = info->Budget != last_budget || info->CurrentUsage != last_usage;
         if (n <= 4 || changed || (n % 20000) == 0)
         {
             ULONGLONG elapsed = GetTickCount64() - first_call_tick;
@@ -149,7 +184,7 @@ static HRESULT WINAPI my_query_vram(void *self, UINT node,
                   (unsigned long long)(info->CurrentUsage / 1048576),
                   (unsigned long long)(info->AvailableForReservation / 1048576),
                   (unsigned long long)(info->CurrentReservation / 1048576),
-                  info->CurrentUsage >= info->Budget ? "   <- over budget" : "");
+                  over ? "   <- was over budget" : "");
             last_budget = info->Budget;
             last_usage = info->CurrentUsage;
         }
@@ -229,6 +264,7 @@ static DWORD WINAPI worker(LPVOID unused)
     (void)unused;
     logf_("");
     logf_("=== vram-probe attached ===");
+    logf_("  headroom: %s", grant_headroom ? "granted when the budget reads full" : "measuring only");
     real_CreateDXGIFactory  = hook_import("dxgi.dll", "CreateDXGIFactory",  my_CreateDXGIFactory);
     real_CreateDXGIFactory1 = hook_import("dxgi.dll", "CreateDXGIFactory1", my_CreateDXGIFactory1);
     logf_("  CreateDXGIFactory  %s", real_CreateDXGIFactory  ? "hooked" : "not imported");
