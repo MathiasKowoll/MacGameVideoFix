@@ -122,7 +122,7 @@ static const BOOL grant_headroom = TRUE;
 static LONG grants;
 static LONG vram_calls;
 static ULONGLONG first_call_tick;
-static UINT64 last_budget, last_usage;
+static UINT64 last_budget_by_group[2], last_usage_by_group[2];
 
 /*
  * Report the numbers, and how hard the game is asking for them.
@@ -164,65 +164,35 @@ static const BOOL fix_reservations = TRUE;
 static UINT64 requested_reservation[2];
 static LONG served, measured;
 
+static LONG served, measured;
+static ULONGLONG total_call_us;
+
 /*
  * Who is asking.
  *
  * Three theories about the values are dead: the budget is never full, the call
  * is not expensive, and the game never reserves anything. The loop is real --
- * two hundred million iterations a second -- so the next useful question is
- * not what it reads but where it lives.
+ * over two hundred million iterations a second -- so the useful question is
+ * not what it reads but where it lives, and a return address names that.
  *
- * A return address names that outright. Collected into a small table with
- * counts rather than logged, because at this rate logging each one would
- * write gigabytes; the table is dumped on a timer instead.
+ * The first attempt at this collected a table under its own lock on a timer,
+ * and produced nothing at all while the value logging quietly stopped firing
+ * too. Instrumentation that has to be debugged is instrumentation that is in
+ * the way, so this is the simplest thing that answers the question: a line for
+ * each of the first few calls, and one every fifty million after that. No
+ * table, no second lock, no timer.
  */
-#define MAX_CALLERS 24
-static struct { ULONG_PTR rva; LONG64 count; } callers[MAX_CALLERS];
-static LONG caller_count;
-static CRITICAL_SECTION caller_lock;
-static ULONGLONG last_dump;
-
-static void note_caller(void *ret)
+static void log_caller(LONG n, void *ret)
 {
     BYTE *base = (BYTE *)GetModuleHandleA(NULL);
-    ULONG_PTR rva;
-    int i;
 
-    if (!ret || (BYTE *)ret < base) return;
-    rva = (ULONG_PTR)((BYTE *)ret - base);
-
-    EnterCriticalSection(&caller_lock);
-    for (i = 0; i < caller_count; ++i)
-        if (callers[i].rva == rva) { callers[i].count++; goto done; }
-    if (caller_count < MAX_CALLERS)
-    {
-        callers[caller_count].rva = rva;
-        callers[caller_count].count = 1;
-        ++caller_count;
-    }
-done:
-    LeaveCriticalSection(&caller_lock);
+    if (!ret) return;
+    if ((BYTE *)ret > base && (BYTE *)ret - base < 0x40000000)
+        logf_("  call %ld from +0x%llx", (long)n,
+              (unsigned long long)((BYTE *)ret - base));
+    else
+        logf_("  call %ld from %p (outside the exe)", (long)n, ret);
 }
-
-static void dump_callers(void)
-{
-    ULONGLONG now = GetTickCount64();
-    int i;
-
-    if (now - last_dump < 5000) return;
-    EnterCriticalSection(&caller_lock);
-    if (now - last_dump >= 5000)
-    {
-        last_dump = now;
-        logf_("  call sites so far (%d distinct):", caller_count);
-        for (i = 0; i < caller_count; ++i)
-            logf_("    +0x%llx  %lld calls",
-                  (unsigned long long)callers[i].rva,
-                  (long long)callers[i].count);
-    }
-    LeaveCriticalSection(&caller_lock);
-}
-static ULONGLONG total_call_us;
 
 static HRESULT WINAPI my_query_vram(void *self, UINT node,
                                     DXGI_MEMORY_SEGMENT_GROUP group,
@@ -231,8 +201,7 @@ static HRESULT WINAPI my_query_vram(void *self, UINT node,
     LONG n = InterlockedIncrement(&vram_calls);
     HRESULT hr;
 
-    note_caller(__builtin_return_address(0));
-    if ((n & 0xFFFFF) == 0) dump_callers();
+    if (n <= 12 || (n % 50000000) == 0) log_caller(n, __builtin_return_address(0));
     ULONGLONG now = GetTickCount64();
     unsigned slot = (group == DXGI_MEMORY_SEGMENT_GROUP_LOCAL) ? 0 : 1;
 
@@ -324,8 +293,11 @@ static HRESULT WINAPI my_query_vram(void *self, UINT node,
                 info->AvailableForReservation = HEADROOM_BYTES;
         }
 
-        changed = info->Budget != last_budget || info->CurrentUsage != last_usage;
-        if (n <= 4 || changed || (n % 20000) == 0)
+        /* The two segment groups alternate, so comparing against a single
+         * previous value called every call a change. Per group, and rarely. */
+        changed = info->Budget != last_budget_by_group[slot]
+               || info->CurrentUsage != last_usage_by_group[slot];
+        if (n <= 4 || changed || (n % 50000000) == 0)
         {
             ULONGLONG elapsed = GetTickCount64() - first_call_tick;
             logf_("[%lu calls, %llus] group %u  budget %llu MB  usage %llu MB  "
@@ -336,8 +308,8 @@ static HRESULT WINAPI my_query_vram(void *self, UINT node,
                   (unsigned long long)(info->AvailableForReservation / 1048576),
                   (unsigned long long)(info->CurrentReservation / 1048576),
                   over ? "   <- was over budget" : "");
-            last_budget = info->Budget;
-            last_usage = info->CurrentUsage;
+            last_budget_by_group[slot] = info->Budget;
+            last_usage_by_group[slot] = info->CurrentUsage;
         }
     }
     else if (n <= 4)
@@ -466,7 +438,6 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
     if (reason == DLL_PROCESS_ATTACH)
     {
         InitializeCriticalSection(&log_lock);
-        InitializeCriticalSection(&caller_lock);
         DisableThreadLibraryCalls(inst);
         thread = CreateThread(NULL, 0, worker, NULL, 0, NULL);
         if (thread) CloseHandle(thread);
