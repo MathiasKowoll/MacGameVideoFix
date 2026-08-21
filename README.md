@@ -19,6 +19,92 @@ Tested on an M4 Max, macOS 27, CrossOver 26.2 with Game Porting Toolkit 4.0b2.
 
 ---
 
+## Quick start
+
+1. Download `MacGameVideoFix.app` from
+   [Releases](../../releases), or build it yourself with `app/build-app.sh`.
+2. Create the user `Engine.ini` described below.
+3. Open the app, drop the game folder on it, and press **Apply Fix**.
+
+The app works out which game it is and offers only the fixes that apply. For
+an Unreal title that means a choice of two — leave it on **Runtime patch**
+unless the app says the game ships no `libogg`. For DYNASTY WARRIORS: ORIGINS
+there is one, and step 2 below does not apply.
+
+The two modes solve the same problem, so the app will not let you apply one
+while the other is in place. **Revert** puts everything back either way.
+
+### Which folder to pick
+
+For **DYNASTY WARRIORS: ORIGINS**, the folder holding `DWORIGINS.exe` —
+usually `steamapps/common/DWORIGINS`.
+
+For an **Unreal title**, the folder that **contains `Content`** — not
+`Content/Movies`, and not your Steam library root.
+
+For Mortal Shell 2 that is `MortalShell2`, the folder inside Steam's `Sparta`
+directory:
+
+```
+…/steamapps/common/Sparta/MortalShell2      ← drop this one
+├── Binaries/
+└── Content/
+    ├── Movies/          ← the cutscenes
+    │   ├── Movie_MortalShellII_OpeningCutscene.mp4
+    │   ├── Shells/
+    │   └── Tutorials/
+    └── Paks/            ← pakchunk0-Windows.pak lives here
+```
+
+The tell is simple: the folder you choose must have **both `Content/Movies` and
+`Content/Paks`** underneath it. The app needs Movies to transcode and Paks to
+patch, so either one alone is not enough.
+
+You can also drop `Content` itself, or the folder one level above — the app
+looks one level down for a `Content` directory. What it cannot do is guess from
+`Movies` alone, and it will tell you so rather than touch anything:
+
+> That folder has no Content/Movies and Content/Paks inside.
+
+Note that Steam names the install directory after the project, not the game.
+Mortal Shell 2 ships under `Sparta`, so browse by path rather than by the name
+on the store page.
+
+### While it runs
+
+The app backs everything up first and has a **Revert** button. It shows a
+progress bar and streams the underlying scripts' output live, so you can see
+which file it is working on rather than staring at a frozen window.
+
+Once the fix is applied, **Apply Fix** is disabled until you revert. Running it
+twice would transcode already-transcoded files and overwrite the backup with
+H.264 instead of the originals.
+
+Because the app is signed ad-hoc rather than notarised, macOS will refuse the
+first launch. Right click it and choose **Open**, then confirm.
+
+## Requirements
+
+- Apple Silicon Mac, macOS 14 or later
+- CrossOver 26.2 / 26.3
+
+For the **re-encode** mode, additionally:
+
+- [winevideo](https://github.com/Jfishin/winevideo) applied to CrossOver
+- [ffmpeg](https://ffmpeg.org) — `brew install ffmpeg`
+- Roughly 1 GB of free space for the backup and the transcodes
+
+winevideo is not optional for that mode. Its patches 0005–0007 are what make
+Electra's H.264 Media Foundation path work on macOS at all — without them you
+would be moving the cutscenes onto a path that is equally broken, just in a
+different way.
+
+The **runtime** mode most likely does not need winevideo: VP9 never goes through
+Media Foundation, because Electra decodes it with its own bundled libvpx. Only
+the *output* conversion was broken, and that is exactly what the patch reroutes.
+This has not been tested on an unpatched CrossOver, so it is stated as an
+expectation and not as a fact.
+
 ## DYNASTY WARRIORS: ORIGINS
 
 The game decodes VP9 with Media Foundation on a D3D11 device kept only for
@@ -66,6 +152,22 @@ hypotheses that were wrong on the way there.
 ---
 
 ## Mortal Shell 2, and UE5 titles with VP9 cutscenes
+
+### The Engine.ini
+
+At `~/Library/Application Support/CrossOver/Bottles/<BOTTLE>/drive_c/users/crossover/AppData/Local/<GAME>/Saved/Config/Windows/Engine.ini`:
+
+```ini
+[SystemSettings]
+Electra.Win.H264UseOldOutputPath=1
+Electra.Win.H265UseOldOutputPath=1
+```
+
+Make it read-only afterwards — Unreal rewrites it:
+
+```bash
+chmod 444 ".../Saved/Config/Windows/Engine.ini"
+```
 
 ### The crash
 
@@ -140,113 +242,25 @@ original back, including the DLL we moved aside. Re-apply afterwards.
 
 ---
 
-## Requirements
-
-- Apple Silicon Mac, macOS 14 or later
-- CrossOver 26.2 / 26.3
-
-For the **re-encode** mode, additionally:
-
-- [winevideo](https://github.com/Jfishin/winevideo) applied to CrossOver
-- [ffmpeg](https://ffmpeg.org) — `brew install ffmpeg`
-- Roughly 1 GB of free space for the backup and the transcodes
-
-winevideo is not optional for that mode. Its patches 0005–0007 are what make
-Electra's H.264 Media Foundation path work on macOS at all — without them you
-would be moving the cutscenes onto a path that is equally broken, just in a
-different way.
-
-The **runtime** mode most likely does not need winevideo: VP9 never goes through
-Media Foundation, because Electra decodes it with its own bundled libvpx. Only
-the *output* conversion was broken, and that is exactly what the patch reroutes.
-This has not been tested on an unpatched CrossOver, so it is stated as an
-expectation and not as a fact.
-
-## Quick start
-
-1. Download `MacGameVideoFix.app` from
-   [Releases](../../releases), or build it yourself with `app/build-app.sh`.
-2. Create the user `Engine.ini` described below.
-3. Open the app, drop the game folder on it, and press **Apply Fix**.
-
-The app works out which game it is and offers only the fixes that apply. For
-an Unreal title that means a choice of two — leave it on **Runtime patch**
-unless the app says the game ships no `libogg`. For DYNASTY WARRIORS: ORIGINS
-there is one, and step 2 below does not apply.
-
-The two modes solve the same problem, so the app will not let you apply one
-while the other is in place. **Revert** puts everything back either way.
-
-### Which folder to pick
-
-For **DYNASTY WARRIORS: ORIGINS**, the folder holding `DWORIGINS.exe` —
-usually `steamapps/common/DWORIGINS`.
-
-For an **Unreal title**, the folder that **contains `Content`** — not
-`Content/Movies`, and not your Steam library root.
-
-For Mortal Shell 2 that is `MortalShell2`, the folder inside Steam's `Sparta`
-directory:
-
-```
-…/steamapps/common/Sparta/MortalShell2      ← drop this one
-├── Binaries/
-└── Content/
-    ├── Movies/          ← the cutscenes
-    │   ├── Movie_MortalShellII_OpeningCutscene.mp4
-    │   ├── Shells/
-    │   └── Tutorials/
-    └── Paks/            ← pakchunk0-Windows.pak lives here
-```
-
-The tell is simple: the folder you choose must have **both `Content/Movies` and
-`Content/Paks`** underneath it. The app needs Movies to transcode and Paks to
-patch, so either one alone is not enough.
-
-You can also drop `Content` itself, or the folder one level above — the app
-looks one level down for a `Content` directory. What it cannot do is guess from
-`Movies` alone, and it will tell you so rather than touch anything:
-
-> That folder has no Content/Movies and Content/Paks inside.
-
-Note that Steam names the install directory after the project, not the game.
-Mortal Shell 2 ships under `Sparta`, so browse by path rather than by the name
-on the store page.
-
-### While it runs
-
-The app backs everything up first and has a **Revert** button. It shows a
-progress bar and streams the underlying scripts' output live, so you can see
-which file it is working on rather than staring at a frozen window.
-
-Once the fix is applied, **Apply Fix** is disabled until you revert. Running it
-twice would transcode already-transcoded files and overwrite the backup with
-H.264 instead of the originals.
-
-Because the app is signed ad-hoc rather than notarised, macOS will refuse the
-first launch. Right click it and choose **Open**, then confirm.
-
-### The Engine.ini
-
-At `~/Library/Application Support/CrossOver/Bottles/<BOTTLE>/drive_c/users/crossover/AppData/Local/<GAME>/Saved/Config/Windows/Engine.ini`:
-
-```ini
-[SystemSettings]
-Electra.Win.H264UseOldOutputPath=1
-Electra.Win.H265UseOldOutputPath=1
-```
-
-Make it read-only afterwards — Unreal rewrites it:
-
-```bash
-chmod 444 ".../Saved/Config/Windows/Engine.ini"
-```
-
 ## Using the scripts directly
 
 Every script is standalone and reversible.
 
-### Runtime patch
+### DYNASTY WARRIORS: ORIGINS
+
+```bash
+runtime/install-dwo-bridge.sh "/path/to/steamapps/common/DWORIGINS"            # install
+runtime/install-dwo-bridge.sh "/path/to/steamapps/common/DWORIGINS" --status   # report
+runtime/install-dwo-bridge.sh "/path/to/steamapps/common/DWORIGINS" --restore  # remove
+```
+
+It expects `libxess.dll` and `pe.py` beside it. To build your own:
+
+```bash
+runtime/build-proxy.sh "/path/to/DWORIGINS/libxess.dll" dwo-video-bridge.c
+```
+
+### Unreal: runtime patch
 
 ```bash
 runtime/install-runtime-fix.sh "/path/to/<Game>/Content"            # install
@@ -262,7 +276,7 @@ prebuilt DLL; to build your own you need
 runtime/build-proxy.sh "/path/to/<Game>/Engine/Binaries/ThirdParty/Ogg/Win64/VS2015/libogg_64.dll"
 ```
 
-### Re-encode
+### Unreal: re-encode
 
 ```bash
 # 1. Transcode. Originals are copied to Movies_VP9_backup/ first.
@@ -372,41 +386,32 @@ that works has exactly two tracks.
 
 ## Other games
 
-Nothing here is specific to Mortal Shell 2. The null dereference is in
-`ElectraMediaVPxDecoder`, which is engine code, so any UE5 title that plays VP9
-cutscenes on D3D12 under D3DMetal crashes the same way — same stack, same
-address, different offsets.
+Neither fault is specific to the title it was found on.
 
-You are looking at this bug if the crash log names
-`FElectraMediaDecoderOutputBufferPoolBlock_DX12::AllocateBuffer` and your
-`Content/Movies` files report `vp9`:
+The Unreal crash is in `ElectraMediaVPxDecoder`, which is engine code, so any
+UE5 title with VP9 cutscenes on D3D12 hits it — same stack, same address,
+different offsets.
+
+The Dynasty Warriors fault is not about that game either: it is what happens
+to *any* game that decodes video on a D3D11 device and presents it with a
+D3D12 renderer, because `GetSharedHandle` is `E_NOTIMPL` under D3DMetal for
+all of them.
+
+What is specific in both cases is only the **carrier** — the DLL the fix rides
+in on. `libogg_64.dll` for Unreal titles, `libxess.dll` for DYNASTY WARRIORS:
+ORIGINS. Adding a game means finding a DLL it loads directly that has nothing
+to do with rendering, and building a proxy for it:
 
 ```bash
-ffprobe -v error -select_streams v:0 -show_entries stream=codec_name \
-        -of csv=p=0 "/path/to/<Game>/Content/Movies/<something>.mp4"
+runtime/build-proxy.sh "/path/to/game/<carrier>.dll" dwo-video-bridge.c
 ```
 
-Both modes are written to fail loudly rather than guess, so pointing the app at
-another game is safe to try. What each one needs:
+`diagnostics/survey-games.sh` reports what a game ships and which media API it
+uses, which is usually enough to say which of the two faults you are looking
+at, or that it is neither.
 
-**Runtime patch** — the game must ship `Engine/Binaries/ThirdParty/Ogg/Win64/*/libogg_64.dll`
-(nearly all UE titles do), its exports must be a subset of the ones the shipped
-proxy forwards (the installer checks, and tells you to rebuild if not), and the
-compiler must have emitted the version check against a stack slot. If that last
-one differs, the log says `0 found` and nothing is written — the patch is
-inert, not harmful.
-
-**Re-encode** — the pak must be version 11 with an unencrypted index and a
-`FullDirectoryIndex`. `pak-hide-videos.py` checks all three and refuses
-otherwise.
-
-Two cautions. This patches a running process, so **do not use it with a game
-that has anti-cheat** — that is exactly the behaviour anti-cheat exists to stop,
-and you risk a ban. And a title that ships its own modified Electra may place
-the check somewhere the scan does not reach; a `0 found` in the log means try
-the re-encode mode instead.
-
----
+**Do not use any of this on a game with anti-cheat.** It patches a running
+process, which is exactly the behaviour anti-cheat exists to stop.
 
 ## Troubleshooting
 

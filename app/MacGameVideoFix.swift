@@ -83,6 +83,46 @@ private func runStreaming(_ executable: String,
 // MARK: - Model
 
 /// The two ways to stop the crash. They are alternatives, never combined.
+/// Is CrossOver patched to decode VP9 at all?
+///
+/// Neither fix here decodes anything: they get an already-decoded frame to
+/// where the game can use it. Without winevideo there is nothing to decode VP9
+/// in a WebM container, so installing either would look like it worked and
+/// change nothing on screen. Better to say so first.
+struct Winevideo {
+    let engines: [String]        // CrossOver builds carrying the VP9 plugins
+
+    var found: Bool { !engines.isEmpty }
+
+    /// The plugins are the honest signal. A patched winegstreamer without them
+    /// still cannot demux a WebM or decode VP9, and they are the pieces
+    /// winevideo actually drops in.
+    static func detect() -> Winevideo {
+        let fm = FileManager.default
+        let roots = ["/Applications",
+                     (NSHomeDirectory() as NSString).appendingPathComponent("Applications")]
+        var found: [String] = []
+
+        for root in roots {
+            guard let apps = try? fm.contentsOfDirectory(atPath: root) else { continue }
+            for app in apps where app.hasSuffix(".app") && app.localizedCaseInsensitiveContains("crossover") {
+                let base = "\(root)/\(app)/Contents/SharedSupport/CrossOver"
+                // The plugin directory moved between CrossOver versions.
+                let dirs = ["\(base)/lib64/gstreamer-1.0",
+                            "\(base)/lib/x86_64/gstreamer-1.0"]
+                for dir in dirs
+                where fm.fileExists(atPath: "\(dir)/libgstvpx.dylib")
+                   && fm.fileExists(atPath: "\(dir)/libgstmatroska.dylib") {
+                    found.append(app)
+                    break
+                }
+            }
+        }
+        return Winevideo(engines: found)
+    }
+}
+
+
 /// Which game a chosen folder turns out to be. Each has its own fixes, and
 /// nothing is offered that does not apply to what was actually found.
 enum Title {
@@ -255,6 +295,7 @@ final class Runner: ObservableObject {
     @Published var log: [String] = []
     @Published var busy = false
     @Published var title: Title?
+    @Published var winevideo = Winevideo.detect()
     @Published var status = "Choose your game folder to begin."
 
     /// The Unreal paths still work in terms of a Content folder; this is where
@@ -658,6 +699,8 @@ struct ContentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             header
+            requirement
+            supported
             dropZone
             if let t = runner.title {
                 detected(t)
@@ -668,7 +711,7 @@ struct ContentView: View {
             logView
         }
         .padding(22)
-        .frame(minWidth: 680, minHeight: 620)
+        .frame(minWidth: 700, minHeight: 720)
     }
 
     private var header: some View {
@@ -679,6 +722,60 @@ struct ContentView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    /// Says up front whether the thing both fixes depend on is present.
+    private var requirement: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: runner.winevideo.found
+                  ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(runner.winevideo.found ? Color.green : Color.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                if runner.winevideo.found {
+                    Text("winevideo found in \(runner.winevideo.engines.joined(separator: ", "))")
+                        .font(.callout)
+                } else {
+                    Text("winevideo not found in any CrossOver on this Mac")
+                        .font(.callout.weight(.medium))
+                    Text("Neither fix decodes video — they carry an already-decoded frame to "
+                       + "where the game can use it. Without winevideo there is nothing to "
+                       + "decode VP9, so installing one will change nothing on screen.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Link("github.com/Jfishin/winevideo",
+                         destination: URL(string: "https://github.com/Jfishin/winevideo")!)
+                        .font(.caption)
+                }
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8)
+            .fill((runner.winevideo.found ? Color.green : Color.orange).opacity(0.08)))
+    }
+
+    /// What this knows how to fix, so it is clear before anything is dropped.
+    private var supported: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Games this can fix")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack(alignment: .top, spacing: 18) {
+                supportedEntry("DYNASTY WARRIORS: ORIGINS",
+                               "Cutscene plays with sound, picture black")
+                supportedEntry("Unreal Engine 5, VP9 cutscenes",
+                               "Crash on the first cutscene")
+            }
+        }
+    }
+
+    private func supportedEntry(_ name: String, _ symptom: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(name).font(.system(size: 12, weight: .medium))
+            Text(symptom).font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var dropZone: some View {
