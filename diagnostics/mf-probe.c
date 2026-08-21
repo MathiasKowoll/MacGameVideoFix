@@ -638,6 +638,84 @@ static HRESULT WINAPI reader_read_sample(void *self, DWORD stream, DWORD flags,
     return hr;
 }
 
+/*
+ * Everything the game asks the reader succeeds, and then it stops -- right
+ * after reading the native media type. So the answer is inside that object:
+ * some attribute it needs that winegstreamer does not set.
+ *
+ * Rather than guess which, list them all. A name for the ones worth
+ * recognising, the raw GUID for anything else.
+ */
+static const struct { const char *name; GUID guid; } media_type_keys[] =
+{
+ {"MF_MT_MAJOR_TYPE",        {0x48eba18e,0xf8c9,0x4687,{0xbf,0x11,0x0a,0x74,0xc9,0xf9,0x6a,0x8f}}},
+ {"MF_MT_SUBTYPE",           {0xf7e34c9a,0x42e8,0x4714,{0xb7,0x4b,0xcb,0x29,0xd7,0x2c,0x35,0xe5}}},
+ {"MF_MT_FRAME_SIZE",        {0x1652c33d,0xd6b2,0x4012,{0xb8,0x34,0x72,0x03,0x08,0x49,0xa3,0x7d}}},
+ {"MF_MT_FRAME_RATE",        {0xc459a2e8,0x3d2c,0x4e44,{0xb1,0x32,0xfe,0xe5,0x15,0x6c,0x7b,0xb0}}},
+ {"MF_MT_PIXEL_ASPECT_RATIO",{0xc6376a1e,0x8d0a,0x4027,{0xbe,0x45,0x6d,0x9a,0x0a,0xd3,0x9b,0xb6}}},
+ {"MF_MT_INTERLACE_MODE",    {0xe2724bb8,0xe676,0x4806,{0xb4,0xb2,0xa8,0xd6,0xef,0xb4,0x4c,0xcd}}},
+ {"MF_MT_DEFAULT_STRIDE",    {0x644b4e48,0x1e02,0x4516,{0xb0,0xeb,0xc0,0x1c,0xa9,0xd4,0x9a,0xc6}}},
+ {"MF_MT_AVG_BITRATE",       {0x20332624,0xfb0d,0x4d9e,{0xbd,0x0d,0xcb,0xf6,0x78,0x6c,0x10,0x2e}}},
+ {"MF_MT_ALL_SAMPLES_INDEPENDENT",{0xc9173739,0x5e56,0x461c,{0xb7,0x13,0x46,0xfb,0x99,0x5c,0xb9,0x5f}}},
+ {"MF_MT_FIXED_SIZE_SAMPLES",{0xb8ebefaf,0xb718,0x4e04,{0xb0,0xa9,0x11,0x67,0x75,0xe3,0x32,0x1b}}},
+ {"MF_MT_SAMPLE_SIZE",       {0xdad3ab78,0x1990,0x408b,{0xbc,0xe2,0xeb,0xa6,0x73,0xda,0xcc,0x10}}},
+ {"MF_MT_COMPRESSED",        {0x3afd0cee,0x18f2,0x4ba5,{0xa1,0x10,0x8b,0xea,0x50,0x2e,0x1f,0x92}}},
+ {"MF_MT_VIDEO_NOMINAL_RANGE",{0xc21b8ee5,0xb956,0x4071,{0x8d,0xaf,0x32,0x5e,0xdf,0x5c,0xab,0x11}}},
+ {"MF_MT_YUV_MATRIX",        {0x3e23d650,0xc083,0x4ea4,{0xaa,0x2f,0x38,0x72,0xc0,0xa1,0xe9,0xc1}}},
+ {"MF_MT_VIDEO_PRIMARIES",   {0xdbfbe4d7,0x0740,0x4ee0,{0x81,0x92,0x85,0x0a,0xb0,0xe2,0x19,0x35}}},
+ {"MF_MT_TRANSFER_FUNCTION", {0x5fb0fce9,0xbe5c,0x4935,{0xa8,0x11,0xec,0x83,0x8f,0x8e,0xed,0x93}}},
+ {"MF_MT_VIDEO_ROTATION",    {0xc380465d,0x2271,0x428c,{0x9b,0x83,0xec,0xea,0x3b,0x4a,0x85,0xc1}}},
+};
+
+static void dump_media_type(const char *label, IMFMediaType *type)
+{
+    IMFAttributes *attrs = (IMFAttributes *)type;
+    UINT32 count = 0, i;
+
+    if (!type) { logf_("  %s: (null)", label); return; }
+    if (FAILED(IMFAttributes_GetCount(attrs, &count)))
+    {
+        logf_("  %s: cannot be enumerated", label);
+        return;
+    }
+    logf_("  %s: %u attributes", label, count);
+
+    for (i = 0; i < count; ++i)
+    {
+        PROPVARIANT value;
+        GUID key;
+        const char *name = NULL;
+        unsigned k;
+
+        PropVariantInit(&value);
+        if (FAILED(IMFAttributes_GetItemByIndex(attrs, i, &key, &value))) continue;
+
+        for (k = 0; k < ARRAY_COUNT(media_type_keys); ++k)
+            if (IsEqualGUID(&key, &media_type_keys[k].guid)) { name = media_type_keys[k].name; break; }
+
+        if (!name) { log_guid("    (unnamed)", &key); }
+        else switch (value.vt)
+        {
+        case VT_UI4:
+            logf_("    %-28s %lu", name, (unsigned long)value.ulVal);
+            break;
+        case VT_UI8:
+            /* The paired 32-bit fields -- size, rate, aspect -- read as high x low. */
+            logf_("    %-28s %lu / %lu", name,
+                  (unsigned long)(value.uhVal.QuadPart >> 32),
+                  (unsigned long)(value.uhVal.QuadPart & 0xffffffff));
+            break;
+        case VT_CLSID:
+            describe_subtype(name, value.puuid);
+            break;
+        default:
+            logf_("    %-28s (type %u)", name, value.vt);
+            break;
+        }
+        PropVariantClear(&value);
+    }
+}
+
 /* Between SetCurrentMediaType and the first ReadSample the game reads the
  * negotiated type back and picks streams. Watch those too, so an empty gap
  * means the gap is elsewhere. */
@@ -667,6 +745,7 @@ static HRESULT WINAPI reader_get_native_type(void *self, DWORD stream, DWORD ind
         logf_("IMFSourceReader::GetNativeMediaType(stream=%lu, index=%lu)",
               (unsigned long)stream, (unsigned long)index);
         log_hr("  result", hr);
+        if (SUCCEEDED(hr) && type) dump_media_type("native type", *type);
     }
     return hr;
 }
@@ -688,6 +767,7 @@ static HRESULT WINAPI reader_get_current_type(void *self, DWORD stream, IMFMedia
                       (unsigned long)(size >> 32), (unsigned long)(size & 0xffffffff));
             else
                 logf_("  frame size: NOT SET  <- a decoder that reports no size is unusable");
+            dump_media_type("current type", *type);
         }
         log_hr("  result", hr);
     }
