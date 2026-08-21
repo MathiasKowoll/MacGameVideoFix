@@ -293,6 +293,7 @@ static ID3D11Texture2D *frame_texture;
 static ID3D11Texture2D *game_render_target;
 static ID3D11Texture2D *game_shared_texture;
 static UINT frame_width, frame_height, frame_stride;
+static UINT texture_width, texture_height;   /* what frame_texture actually is */
 static BYTE *frame_scratch;
 static CRITICAL_SECTION frame_lock;
 static LONG frames_uploaded;
@@ -552,9 +553,21 @@ static HRESULT WINAPI vc_VideoProcessorBlt(void *self, void *processor, void *ou
     EnterCriticalSection(&frame_lock);
     if (frame_texture && video_context)
     {
+        /* CopyResource requires identical dimensions; mismatched, it does
+         * nothing at all and says nothing either. */
         if (output_view_resource)
-            ID3D11DeviceContext_CopyResource(video_context,
-                    (ID3D11Resource *)output_view_resource, (ID3D11Resource *)frame_texture);
+        {
+            void (WINAPI *get_desc)(void *, UINT *) = (*(void ***)output_view_resource)[10];
+            UINT out[11] = { 0 };
+            get_desc(output_view_resource, out);
+            if (out[0] == texture_width && out[1] == texture_height)
+                ID3D11DeviceContext_CopyResource(video_context,
+                        (ID3D11Resource *)output_view_resource,
+                        (ID3D11Resource *)frame_texture);
+            else if (blit_calls <= 3)
+                logf_("    sizes differ: ours %ux%u, output %ux%u -- not copying",
+                      texture_width, texture_height, out[0], out[1]);
+        }
 
         /*
          * Writing into the shared texture as well crashed the game, and the
@@ -905,6 +918,26 @@ static void upload_frame(IMFSample *sample)
     }
     else
     {
+        /*
+         * Throw away a texture built for a different clip.
+         *
+         * This game ships 2560x1440 cutscenes and 960x540 interface clips in
+         * the same folder, so the size changes within a session. Creating the
+         * texture once and keeping it means the small clip's geometry drives
+         * a conversion sized for the large one -- writing megabytes past the
+         * scratch buffer -- while CopyResource between mismatched sizes is a
+         * silent no-op. Both were confirmed before either was seen.
+         */
+        if (frame_texture && (texture_width != frame_width || texture_height != frame_height))
+        {
+            logf_("  clip changed size: %ux%u -> %ux%u, rebuilding",
+                  texture_width, texture_height, frame_width, frame_height);
+            ID3D11Texture2D_Release(frame_texture);
+            frame_texture = NULL;
+            free(frame_scratch);
+            frame_scratch = NULL;
+        }
+
         if (!frame_texture)
         {
             D3D11_TEXTURE2D_DESC desc;
@@ -921,6 +954,7 @@ static void upload_frame(IMFSample *sample)
             logf_("  frame texture %ux%u BGRA: %s", frame_width, frame_height,
                   SUCCEEDED(hr) ? "created" : "FAILED");
             if (FAILED(hr)) { log_hr("    result", hr); frame_texture = NULL; }
+            else { texture_width = frame_width; texture_height = frame_height; }
         }
 
         if (!frame_scratch)
