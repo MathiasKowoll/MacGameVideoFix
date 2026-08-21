@@ -919,6 +919,9 @@ static ULONG_PTR WINAPI rdr_12(void *self, ULONG_PTR stream, ULONG_PTR guid,
     {
         logf_("IMFSourceReader::GetPresentationAttribute(stream=0x%llx, %s)",
               (unsigned long long)stream, duration ? "MF_PD_DURATION" : "other");
+        /* The last call before the player is torn down. Whoever makes it is
+         * the function that then decides to give up, so name it. */
+        if (reader_calls[12] == 1) log_stack("the last call before the retry");
         log_hr("  result", hr);
         if (SUCCEEDED(hr) && pv)
             logf_("  value: vt=%u  %llu", pv->vt, (unsigned long long)pv->uhVal.QuadPart);
