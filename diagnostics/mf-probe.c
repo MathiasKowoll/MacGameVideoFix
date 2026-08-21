@@ -745,7 +745,8 @@ static HRESULT WINAPI reader_get_native_type(void *self, DWORD stream, DWORD ind
         logf_("IMFSourceReader::GetNativeMediaType(stream=%lu, index=%lu)",
               (unsigned long)stream, (unsigned long)index);
         log_hr("  result", hr);
-        if (SUCCEEDED(hr) && type) dump_media_type("native type", *type);
+        if (SUCCEEDED(hr) && type && reader_chatter <= 4)
+            dump_media_type("native type", *type);
     }
     return hr;
 }
@@ -774,9 +775,49 @@ static HRESULT WINAPI reader_get_current_type(void *self, DWORD stream, IMFMedia
     return hr;
 }
 
+/*
+ * The five slots not covered above, wrapped uniformly.
+ *
+ * Guessing one method per launch has cost several already. IMFSourceReader
+ * has thirteen entries and the interesting ones are now all watched, so the
+ * last line in the log before the retry is the call the game gives up on --
+ * whichever it turns out to be.
+ *
+ * Every wrapper forwards all seven register arguments. ReadSample is the
+ * widest at seven including `this`, so nothing is truncated.
+ */
+typedef ULONG_PTR (WINAPI *reader_fn)(void *, ULONG_PTR, ULONG_PTR, ULONG_PTR,
+                                      ULONG_PTR, ULONG_PTR, ULONG_PTR);
+static reader_fn real_reader[13];
+static LONG reader_calls[13];
+
+static void log_reader_call(const char *name, unsigned slot, ULONG_PTR a, ULONG_PTR b,
+                            HRESULT hr)
+{
+    if (InterlockedIncrement(&reader_calls[slot]) > 4 && SUCCEEDED(hr)) return;
+    logf_("IMFSourceReader::%s(0x%llx, 0x%llx)", name,
+          (unsigned long long)a, (unsigned long long)b);
+    log_hr("  result", hr);
+}
+
+#define READER_WRAP(slot, name)                                                          static ULONG_PTR WINAPI rdr_##slot(void *self, ULONG_PTR a, ULONG_PTR b,                                                ULONG_PTR c, ULONG_PTR d, ULONG_PTR e,                                               ULONG_PTR f)                                      {                                                                                        ULONG_PTR r = real_reader[slot](self, a, b, c, d, e, f);                              log_reader_call(name, slot, a, b, (HRESULT)r);                                        return r;                                                                        }
+
+READER_WRAP(3,  "GetStreamSelection")
+READER_WRAP(8,  "SetCurrentPosition")
+READER_WRAP(10, "Flush")
+READER_WRAP(11, "GetServiceForStream")
+READER_WRAP(12, "GetPresentationAttribute")
+
 static void hook_source_reader(void *reader)
 {
     if (!reader || real_read_sample) return;
+
+    real_reader[3]  = patch_vtable_slot(reader, 3,  rdr_3);
+    real_reader[8]  = patch_vtable_slot(reader, 8,  rdr_8);
+    real_reader[10] = patch_vtable_slot(reader, 10, rdr_10);
+    real_reader[11] = patch_vtable_slot(reader, 11, rdr_11);
+    real_reader[12] = patch_vtable_slot(reader, 12, rdr_12);
+
     real_set_stream_selection = patch_vtable_slot(reader, 4, reader_set_stream_selection);
     real_get_native_type      = patch_vtable_slot(reader, 5, reader_get_native_type);
     real_get_current_type     = patch_vtable_slot(reader, 6, reader_get_current_type);
