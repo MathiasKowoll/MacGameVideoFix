@@ -161,6 +161,8 @@ struct vram_cache
 static struct vram_cache cache[2];          /* one per memory segment group */
 static const BOOL serve_from_cache = TRUE;
 static const BOOL fix_reservations = TRUE;
+static const BOOL reject_extra_nodes = TRUE;
+static LONG rejected;
 static UINT64 requested_reservation[2];
 static LONG served, measured;
 
@@ -202,6 +204,36 @@ static HRESULT WINAPI my_query_vram(void *self, UINT node,
     HRESULT hr;
 
     if (n <= 12 || (n % 50000000) == 0) log_caller(n, __builtin_return_address(0));
+
+    /*
+     * Refuse a node index this adapter does not have.
+     *
+     * This is the whole bug. The caller is walking adapter nodes and
+     * accumulating memory across them, and it ends the walk when the call
+     * fails:
+     *
+     *     incl  %esi                ; ++NodeIndex
+     *     movl  %esi, %edx
+     *     callq *0x70(%rax)         ; QueryVideoMemoryInfo
+     *     testl %eax, %eax
+     *     jns   <loop>              ; keep going while it succeeds
+     *
+     * On Windows the call returns an error once NodeIndex passes the number of
+     * nodes, and that is what stops the loop. D3DMetal answers S_OK for every
+     * index, so the counter climbs forever and the walk never ends -- one
+     * thread pinned, the renderer starving behind it, and a game that freezes
+     * after a while wherever it happens to be.
+     *
+     * A single-GPU adapter has one node, so index 0 is the only valid one.
+     */
+    if (reject_extra_nodes && node != 0)
+    {
+        LONG r = InterlockedIncrement(&rejected);
+        if (r <= 3)
+            logf_("  node %u does not exist -> DXGI_ERROR_INVALID_CALL "
+                  "(this is what ends the caller's loop)", node);
+        return DXGI_ERROR_INVALID_CALL;
+    }
     ULONGLONG now = GetTickCount64();
     unsigned slot = (group == DXGI_MEMORY_SEGMENT_GROUP_LOCAL) ? 0 : 1;
 
@@ -413,6 +445,7 @@ static DWORD WINAPI worker(LPVOID unused)
     logf_("=== vram-probe attached ===");
     logf_("  headroom: %s", grant_headroom ? "granted when the budget reads full" : "measuring only");
     logf_("  cache:    %s", serve_from_cache ? "repeats served within 100ms" : "every call passed through");
+    logf_("  nodes:    %s", reject_extra_nodes ? "only node 0 exists" : "any index answered");
     real_CreateDXGIFactory  = hook_import("dxgi.dll", "CreateDXGIFactory",  my_CreateDXGIFactory);
     real_CreateDXGIFactory1 = hook_import("dxgi.dll", "CreateDXGIFactory1", my_CreateDXGIFactory1);
     logf_("  CreateDXGIFactory  %s", real_CreateDXGIFactory  ? "hooked" : "not imported");
@@ -425,9 +458,9 @@ static void report_totals(void)
     LONG total = vram_calls;
     logf_("");
     logf_("=== totals: %ld calls, %ld served from cache (%ld%%), %ld real, "
-          "%lluus average ===",
+          "%lluus average, %ld refused for a node that does not exist ===",
           total, served, total ? (served * 100 / total) : 0, measured,
-          measured ? (unsigned long long)(total_call_us / measured) : 0ull);
+          measured ? (unsigned long long)(total_call_us / measured) : 0ull, rejected);
 }
 
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
