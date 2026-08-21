@@ -487,16 +487,39 @@ static HRESULT WINAPI vpov_GetResource(void *self, void **resource)
 
 /* Describe a texture we were handed, so the log says what the conversion is
  * actually between. ID3D11Texture2D::GetDesc is slot 10. */
+/*
+ * Describe a resource we were handed.
+ *
+ * Slot 10 of ID3D11Texture2D is GetDesc, but only for a Texture2D: a buffer
+ * or a 3D texture puts something else there, and calling it would report
+ * nonsense rather than say so. Slot 7, GetType, is on ID3D11Resource itself
+ * and tells us which we have. The pointer is printed either way -- "(none)"
+ * previously covered both a null argument and a resource this could not read,
+ * which are very different things.
+ */
 static void describe_resource(const char *label, void *resource)
 {
+    void (WINAPI *get_type)(void *, UINT *);
     void (WINAPI *get_desc)(void *, UINT *);
+    UINT dimension = 0;
     UINT desc[11] = { 0 };
 
-    if (!resource) { logf_("    %s: (none)", label); return; }
+    if (!resource) { logf_("    %s: NULL", label); return; }
+
+    get_type = (*(void ***)resource)[7];
+    get_type(resource, &dimension);
+    if (dimension != D3D11_RESOURCE_DIMENSION_TEXTURE2D)
+    {
+        logf_("    %s: %p, dimension %u (not a 2D texture)", label, resource, dimension);
+        return;
+    }
+
     get_desc = (*(void ***)resource)[10];
     get_desc(resource, desc);
-    logf_("    %s: %ux%u format=%u %s bind=0x%x misc=0x%x",
-          label, desc[0], desc[1], desc[4], dxgi_format_name(desc[4]), desc[8], desc[10]);
+    logf_("    %s: %p %ux%u format=%u %s bind=0x%x misc=0x%x%s",
+          label, resource, desc[0], desc[1], desc[4], dxgi_format_name(desc[4]),
+          desc[8], desc[10],
+          resource == (void *)game_shared_texture ? "  <- the shared one" : "");
 }
 
 /*
@@ -917,6 +940,33 @@ static void upload_frame(IMFSample *sample)
             }
             else
             {
+                /*
+                 * Is there a picture in here at all?
+                 *
+                 * A black screen has two very different causes: a frame that
+                 * never reaches the display, or a frame that is genuinely
+                 * black. Averaging the luma plane separates them for the cost
+                 * of one pass. NV12 luma is 16 for black and 235 for white, so
+                 * anything near 16 means the decoder handed us nothing.
+                 */
+                if (n <= 2)
+                {
+                    unsigned long long sum = 0;
+                    UINT yy, xx, lo = 255, hi = 0;
+                    for (yy = 0; yy < frame_height; yy += 8)
+                        for (xx = 0; xx < frame_width; xx += 8)
+                        {
+                            BYTE v = data[(size_t)stride * yy + xx];
+                            sum += v;
+                            if (v < lo) lo = v;
+                            if (v > hi) hi = v;
+                        }
+                    logf_("  luma: average %llu, range %u..%u  (%s)",
+                          sum / (((unsigned long long)frame_height / 8) * (frame_width / 8)),
+                          lo, hi, hi <= 20 ? "black -- the decoder gave us nothing"
+                                          : "there is a picture here");
+                }
+
                 nv12_to_bgra(data, stride, frame_scratch, frame_width, frame_height);
                 ID3D11DeviceContext_UpdateSubresource(video_context,
                         (ID3D11Resource *)frame_texture, 0, NULL,
