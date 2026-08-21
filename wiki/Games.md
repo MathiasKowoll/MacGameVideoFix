@@ -1,6 +1,6 @@
-Every row here was measured on an installed copy, not recalled. The method is
-in [Diagnosing a new game](Diagnosing-a-new-game.md); where a claim comes from a static scan rather
-than from playing the game, it says so.
+Titles we have taken on, and what was measured on each. Every row comes from an
+installed copy rather than from memory; where a claim comes from a static scan
+rather than from playing the game, it says so.
 
 Tested on an M4 Max, macOS 27, CrossOver 26.2 patched with
 [winevideo](https://github.com/Jfishin/winevideo), GPTK 4.0b2.
@@ -47,38 +47,14 @@ Next: hooks on `CoCreateInstance` (a decoder asked for by exact CLSID that Wine
 does not register would fail exactly like this) and on `CreateFileW` for
 `.webm` paths.
 
-## Measured, not affected
-
-### Returnal — Unreal Engine 4
-
-95 × VP9 in `.mp4`, decoded by a bundled decoder — the executable imports no
-media API at all. A static scan finds **0 instances** of Electra's D3D12
-version check, so the crash described on [Home](Home.md) cannot occur here. UE4 has no
-D3D12 output buffer pool.
-
-Not played through to confirm.
-
-### Ghost of Tsushima Director's Cut — in-house engine (Nixxes port)
-
-252 × VP9 in `.webm`, bundled decoder, no media API imported. Untested.
-
-## Everything else surveyed
-
-73 titles were scanned. Grouped by how they play video, because that is what
-decides the failure mode:
-
-| How | Titles |
-| --- | --- |
-| **Bink** — own decoder, never touches Media Foundation or D3D video, unaffected by any of this | God of War Ragnarök (228), F1 23 (204), Mortal Kombat 1 (204), Jedi Survivor (134), Horizon Zero Dawn Remastered (102), Batman Arkham Asylum GOTY (45), SILENT HILL 2 (10), Life is Strange Reunion (3), Rayman Legends (2), Crash Bandicoot N. Sane Trilogy (2) |
-| **H.264 through Media Foundation** — needs winevideo, otherwise normal | Mortal Kombat 1 (11), Revenge of the Savage Planet (100), Crash Bandicoot 4 (54) |
-| **VP9** — the interesting class | Mortal Shell 2, DYNASTY WARRIORS: ORIGINS, Ghost of Tsushima DC, Returnal |
-
-Titles that reported zero videos — Beast of Reincarnation, DRAGON BALL
-Sparking! ZERO, NINJA GAIDEN 4, Stellar Blade — pack their movies somewhere the
-survey cannot read. That is a gap in the tool, not a statement about the game.
-
 ## Adding a row
 
-Run the survey, and if the game misbehaves, the probe. Both are in
-`diagnostics/`. Paste what they print — measurements are the point of this
-page, and a row without one is worse than no row.
+This page covers titles we have deliberately taken on, not everything that
+happens to be installed on someone's machine. A game gets a row when there is a
+reason to work on it.
+
+To add one: run the survey on that game's folder, and if it misbehaves, the
+probe. Both are in `diagnostics/`, and both are described in
+[Diagnosing a new game](Diagnosing-a-new-game.md). Paste what they print —
+measurements are the point of this page, and a row without one is worse than no
+row.

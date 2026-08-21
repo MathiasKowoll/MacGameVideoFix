@@ -4,11 +4,16 @@
 # will play under CrossOver: what the cutscenes are encoded as, and which API
 # the game uses to play them.
 #
-#   survey-games.sh <steamapps/common> [more dirs...]
+#   survey-games.sh <game folder> [more folders...]
 #
-# Prints one TSV row per game: engine, video assets, codec, media API.
-# Feeds the compatibility list in the wiki -- so that list stays a record of
-# what was measured rather than what was remembered.
+# Takes individual games. Point it at a whole steamapps/common and it will
+# survey everything under it, which is useful when hunting for a title worth
+# working on -- but the wiki covers games we deliberately took on, not an
+# inventory of what someone has installed.
+#
+# Prints one TSV row per game: engine, video assets, codec, media API. Feeds
+# the compatibility list -- so that list stays a record of what was measured
+# rather than what was remembered.
 #
 # Part of MortalShell2MacFix — https://github.com/MathiasKowoll/MortalShell2MacFix
 # SPDX-License-Identifier: GPL-3.0-or-later
@@ -23,9 +28,19 @@ usage() { sed -n '3,11p' "$0" >&2; exit 1; }
 
 printf 'game\tengine\tvideos\tformats\tcodec\tmedia API\n'
 
+# A folder holding an executable is a game; a folder holding folders that hold
+# executables is a library. Deciding here means the same command works for both.
+expand() {
+  if find "$1" -maxdepth 2 -iname '*.exe' -print -quit 2>/dev/null | grep -q .; then
+    printf '%s\n' "$1"
+  else
+    for sub in "$1"/*/; do [ -d "$sub" ] && printf '%s\n' "${sub%/}"; done
+  fi
+}
+
 for root in "$@"; do
   [ -d "$root" ] || continue
-  for game in "$root"/*/; do
+  expand "${root%/}" | while IFS= read -r game; do
     name="$(basename "$game")"
     [ -d "$game" ] || continue
 

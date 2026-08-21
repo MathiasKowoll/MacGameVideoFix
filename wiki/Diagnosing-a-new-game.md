@@ -4,13 +4,17 @@ one narrows what the next has to look at.
 ## 1. What does this game ship, and what plays it?
 
 ```
-diagnostics/survey-games.sh "/path/to/steamapps/common"
+diagnostics/survey-games.sh "/path/to/steamapps/common/<Game>"
 ```
 
-One row per game: engine, how many videos, in what container, the codec of a
-sample, and which media DLLs the main executable is linked against. This is
-usually enough to say which failure mode you are looking at, or that the game
-is not in this category at all.
+One row: engine, how many videos, in what container, the codec of a sample, and
+which media DLLs the main executable is linked against. Usually enough to say
+which failure mode you are looking at, or that the game is not in this category
+at all.
+
+Given a whole library instead of one game it surveys everything under it, which
+helps when hunting for a title worth working on. The wiki still only covers
+games we deliberately took on.
 
 ## 2. Does the crash actually apply to this build?
 

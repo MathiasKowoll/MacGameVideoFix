@@ -26,10 +26,10 @@ There is no crash log to read, so it has to be traced.
 ## Is my game affected?
 
 The thing that matters is what the cutscenes are encoded as and which API plays
-them. `survey-games.sh` reports both for every game in a Steam library:
+them. `survey-games.sh` reports both for a game folder:
 
 ```
-diagnostics/survey-games.sh "/path/to/steamapps/common"
+diagnostics/survey-games.sh "/path/to/steamapps/common/<Game>"
 ```
 
 Reading the output:
