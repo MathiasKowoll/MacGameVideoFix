@@ -161,6 +161,24 @@ static FARPROC (WINAPI *real_GetProcAddress)(HMODULE, LPCSTR);
 static HRESULT (WINAPI *real_CoCreateInstance)(REFCLSID, IUnknown *, DWORD, REFIID, void **);
 static HANDLE (WINAPI *real_CreateFileW)(LPCWSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES,
                                          DWORD, DWORD, HANDLE);
+static HANDLE (WINAPI *real_FindFirstFileW)(LPCWSTR, LPWIN32_FIND_DATAW);
+static HANDLE (WINAPI *real_FindFirstFileExW)(LPCWSTR, FINDEX_INFO_LEVELS, LPVOID,
+                                              FINDEX_SEARCH_OPS, LPVOID, DWORD);
+
+static LONG open_failures;      /* capped, so one missing file cannot flood the log */
+
+/* The game builds movie paths from "DATA:" + "FILE/MOVIE" + "%s/%s/%s" +
+ * ".webm", so match on the folder as well as the extension -- a lookup that
+ * never reaches the filename still tells us it tried. */
+static BOOL is_movie_path(const WCHAR *p)
+{
+    static const WCHAR *needles[] = { L"MOVIE", L"movie", L"Movie", L"webm", L"WEBM" };
+    unsigned i;
+    if (!p) return FALSE;
+    for (i = 0; i < sizeof(needles) / sizeof(needles[0]); ++i)
+        if (wcsstr(p, needles[i])) return TRUE;
+    return FALSE;
+}
 static HRESULT (WINAPI *real_MFStartup)(ULONG, DWORD);
 static HRESULT (WINAPI *real_MFShutdown)(void);
 static HRESULT (WINAPI *real_MFCreateDXGIDeviceManager)(UINT *, void **);
@@ -209,17 +227,50 @@ static HANDLE WINAPI my_CreateFileW(LPCWSTR name, DWORD access, DWORD share,
 {
     HANDLE h = real_CreateFileW(name, access, share, sa, disposition, flags, template_file);
 
-    /* Only the movies. A game opens thousands of other files. */
-    if (name)
+    if (h == INVALID_HANDLE_VALUE)
     {
-        const WCHAR *dot = wcsrchr(name, L'.');
-        if (dot && (!_wcsicmp(dot, L".webm") || !_wcsicmp(dot, L".mkv")))
+        /* Every failure, up to a limit: whatever the video system cannot find
+         * may not be the movie itself. */
+        DWORD err = GetLastError();
+        if (InterlockedIncrement(&open_failures) <= 60)
         {
-            logf_("CreateFileW %s", h == INVALID_HANDLE_VALUE ? "FAILED" : "ok");
+            logf_("CreateFileW FAILED (error %lu)", (unsigned long)err);
             log_wstr("path", name);
-            if (h == INVALID_HANDLE_VALUE)
-                logf_("  GetLastError: %lu", (unsigned long)GetLastError());
         }
+        SetLastError(err);
+    }
+    else if (is_movie_path(name))
+    {
+        logf_("CreateFileW ok");
+        log_wstr("path", name);
+    }
+    return h;
+}
+
+static HANDLE WINAPI my_FindFirstFileW(LPCWSTR name, LPWIN32_FIND_DATAW data)
+{
+    HANDLE h = real_FindFirstFileW(name, data);
+    if (is_movie_path(name))
+    {
+        DWORD err = GetLastError();
+        logf_("FindFirstFileW %s", h == INVALID_HANDLE_VALUE ? "NOT FOUND" : "found");
+        log_wstr("path", name);
+        SetLastError(err);
+    }
+    return h;
+}
+
+static HANDLE WINAPI my_FindFirstFileExW(LPCWSTR name, FINDEX_INFO_LEVELS level,
+                                         LPVOID data, FINDEX_SEARCH_OPS op,
+                                         LPVOID filter, DWORD flags)
+{
+    HANDLE h = real_FindFirstFileExW(name, level, data, op, filter, flags);
+    if (is_movie_path(name))
+    {
+        DWORD err = GetLastError();
+        logf_("FindFirstFileExW %s", h == INVALID_HANDLE_VALUE ? "NOT FOUND" : "found");
+        log_wstr("path", name);
+        SetLastError(err);
     }
     return h;
 }
@@ -243,17 +294,28 @@ static FARPROC WINAPI my_GetProcAddress(HMODULE module, LPCSTR name)
     return proc;
 }
 
+/* The last run showed MFStartup every 16-17 ms -- once a frame, always S_OK.
+ * That is a per-frame tick, not a retry, and 2200 copies of it drown the log.
+ * Report the first few and then only the count. */
+static LONG mf_startups;
+
 static HRESULT WINAPI my_MFStartup(ULONG version, DWORD flags)
 {
     HRESULT hr = real_MFStartup(version, flags);
-    logf_("MFStartup(version=0x%lx, flags=%lu)", (unsigned long)version, (unsigned long)flags);
-    log_hr("result", hr);
+    LONG n = InterlockedIncrement(&mf_startups);
+    if (n <= 3 || FAILED(hr))
+    {
+        logf_("MFStartup(version=0x%lx, flags=%lu)  [#%ld]",
+              (unsigned long)version, (unsigned long)flags, n);
+        log_hr("result", hr);
+    }
+    else if (n == 4)
+        logf_("MFStartup ... (further successful calls counted, not logged)");
     return hr;
 }
 
 static HRESULT WINAPI my_MFShutdown(void)
 {
-    logf_("MFShutdown");
     return real_MFShutdown();
 }
 
@@ -399,6 +461,8 @@ static DWORD WINAPI worker(LPVOID unused)
     logf_("=== mf-probe attached ===");
     HOOK("KERNEL32.dll", GetProcAddress);
     HOOK("KERNEL32.dll", CreateFileW);
+    HOOK("KERNEL32.dll", FindFirstFileW);
+    HOOK("KERNEL32.dll", FindFirstFileExW);
     HOOK("ole32.dll", CoCreateInstance);
     HOOK("MFPlat.DLL", MFStartup);
     HOOK("MFPlat.DLL", MFShutdown);
@@ -409,6 +473,15 @@ static DWORD WINAPI worker(LPVOID unused)
     HOOK("MFReadWrite.dll", MFCreateSourceReaderFromByteStream);
     logf_("");
     return 0;
+}
+
+/* Written on the way out, so the counts land even though the per-frame calls
+ * are not logged individually. */
+static void report_totals(void)
+{
+    logf_("");
+    logf_("=== totals: %ld MFStartup, %ld failed file opens ===",
+          mf_startups, open_failures);
 }
 
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
@@ -423,5 +496,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
         thread = CreateThread(NULL, 0, worker, NULL, 0, NULL);
         if (thread) CloseHandle(thread);
     }
+    else if (reason == DLL_PROCESS_DETACH && !reserved)
+        report_totals();
     return TRUE;
 }
