@@ -57,32 +57,64 @@ turns up only `Electra.Win.H264UseOldOutputPath` and
 
 ## The fix
 
-Move the cutscenes onto the guarded path: transcode them to H.264, then remove
-the originals from the `.pak` index so the engine reads your transcodes instead.
+Two of them. Both keep D3D12 active, so you keep PSO precompilation. (`-dx11`
+also dodges the crash, but Unreal does not precompile PSOs on the D3D11 RHI,
+which means permanent shader-compilation stutter.)
 
-D3D12 stays active, so you keep PSO precompilation. (`-dx11` also dodges the
-crash, but Unreal does not precompile PSOs on the D3D11 RHI, which means
-permanent shader-compilation stutter.)
+**Runtime patch** — the default. A small proxy DLL patches Electra in memory as
+the game starts, so its VPx decoder takes the same CPU output path that every
+D3D11 machine already uses. Your original VP9 cutscenes play, untouched.
+
+**Re-encode** — the original fix. Transcode the cutscenes to H.264 and drop the
+VP9 originals from the `.pak` index so the engine reads your files instead.
+Still here for titles that ship no `libogg` for the runtime patch to ride on.
+
+|                          | Runtime patch          | Re-encode                       |
+| ------------------------ | ---------------------- | ------------------------------- |
+| Time to apply            | a second               | ~20 minutes                     |
+| Needs ffmpeg             | no                     | yes                             |
+| Disk used                | 72 KB                  | ~1 GB                           |
+| Picture quality          | original VP9           | re-encoded H.264                |
+| Shipped files edited     | none                   | `Movies/`, `pakchunk0` index    |
+
+Neither survives Steam's **verify integrity of game files** — that puts every
+original back, including the DLL we moved aside. Re-apply afterwards.
 
 ---
 
 ## Requirements
 
 - Apple Silicon Mac, macOS 14 or later
-- CrossOver 26.2 / 26.3, patched with [winevideo](https://github.com/Jfishin/winevideo)
+- CrossOver 26.2 / 26.3
+
+For the **re-encode** mode, additionally:
+
+- [winevideo](https://github.com/Jfishin/winevideo) applied to CrossOver
 - [ffmpeg](https://ffmpeg.org) — `brew install ffmpeg`
 - Roughly 1 GB of free space for the backup and the transcodes
 
-winevideo is not optional. Its patches 0005–0007 are what make Electra's H.264
-Media Foundation path work on macOS at all — without them you would be moving
-the cutscenes onto a path that is equally broken, just in a different way.
+winevideo is not optional for that mode. Its patches 0005–0007 are what make
+Electra's H.264 Media Foundation path work on macOS at all — without them you
+would be moving the cutscenes onto a path that is equally broken, just in a
+different way.
+
+The **runtime** mode most likely does not need winevideo: VP9 never goes through
+Media Foundation, because Electra decodes it with its own bundled libvpx. Only
+the *output* conversion was broken, and that is exactly what the patch reroutes.
+This has not been tested on an unpatched CrossOver, so it is stated as an
+expectation and not as a fact.
 
 ## Quick start
 
 1. Download `MortalShell2MacFix.app` from
    [Releases](../../releases), or build it yourself with `app/build-app.sh`.
 2. Create the user `Engine.ini` described below.
-3. Open the app, drop the game folder on it, and press **Apply Fix**.
+3. Open the app, drop the game folder on it, pick a mode, and press
+   **Apply Fix**. Leave it on **Runtime patch** unless the app tells you the
+   game ships no `libogg`.
+
+The two modes solve the same problem, so the app will not let you apply one
+while the other is in place. **Revert** puts everything back either way.
 
 ### Which folder to pick
 
@@ -148,7 +180,25 @@ chmod 444 ".../Saved/Config/Windows/Engine.ini"
 
 ## Using the scripts directly
 
-Both scripts are standalone and reversible.
+Every script is standalone and reversible.
+
+### Runtime patch
+
+```bash
+runtime/install-runtime-fix.sh "/path/to/<Game>/Content"            # install
+runtime/install-runtime-fix.sh "/path/to/<Game>/Content" --status   # report
+runtime/install-runtime-fix.sh "/path/to/<Game>/Content" --restore  # remove
+```
+
+It expects `libogg_64.dll` and `pe.py` beside it. The release ships a
+prebuilt DLL; to build your own you need
+[llvm-mingw](https://github.com/mstorsjo/llvm-mingw/releases):
+
+```bash
+runtime/build-proxy.sh "/path/to/<Game>/Engine/Binaries/ThirdParty/Ogg/Win64/VS2015/libogg_64.dll"
+```
+
+### Re-encode
 
 ```bash
 # 1. Transcode. Originals are copied to Movies_VP9_backup/ first.
@@ -169,6 +219,52 @@ interpreter macOS already ships.
 ---
 
 ## How it works
+
+### The runtime patch
+
+Electra decides whether to use the D3D12 buffer pool by comparing the D3D
+version against 12000 — `bUseGPUBuffers = (PlatformDevice && PlatformDeviceVersion >= 12000)`.
+The compiler turns that into:
+
+```asm
+cmp dword [rbp+disp], 12000     ; 81 7D xx E0 2E 00 00
+jl  <cpu path>                  ; 7C xx   or   0F 8C xx xx xx xx
+```
+
+We raise the 12000 to `INT_MAX`, so the comparison always takes the CPU branch.
+Four bytes per site, four sites in this build. Nothing else is touched: the
+decoder still decodes VP9 with its own libvpx, and Unreal presents the frames
+the way it does on any D3D11 machine.
+
+The compare has to be against a **stack slot** (`81 7D` / `81 BD`). The H.264
+and H.265 decoders compare a register instead, and they already have a way out
+through `Electra.Win.H264UseOldOutputPath` — leaving them alone keeps this
+change to the one decoder that has no other option.
+
+It is a pattern scan, not a table of offsets, because a game update moves
+everything: between two builds of Mortal Shell 2 the crash site alone shifted by
+`0x2C70`. If the pattern does not match, nothing is written and the log says so.
+
+### Getting the patch into the process
+
+The game has no plugin hook, so the patch rides in on a DLL the engine already
+loads. `libogg_64.dll` is a good carrier: every Unreal title ships it, it loads
+before any cutscene, its ABI has been frozen for years, and it has nothing to do
+with rendering — so a proxy in front of it cannot disturb the renderer.
+
+```
+libogg_64.dll    <- our proxy, 72 KB
+libogg_real.dll  <- the game's original, renamed, untouched
+```
+
+The proxy re-exports all 64 symbols as PE **forwarders** straight to
+`libogg_real`, so the Windows loader resolves them on demand and no thunk code
+of ours ever runs. The only thing we get is `DllMain`, which starts a thread and
+applies the patch.
+
+The installer refuses to run if the game's `libogg` exports anything the shipped
+proxy does not forward — a missing entry point would stop the game from starting
+at all, so it is better to fail early and ask for a rebuild.
 
 ### Why the loose files are not enough
 
@@ -209,6 +305,44 @@ textures. So decode cost matters more than it normally would, hence
 timecode track by default, and a third track is enough to stop Electra from
 presenting video — audio keeps playing, the picture stays black. Every video
 that works has exactly two tracks.
+
+## Other games
+
+Nothing here is specific to Mortal Shell 2. The null dereference is in
+`ElectraMediaVPxDecoder`, which is engine code, so any UE5 title that plays VP9
+cutscenes on D3D12 under D3DMetal crashes the same way — same stack, same
+address, different offsets.
+
+You are looking at this bug if the crash log names
+`FElectraMediaDecoderOutputBufferPoolBlock_DX12::AllocateBuffer` and your
+`Content/Movies` files report `vp9`:
+
+```bash
+ffprobe -v error -select_streams v:0 -show_entries stream=codec_name \
+        -of csv=p=0 "/path/to/<Game>/Content/Movies/<something>.mp4"
+```
+
+Both modes are written to fail loudly rather than guess, so pointing the app at
+another game is safe to try. What each one needs:
+
+**Runtime patch** — the game must ship `Engine/Binaries/ThirdParty/Ogg/Win64/*/libogg_64.dll`
+(nearly all UE titles do), its exports must be a subset of the ones the shipped
+proxy forwards (the installer checks, and tells you to rebuild if not), and the
+compiler must have emitted the version check against a stack slot. If that last
+one differs, the log says `0 found` and nothing is written — the patch is
+inert, not harmful.
+
+**Re-encode** — the pak must be version 11 with an unencrypted index and a
+`FullDirectoryIndex`. `pak-hide-videos.py` checks all three and refuses
+otherwise.
+
+Two cautions. This patches a running process, so **do not use it with a game
+that has anti-cheat** — that is exactly the behaviour anti-cheat exists to stop,
+and you risk a ban. And a title that ships its own modified Electra may place
+the check somewhere the scan does not reach; a `0 found` in the log means try
+the re-encode mode instead.
+
+---
 
 ## Troubleshooting
 

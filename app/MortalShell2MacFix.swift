@@ -82,16 +82,48 @@ private func runStreaming(_ executable: String,
 
 // MARK: - Model
 
+/// The two ways to stop the crash. They are alternatives, never combined.
+enum Mode: String, CaseIterable, Identifiable {
+    /// Patch Electra in memory as the game starts. Nothing on disk changes.
+    case runtime
+    /// Re-encode the cutscenes to H.264 and hide the pak's VP9 copies.
+    case transcode
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .runtime:   return "Runtime patch"
+        case .transcode: return "Re-encode cutscenes"
+        }
+    }
+
+    var blurb: String {
+        switch self {
+        case .runtime:
+            return "Adds one small DLL beside the game's own. "
+                 + "Your original VP9 cutscenes play untouched, and it takes a second."
+        case .transcode:
+            return "Converts every cutscene to H.264 and edits the pak index. "
+                 + "Slower, needs ffmpeg, and slightly softens the picture."
+        }
+    }
+}
+
+
 enum Phase {
     case idle, transcoding, patchingPak, restoringPak, restoringMovies
+    case installingRuntime, removingRuntime
 
     var label: String {
         switch self {
-        case .idle:             return ""
-        case .transcoding:      return "Transcoding cutscenes to H.264"
-        case .patchingPak:      return "Removing video entries from the pak index"
-        case .restoringPak:     return "Restoring the pak index"
-        case .restoringMovies:  return "Restoring the original cutscenes"
+        case .idle:              return ""
+        case .transcoding:       return "Transcoding cutscenes to H.264"
+        case .patchingPak:       return "Removing video entries from the pak index"
+        case .restoringPak:      return "Restoring the pak index"
+        case .restoringMovies:   return "Restoring the original cutscenes"
+        case .installingRuntime: return "Installing the runtime patch"
+        case .removingRuntime:   return "Removing the runtime patch"
         }
     }
 
@@ -99,11 +131,13 @@ enum Phase {
     /// instead of resetting between steps. Transcoding is the long pole.
     var span: ClosedRange<Double> {
         switch self {
-        case .idle:            return 0...0
-        case .transcoding:     return 0...0.92
-        case .patchingPak:     return 0.92...1
-        case .restoringPak:    return 0...0.15
-        case .restoringMovies: return 0.15...1
+        case .idle:              return 0...0
+        case .transcoding:       return 0...0.92
+        case .patchingPak:       return 0.92...1
+        case .restoringPak:      return 0...0.15
+        case .restoringMovies:   return 0.15...1
+        case .installingRuntime,
+             .removingRuntime:   return 0...1
         }
     }
 }
@@ -156,7 +190,11 @@ enum FixState {
 
 @MainActor
 final class Runner: ObservableObject {
-    @Published var state: FixState = .unknown
+    @Published var mode: Mode = .runtime
+    /// Set when the game ships no libogg, so the runtime patch cannot be used.
+    @Published var runtimeUnavailable = false
+    @Published var runtimeState: FixState = .unknown
+    @Published var transcodeState: FixState = .unknown
     @Published var log: [String] = []
     @Published var busy = false
     @Published var game: GameFolder?
@@ -168,6 +206,18 @@ final class Runner: ObservableObject {
     @Published var detail = ""          // e.g. "34 of 61 · Movie_Tut_Parry.mp4"
 
     private var resources: URL { Bundle.main.resourceURL ?? URL(fileURLWithPath: ".") }
+
+    /// First line of the installer's --status output, filled on the main actor.
+    private var statusAnswer = ""
+
+    /// The selected mode's own state, and the other one's.
+    var state: FixState { mode == .runtime ? runtimeState : transcodeState }
+    var otherState: FixState { mode == .runtime ? transcodeState : runtimeState }
+
+    /// Both fixes cure the same crash, so having both in place is never useful
+    /// and makes reverting ambiguous. Offer Apply only when the other is clear.
+    var canApply: Bool { !busy && state.canApply && otherState == .notApplied }
+    var canRevert: Bool { !busy && state.canRevert }
 
     /// Parses the "[12/61] ok some/file.mp4" lines the scripts emit.
     /// Hand-rolled rather than a regex so the parse is obvious and cheap --
@@ -200,17 +250,20 @@ final class Runner: ObservableObject {
             return
         }
         game = g
-        state = .unknown
+        runtimeState = .unknown
+        transcodeState = .unknown
         log.removeAll()
         resetProgress()
         note("Game content: \(g.content.path)")
-        inspect(g)
+        Task { await inspect(g) }
     }
 
-    func inspect(_ g: GameFolder) {
+    func inspect(_ g: GameFolder) async {
         let fm = FileManager.default
         let movies = (try? fm.subpathsOfDirectory(atPath: g.movies.path)) ?? []
         note("Found \(movies.filter { $0.hasSuffix(".mp4") }.count) .mp4 files under Movies/")
+
+        await inspectRuntime(g)
 
         guard let pak = g.mainPak else {
             status = "No .pak found in Content/Paks."
@@ -224,13 +277,58 @@ final class Runner: ObservableObject {
         let backedUp = fm.fileExists(atPath: g.content.appendingPathComponent("Movies_VP9_backup").path)
 
         if patched && backedUp {
-            state = .applied
-            status = "Fix is applied. Cutscenes should play."
+            transcodeState = .applied
         } else if patched || backedUp {
-            state = .partial
-            status = "Partially applied — finish it, or revert to undo."
+            transcodeState = .partial
         } else {
-            state = .notApplied
+            transcodeState = .notApplied
+        }
+
+        describe()
+    }
+
+    /// Asks the installer what it sees, rather than repeating its search for
+    /// the Ogg folder here -- one definition of "installed", not two.
+    private func inspectRuntime(_ g: GameFolder) async {
+        let script = resources.appendingPathComponent("install-runtime-fix.sh").path
+        statusAnswer = ""
+        // The handler fires off the main actor, so hop back rather than
+        // capturing a local -- same pattern as run().
+        let code = await runStreaming("/bin/bash", [script, g.content.path, "--status"]) { line in
+            Task { @MainActor [weak self] in
+                guard let self, self.statusAnswer.isEmpty else { return }
+                self.statusAnswer = line
+            }
+        }
+        await Task.yield()
+
+        guard code == 0 else {
+            // No libogg in this title: the runtime patch has no way in, but the
+            // transcode mode still works.
+            runtimeState = .notApplied
+            note("This game has no libogg for the runtime patch to ride on.")
+            runtimeUnavailable = true
+            return
+        }
+        runtimeUnavailable = false
+        switch statusAnswer.split(separator: " ", maxSplits: 1).first.map(String.init) {
+        case "installed": runtimeState = .applied
+        case "broken":    runtimeState = .partial
+        default:          runtimeState = .notApplied
+        }
+    }
+
+    /// One sentence covering whatever is actually in place.
+    private func describe() {
+        if runtimeState == .applied && transcodeState == .applied {
+            status = "Both fixes are in place — revert one."
+        } else if runtimeState == .applied {
+            status = "Runtime patch installed. Cutscenes should play."
+        } else if transcodeState == .applied {
+            status = "Re-encoded cutscenes in place. They should play."
+        } else if runtimeState == .partial || transcodeState == .partial {
+            status = "Partially applied — revert to undo, then try again."
+        } else {
             status = "Not patched yet."
         }
     }
@@ -277,6 +375,65 @@ final class Runner: ObservableObject {
     }
 
     func apply() {
+        switch mode {
+        case .runtime:   applyRuntime()
+        case .transcode: applyTranscode()
+        }
+    }
+
+    func revert() {
+        switch mode {
+        case .runtime:   revertRuntime()
+        case .transcode: revertTranscode()
+        }
+    }
+
+    // MARK: Runtime patch
+
+    private func applyRuntime() {
+        guard let g = game else { return }
+        busy = true
+        Task {
+            defer { busy = false; indeterminate = false; phaseLabel = ""; detail = "" }
+            status = "Working…"
+            progress = 0
+
+            let script = resources.appendingPathComponent("install-runtime-fix.sh").path
+            guard await run(.installingRuntime, "/bin/bash", [script, g.content.path]) else {
+                status = "Could not install the runtime patch."
+                await inspect(g)
+                return
+            }
+
+            progress = 1
+            note("")
+            note("Done. Launch the game — the original cutscenes should play.")
+            note("Note: Steam's \"verify integrity of game files\" undoes this.")
+            await inspect(g)
+        }
+    }
+
+    private func revertRuntime() {
+        guard let g = game else { return }
+        busy = true
+        Task {
+            defer { busy = false; indeterminate = false; phaseLabel = ""; detail = "" }
+            status = "Reverting…"
+            progress = 0
+
+            let script = resources.appendingPathComponent("install-runtime-fix.sh").path
+            _ = await run(.removingRuntime, "/bin/bash", [script, g.content.path, "--restore"])
+
+            progress = 1
+            note("")
+            note("Reverted. The game is back to its original files.")
+            await inspect(g)
+        }
+    }
+
+    // MARK: Re-encoding
+
+    private func applyTranscode() {
         guard let g = game, let pak = g.mainPak else { return }
         busy = true
         Task {
@@ -308,12 +465,11 @@ final class Runner: ObservableObject {
             note("")
             note("Done. Launch the game — the cutscenes should play.")
             note("Note: Steam's \"verify integrity of game files\" undoes this.")
-            status = "Fix applied."
-            inspect(g)
+            await inspect(g)
         }
     }
 
-    func revert() {
+    private func revertTranscode() {
         guard let g = game, let pak = g.mainPak else { return }
         busy = true
         Task {
@@ -330,8 +486,7 @@ final class Runner: ObservableObject {
             progress = 1
             note("")
             note("Reverted. The game is back to its original files.")
-            status = "Reverted."
-            inspect(g)
+            await inspect(g)
         }
     }
 
@@ -355,7 +510,10 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 16) {
             header
             dropZone
-            if runner.game != nil { actions }
+            if runner.game != nil {
+                modePicker
+                actions
+            }
             if runner.busy || runner.progress > 0 { progressBar }
             logView
         }
@@ -405,16 +563,32 @@ struct ContentView: View {
             }
     }
 
+    private var modePicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Picker("", selection: $runner.mode) {
+                ForEach(Mode.allCases) { m in Text(m.title).tag(m) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .disabled(runner.busy)
+
+            Text(runner.runtimeUnavailable && runner.mode == .runtime
+                 ? "This game ships no libogg, so the runtime patch has nothing to load from. Use the other mode."
+                 : runner.mode.blurb)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private var actions: some View {
         HStack(spacing: 12) {
             Button("Apply Fix") { runner.apply() }
                 .keyboardShortcut(.defaultAction)
-                .disabled(runner.busy || !runner.state.canApply)
-                .help(runner.state == .applied
-                      ? "Already applied. Revert first if you want to run it again."
-                      : "Transcode the cutscenes and hide the pak's copies.")
+                .disabled(!runner.canApply)
+                .help(applyHelp)
             Button("Revert") { runner.revert() }
-                .disabled(runner.busy || !runner.state.canRevert)
+                .disabled(!runner.canRevert)
                 .help(runner.state == .notApplied
                       ? "Nothing to revert."
                       : "Put the original files back.")
@@ -422,6 +596,19 @@ struct ContentView: View {
             Text(runner.status)
                 .font(.callout)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private var applyHelp: String {
+        if runner.state == .applied {
+            return "Already applied. Revert first if you want to run it again."
+        }
+        if runner.otherState != .notApplied {
+            return "Revert the other fix first — the two solve the same problem."
+        }
+        switch runner.mode {
+        case .runtime:   return "Install the proxy DLL that patches Electra at startup."
+        case .transcode: return "Re-encode the cutscenes and hide the pak's copies."
         }
     }
 

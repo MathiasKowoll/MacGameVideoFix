@@ -61,6 +61,17 @@ echo "==> bundling scripts"
 cp "$ROOT/scripts/transcode-movies.sh" "$ROOT/scripts/pak-hide-videos.py" "$RES/"
 chmod +x "$RES/transcode-movies.sh" "$RES/pak-hide-videos.py"
 
+# The runtime patch: the installer resolves the proxy and the PE reader next to
+# itself, so all three have to land in the same folder.
+cp "$ROOT/runtime/install-runtime-fix.sh" "$ROOT/runtime/pe.py" "$RES/"
+chmod +x "$RES/install-runtime-fix.sh" "$RES/pe.py"
+if [ -f "$ROOT/runtime/libogg_64.dll" ]; then
+  cp "$ROOT/runtime/libogg_64.dll" "$RES/"
+else
+  echo "    warning: runtime/libogg_64.dll missing — the runtime mode will not work."
+  echo "    build it with: runtime/build-proxy.sh <the game's libogg_64.dll>"
+fi
+
 # Signing.
 #   Ad-hoc by default: works locally, but macOS blocks the first launch for
 #   anyone who downloads it (Right click > Open gets around that).
