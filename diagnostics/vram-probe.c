@@ -132,14 +132,78 @@ static UINT64 last_budget, last_usage;
  * values are only logged when they change, so a spin shows up as a rate
  * rather than as a hundred thousand identical lines.
  */
+/*
+ * Answer from a cache, and time what it costs when we do not.
+ *
+ * The first theory was memory pressure, and the log killed it: 75 GB of budget
+ * against 751 MB in use, never once full. What it showed instead is the rate --
+ * 2600 calls a second early on, rising past 9400 by the ninetieth. That is not
+ * a tight loop, which would manage millions; it is a loop whose every
+ * iteration is expensive.
+ *
+ * Which changes what is wrong. Unreal probably always polled this hard, and on
+ * Windows the call is cheap. If D3DMetal's costs a hundred microseconds, ten
+ * thousand of them is the whole thread -- which is exactly what the spindump
+ * showed, one thread saturated and the renderer starving behind it.
+ *
+ * So: measure the real call, and serve repeats from a cache. Video memory
+ * figures do not change meaningfully inside a frame, and a caller polling
+ * thousands of times a second is not reacting to any of them.
+ */
+#define CACHE_WINDOW_MS 100
+
+struct vram_cache
+{
+    DXGI_QUERY_VIDEO_MEMORY_INFO info;
+    ULONGLONG taken;
+    BOOL valid;
+};
+static struct vram_cache cache[2];          /* one per memory segment group */
+static const BOOL serve_from_cache = TRUE;
+static LONG served, measured;
+static ULONGLONG total_call_us;
+
 static HRESULT WINAPI my_query_vram(void *self, UINT node,
                                     DXGI_MEMORY_SEGMENT_GROUP group,
                                     DXGI_QUERY_VIDEO_MEMORY_INFO *info)
 {
-    HRESULT hr = real_query_vram(self, node, group, info);
     LONG n = InterlockedIncrement(&vram_calls);
+    HRESULT hr;
+    ULONGLONG now = GetTickCount64();
+    unsigned slot = (group == DXGI_MEMORY_SEGMENT_GROUP_LOCAL) ? 0 : 1;
 
-    if (n == 1) first_call_tick = GetTickCount64();
+    if (n == 1) first_call_tick = now;
+
+    if (serve_from_cache && info && cache[slot].valid
+        && now - cache[slot].taken < CACHE_WINDOW_MS)
+    {
+        *info = cache[slot].info;
+        InterlockedIncrement(&served);
+        return S_OK;
+    }
+
+    {
+        LARGE_INTEGER a, b, freq;
+        QueryPerformanceFrequency(&freq);
+        QueryPerformanceCounter(&a);
+        hr = real_query_vram(self, node, group, info);
+        QueryPerformanceCounter(&b);
+        if (freq.QuadPart)
+        {
+            LONG m = InterlockedIncrement(&measured);
+            total_call_us += (b.QuadPart - a.QuadPart) * 1000000 / freq.QuadPart;
+            if (m <= 3 || (m % 500) == 0)
+                logf_("  real call #%ld averaged %lluus", m,
+                      (unsigned long long)(total_call_us / m));
+        }
+    }
+
+    if (SUCCEEDED(hr) && info && slot < 2)
+    {
+        cache[slot].info = *info;
+        cache[slot].taken = now;
+        cache[slot].valid = TRUE;
+    }
 
     if (SUCCEEDED(hr) && info)
     {
@@ -265,6 +329,7 @@ static DWORD WINAPI worker(LPVOID unused)
     logf_("");
     logf_("=== vram-probe attached ===");
     logf_("  headroom: %s", grant_headroom ? "granted when the budget reads full" : "measuring only");
+    logf_("  cache:    %s", serve_from_cache ? "repeats served within 100ms" : "every call passed through");
     real_CreateDXGIFactory  = hook_import("dxgi.dll", "CreateDXGIFactory",  my_CreateDXGIFactory);
     real_CreateDXGIFactory1 = hook_import("dxgi.dll", "CreateDXGIFactory1", my_CreateDXGIFactory1);
     logf_("  CreateDXGIFactory  %s", real_CreateDXGIFactory  ? "hooked" : "not imported");
@@ -272,10 +337,21 @@ static DWORD WINAPI worker(LPVOID unused)
     return 0;
 }
 
+static void report_totals(void)
+{
+    LONG total = vram_calls;
+    logf_("");
+    logf_("=== totals: %ld calls, %ld served from cache (%ld%%), %ld real, "
+          "%lluus average ===",
+          total, served, total ? (served * 100 / total) : 0, measured,
+          measured ? (unsigned long long)(total_call_us / measured) : 0ull);
+}
+
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
 {
     HANDLE thread;
     (void)reserved;
+    if (reason == DLL_PROCESS_DETACH && !reserved) report_totals();
     if (reason == DLL_PROCESS_ATTACH)
     {
         InitializeCriticalSection(&log_lock);
