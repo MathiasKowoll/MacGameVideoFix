@@ -28,6 +28,7 @@
 #include <mfidl.h>
 #include <mfreadwrite.h>
 #include <d3d11.h>
+#include <d3d12.h>
 #include <mferror.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -824,17 +825,170 @@ static HRESULT WINAPI texture_qi(void *self, REFIID iid, void **out)
 static HRESULT (WINAPI *real_D3D12CreateDevice)(void *, UINT, REFIID, void **);
 static HRESULT (WINAPI *real_open_shared_handle)(void *, HANDLE, REFIID, void **);
 
+/*
+ * The far side of the bridge.
+ *
+ * The game asks for IID_ID3D12Resource in exchange for the handle, so give it
+ * a texture of ours on its own device and keep a way to write into it: an
+ * upload buffer, a copy queue, and a fence.
+ *
+ * A copy queue rather than a direct one, deliberately. Resources sit in
+ * COMMON, are promoted implicitly for the copy, and decay back to COMMON when
+ * the list finishes, so no barriers are needed and nothing is assumed about
+ * the state the game's renderer expects to find. It also keeps this work off
+ * the queue the game draws with.
+ */
+static ID3D12Device *bridge_device;
+static ID3D12Resource *bridge_texture;
+static ID3D12Resource *bridge_upload;
+static ID3D12CommandQueue *bridge_queue;
+static ID3D12CommandAllocator *bridge_alloc;
+static ID3D12GraphicsCommandList *bridge_list;
+static ID3D12Fence *bridge_fence;
+static HANDLE bridge_event;
+static UINT64 bridge_fence_value;
+static D3D12_PLACED_SUBRESOURCE_FOOTPRINT bridge_footprint;
+static UINT bridge_rows;
+static UINT64 bridge_row_bytes, bridge_total_bytes;
+
+#define BRIDGE_CHECK(call, what)                                          \
+    do {                                                                  \
+        HRESULT _hr = (call);                                             \
+        if (FAILED(_hr)) {                                                 \
+            logf_("  bridge: %s failed", what);                            \
+            log_hr("    result", _hr);                                     \
+            return _hr;                                                    \
+        }                                                                  \
+    } while (0)
+
+static HRESULT bridge_create(ID3D12Device *device, UINT width, UINT height)
+{
+    D3D12_HEAP_PROPERTIES heap = { 0 };
+    D3D12_RESOURCE_DESC desc = { 0 };
+    D3D12_COMMAND_QUEUE_DESC queue = { 0 };
+
+    heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = width;
+    desc.Height = height;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    BRIDGE_CHECK(ID3D12Device_CreateCommittedResource(device, &heap,
+            D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COMMON, NULL,
+            &IID_ID3D12Resource, (void **)&bridge_texture), "texture");
+
+    ID3D12Device_GetCopyableFootprints(device, &desc, 0, 1, 0, &bridge_footprint,
+            &bridge_rows, &bridge_row_bytes, &bridge_total_bytes);
+
+    heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+    memset(&desc, 0, sizeof(desc));
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = bridge_total_bytes;
+    desc.Height = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_UNKNOWN;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    BRIDGE_CHECK(ID3D12Device_CreateCommittedResource(device, &heap,
+            D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_GENERIC_READ, NULL,
+            &IID_ID3D12Resource, (void **)&bridge_upload), "upload buffer");
+
+    queue.Type = D3D12_COMMAND_LIST_TYPE_COPY;
+    BRIDGE_CHECK(ID3D12Device_CreateCommandQueue(device, &queue,
+            &IID_ID3D12CommandQueue, (void **)&bridge_queue), "copy queue");
+    BRIDGE_CHECK(ID3D12Device_CreateCommandAllocator(device,
+            D3D12_COMMAND_LIST_TYPE_COPY, &IID_ID3D12CommandAllocator,
+            (void **)&bridge_alloc), "allocator");
+    BRIDGE_CHECK(ID3D12Device_CreateCommandList(device, 0,
+            D3D12_COMMAND_LIST_TYPE_COPY, bridge_alloc, NULL,
+            &IID_ID3D12GraphicsCommandList, (void **)&bridge_list), "command list");
+    ID3D12GraphicsCommandList_Close(bridge_list);
+    BRIDGE_CHECK(ID3D12Device_CreateFence(device, 0, D3D12_FENCE_FLAG_NONE,
+            &IID_ID3D12Fence, (void **)&bridge_fence), "fence");
+
+    bridge_event = CreateEventA(NULL, FALSE, FALSE, NULL);
+    bridge_device = device;
+    logf_("  bridge: %ux%u texture ready, upload pitch %u, %llu bytes",
+          width, height, bridge_footprint.Footprint.RowPitch,
+          (unsigned long long)bridge_total_bytes);
+    return S_OK;
+}
+
+/* Copy one converted frame across. Rows are re-pitched: D3D12 wants each row
+ * of the upload buffer aligned, and ours are packed. */
+static void bridge_upload_frame(const BYTE *bgra, UINT width, UINT height)
+{
+    D3D12_TEXTURE_COPY_LOCATION dst = { 0 }, src = { 0 };
+    BYTE *mapped = NULL;
+    UINT y;
+
+    if (!bridge_texture || !bridge_upload || !bridge_list) return;
+    if (FAILED(ID3D12Resource_Map(bridge_upload, 0, NULL, (void **)&mapped)) || !mapped)
+        return;
+    for (y = 0; y < height; ++y)
+        memcpy(mapped + (size_t)bridge_footprint.Footprint.RowPitch * y,
+               bgra + (size_t)width * 4 * y, (size_t)width * 4);
+    ID3D12Resource_Unmap(bridge_upload, 0, NULL);
+
+    ID3D12CommandAllocator_Reset(bridge_alloc);
+    ID3D12GraphicsCommandList_Reset(bridge_list, bridge_alloc, NULL);
+
+    dst.pResource = bridge_texture;
+    dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    dst.SubresourceIndex = 0;
+    src.pResource = bridge_upload;
+    src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    src.PlacedFootprint = bridge_footprint;
+    ID3D12GraphicsCommandList_CopyTextureRegion(bridge_list, &dst, 0, 0, 0, &src, NULL);
+    ID3D12GraphicsCommandList_Close(bridge_list);
+
+    ID3D12CommandQueue_ExecuteCommandLists(bridge_queue, 1,
+            (ID3D12CommandList *const *)&bridge_list);
+
+    /* Wait for it. winevideo needed the same on their bridge: letting the
+     * frame go before the copy lands shows the previous one, or nothing. */
+    ++bridge_fence_value;
+    if (SUCCEEDED(ID3D12CommandQueue_Signal(bridge_queue, bridge_fence, bridge_fence_value))
+        && ID3D12Fence_GetCompletedValue(bridge_fence) < bridge_fence_value
+        && bridge_event)
+    {
+        ID3D12Fence_SetEventOnCompletion(bridge_fence, bridge_fence_value, bridge_event);
+        WaitForSingleObject(bridge_event, 1000);
+    }
+}
+
 static HRESULT WINAPI d3d12_open_shared_handle(void *self, HANDLE handle,
                                                REFIID iid, void **out)
 {
     if (handle == BRIDGE_HANDLE)
     {
-        logf_("ID3D12Device::OpenSharedHandle with OUR handle -- the route is open");
+        HRESULT hr;
+
+        logf_("ID3D12Device::OpenSharedHandle with OUR handle -- building the bridge");
         log_guid("  asked for", iid);
-        /* Nothing to give it yet; refusing is honest and leaves the game no
-         * worse off than the E_NOTIMPL it gets today. */
-        if (out) *out = NULL;
-        return E_NOTIMPL;
+        if (!out) return E_INVALIDARG;
+        *out = NULL;
+        if (!IsEqualGUID(iid, &IID_ID3D12Resource))
+        {
+            logf_("  not ID3D12Resource -- nothing to give");
+            return E_NOINTERFACE;
+        }
+
+        EnterCriticalSection(&frame_lock);
+        if (!bridge_texture && frame_width && frame_height)
+            bridge_create((ID3D12Device *)self, frame_width, frame_height);
+        hr = bridge_texture ? S_OK : E_FAIL;
+        if (bridge_texture)
+        {
+            ID3D12Resource_AddRef(bridge_texture);
+            *out = bridge_texture;
+        }
+        LeaveCriticalSection(&frame_lock);
+        return hr;
     }
     logf_("ID3D12Device::OpenSharedHandle with a handle of its own: %p", handle);
     return real_open_shared_handle(self, handle, iid, out);
@@ -1173,6 +1327,7 @@ static void upload_frame(IMFSample *sample)
                 ID3D11DeviceContext_UpdateSubresource(video_context,
                         (ID3D11Resource *)frame_texture, 0, NULL,
                         frame_scratch, frame_width * 4, 0);
+                bridge_upload_frame(frame_scratch, frame_width, frame_height);
                 if (n <= 3)
                     logf_("  frame %ld converted and uploaded (%lu bytes in)",
                           n, (unsigned long)length);
