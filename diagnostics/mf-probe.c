@@ -1091,6 +1091,52 @@ static void *hook_import(const char *dll, const char *func, void *replacement)
         logf_("  %-40s %s", #name, real_##name ? "hooked" : "not imported");  \
     } while (0)
 
+/*
+ * The rest of the MFPlat surface, wrapped uniformly.
+ *
+ * Filling in the aspect ratio and interlace mode did not change anything, and
+ * that is eight guesses now. The game imports fifteen MFPlat functions and six
+ * were watched; the last line before a retry has to be one of the other nine,
+ * so stop choosing between them and take all of them.
+ *
+ * Each wrapper forwards four register arguments, which covers every one of
+ * these, and logs the result.
+ */
+static void *real_mf[9];
+static LONG mf_calls[9];
+static const char *const mf_names[9] =
+{
+    "MFCreateMFVideoFormatFromMFMediaType",
+    "MFCreateMediaType",
+    "MFCreateSample",
+    "MFCreateMemoryBuffer",
+    "MFCreateAlignedMemoryBuffer",
+    "MFCreateWaveFormatExFromMFMediaType",
+    "MFPutWorkItem2",
+    "MFCreateAsyncResult",
+    "MFInvokeCallback",
+};
+
+#define MF_WRAP(idx)                                                                  static ULONG_PTR WINAPI mfw_##idx(ULONG_PTR a, ULONG_PTR b, ULONG_PTR c,                                            ULONG_PTR d)                                    {                                                                                     ULONG_PTR (WINAPI *fn)(ULONG_PTR, ULONG_PTR, ULONG_PTR, ULONG_PTR)                    = real_mf[idx];                                                               ULONG_PTR r = fn(a, b, c, d);                                                     HRESULT hr = (HRESULT)r;                                                          if (FAILED(hr) || InterlockedIncrement(&mf_calls[idx]) <= 3)                      {                                                                                     logf_("%s", mf_names[idx]);                                                       log_hr("  result", hr);                                                       }                                                                                 return r;                                                                     }
+
+MF_WRAP(0) MF_WRAP(1) MF_WRAP(2) MF_WRAP(3) MF_WRAP(4)
+MF_WRAP(5) MF_WRAP(6) MF_WRAP(7) MF_WRAP(8)
+
+static void *const mf_wrappers[9] =
+{
+    mfw_0, mfw_1, mfw_2, mfw_3, mfw_4, mfw_5, mfw_6, mfw_7, mfw_8,
+};
+
+static void hook_remaining_mfplat(void)
+{
+    unsigned i;
+    for (i = 0; i < 9; ++i)
+    {
+        real_mf[i] = hook_import("MFPlat.DLL", mf_names[i], mf_wrappers[i]);
+        logf_("  %-38s %s", mf_names[i], real_mf[i] ? "hooked" : "not imported");
+    }
+}
+
 static DWORD WINAPI worker(LPVOID unused)
 {
     (void)unused;
@@ -1109,6 +1155,7 @@ static DWORD WINAPI worker(LPVOID unused)
     HOOK("MFPlat.DLL", MFCreateFile);
     HOOK("MFPlat.DLL", MFTEnumEx);
     HOOK("MFReadWrite.dll", MFCreateSourceReaderFromByteStream);
+    hook_remaining_mfplat();
     logf_("");
     return 0;
 }
