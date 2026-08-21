@@ -594,6 +594,15 @@ static HRESULT (WINAPI *real_buffer_QI)(void *, const GUID *, void **);
 
 static HRESULT WINAPI my_buffer_QueryInterface(void *self, const GUID *iid, void **out)
 {
+    /* This sits on the shared vtable of every media buffer of its class, so it
+     * is entered constantly and from every thread. If the original pointer is
+     * not stored yet there is nothing safe to do but decline -- calling
+     * through a null pointer is what took the process down. */
+    if (!real_buffer_QI)
+    {
+        if (out) *out = NULL;
+        return E_NOINTERFACE;
+    }
     if (iid && IsEqualGUID(iid, &IID_IMF2DBuffer_))
     {
         HRESULT hr = real_buffer_QI(self, iid, out);
@@ -615,6 +624,92 @@ static HRESULT WINAPI my_buffer_QueryInterface(void *self, const GUID *iid, void
         }
     }
     return real_buffer_QI(self, iid, out);
+}
+
+
+/* Make Electra take its software path, by changing its mind rather than the
+ * decoder's.
+ *
+ * Electra does not ask the MFT whether decoding is in software -- withholding
+ * SET_D3D_MANAGER was therefore useless. It asks its OWN platform handle,
+ * IsSoftware(), and because CrossOver's winegstreamer still advertises
+ * MF_SA_D3D_AWARE it has already built itself a D3D11 device and answers no.
+ * It then takes the branch that requires IMFDXGIBuffer on the output buffer,
+ * which a system-memory buffer can never satisfy, and drops every frame
+ * without ever reaching the IMF2DBuffer query we hooked.
+ *
+ * winevideo reaches the same end by patching winegstreamer to report no D3D
+ * awareness on macOS (patch 0005, "UE ElectraPlayer takes its software decode
+ * path on macOS"). From inside the process the equivalent is to answer the two
+ * questions Electra actually asks:
+ *
+ *   1. the console variable that selects the upload-heap path -> 1, so the
+ *      decoder stores the sample and queries nothing
+ *   2. IsSoftware() -> true at both call sites, so the consumer takes the
+ *      branch that accepts a plain buffer
+ *
+ * The second site is not optional. If the renderer reports D3D11 the outer
+ * gate is false, DecodedHeight stays at the frame height instead of one and a
+ * half times it, and the renderer is handed a luma-only frame.
+ *
+ * Offsets are from the disassembly of this exact executable, so every one is
+ * verified against the bytes that should be there before anything is written.
+ * A game update moves them, and then this must do nothing rather than corrupt
+ * something. */
+
+#define RVA_CVAR_PTR      0x0AA29110   /* TConsoleVariableData<int32> ** */
+#define RVA_ISSW_EXTRA    0x0634DAAA   /* call *0x28 feeding the "sw" value */
+#define RVA_ISSW_GATE     0x0634D8D7   /* call *0x28 feeding the outer gate  */
+
+static BOOL electra_sw_forced;
+
+/* mov al,1 ; nop  -- returns true and leaves the following code untouched. */
+static const BYTE want_call[3] = { 0xFF, 0x50, 0x28 };
+static const BYTE make_true[3] = { 0xB0, 0x01, 0x90 };
+
+static BOOL poke(BYTE *at, const BYTE *expect, const BYTE *with, const char *what)
+{
+    DWORD old;
+    if (memcmp(at, expect, 3) != 0)
+    {
+        logf_("  %s: bytes are %02X %02X %02X, expected %02X %02X %02X -- this is "
+              "a different build, leaving it alone", what,
+              at[0], at[1], at[2], expect[0], expect[1], expect[2]);
+        return FALSE;
+    }
+    if (!VirtualProtect(at, 3, PAGE_EXECUTE_READWRITE, &old)) return FALSE;
+    memcpy(at, with, 3);
+    VirtualProtect(at, 3, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), at, 3);
+    logf_("  %s: patched", what);
+    return TRUE;
+}
+
+static void force_electra_software(void)
+{
+    BYTE *base = (BYTE *)GetModuleHandleA(NULL);
+    int done = 0;
+    if (electra_sw_forced || !base) return;
+    electra_sw_forced = TRUE;
+
+    logf_("forcing Electra onto its software path");
+    if (poke(base + RVA_ISSW_EXTRA, want_call, make_true, "IsSoftware (sw value)")) done++;
+    if (poke(base + RVA_ISSW_GATE,  want_call, make_true, "IsSoftware (outer gate)")) done++;
+
+    {
+        int *cvar = *(int **)(base + RVA_CVAR_PTR);
+        if (cvar)
+        {
+            cvar[0] = 1;
+            cvar[1] = 1;
+            logf_("  UseOldOutputPath console variable: set to 1");
+            done++;
+        }
+        else
+            logf_("  console variable not resolved yet");
+    }
+    if (!done)
+        logf_("nothing was patched -- this build does not match the offsets");
 }
 
 static HRESULT WINAPI my_ProcessOutput(void *self, DWORD flags, DWORD count,
@@ -674,10 +769,16 @@ static HRESULT WINAPI my_ProcessOutput(void *self, DWORD flags, DWORD count,
         if (SUCCEEDED(by_index(out[0].pSample, 0, &buffer)) && buffer)
         {
             static void *saved;
-            if (patch_slot("buffer QueryInterface", buffer, 0,
-                           (void *)my_buffer_QueryInterface, &saved))
-                real_buffer_QI =
-                    (HRESULT (WINAPI *)(void *, const GUID *, void **))saved;
+            /* Order matters and cost a crash. patch_slot arms the vtable and
+             * only then returns, so assigning real_buffer_QI afterwards leaves
+             * a window in which every QueryInterface in the process arrives
+             * here with nothing to call through. Publish the original first. */
+            void **vt = *(void ***)buffer;
+            real_buffer_QI =
+                (HRESULT (WINAPI *)(void *, const GUID *, void **))vt[0];
+            if (!patch_slot("buffer QueryInterface", buffer, 0,
+                            (void *)my_buffer_QueryInterface, &saved))
+                real_buffer_QI = NULL;
             release_obj(buffer);
         }
     }
@@ -797,6 +898,7 @@ static HRESULT WINAPI my_ActivateObject(void *self, REFIID iid, void **out)
                   (void *)vt, vt[3], vt[4], vt[15], vt[16], vt[24], vt[25]);
         }
         logf_("  decoder instantiated and now watched");
+        force_electra_software();
     }
     return hr;
 }

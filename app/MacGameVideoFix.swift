@@ -987,6 +987,124 @@ final class Runner: ObservableObject {
 
 }
 
+// MARK: - Bottles, and the per-game Engine.ini
+
+/// A CrossOver bottle, and the Unreal config that has to live inside one.
+///
+/// Some Unreal titles need a user `Engine.ini` with Electra's old output path
+/// switched on. That file does not live beside the game -- it lives in the
+/// bottle, under the *project* name rather than the game's, and a machine
+/// usually has several bottles. Getting it into the wrong one is silent: the
+/// game reads nothing, behaves exactly as before, and the natural conclusion is
+/// that the setting does not help.
+///
+/// So the bottle is not guessed. The game writes `AppData/Local/<Project>/Saved`
+/// the first time it runs, and that folder is the evidence of where it actually
+/// runs.
+struct Bottle: Identifiable {
+    let url: URL
+    /// When this game last wrote anything here -- the tell for which bottle is
+    /// really in use when more than one has been tried.
+    let lastUsed: Date?
+
+    var id: String { url.path }
+    var name: String { url.lastPathComponent }
+
+    static var root: URL {
+        URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/Application Support/CrossOver/Bottles")
+    }
+
+    /// Bottles this project has actually run in, most recently used first.
+    static func candidates(forProject project: String) -> [Bottle] {
+        let fm = FileManager.default
+        guard let bottles = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+        else { return [] }
+
+        var found: [Bottle] = []
+        for bottle in bottles {
+            let users = bottle.appendingPathComponent("drive_c/users")
+            guard let people = try? fm.contentsOfDirectory(at: users, includingPropertiesForKeys: nil)
+            else { continue }
+            for person in people {
+                let saved = person.appendingPathComponent("AppData/Local/\(project)/Saved")
+                var isDir: ObjCBool = false
+                guard fm.fileExists(atPath: saved.path, isDirectory: &isDir), isDir.boolValue
+                else { continue }
+                found.append(Bottle(url: bottle, lastUsed: Self.lastWrite(under: saved)))
+                break
+            }
+        }
+        return found.sorted { ($0.lastUsed ?? .distantPast) > ($1.lastUsed ?? .distantPast) }
+    }
+
+    /// The newest modification anywhere under a folder, shallow enough to stay
+    /// quick on a sleeping external drive.
+    private static func lastWrite(under url: URL) -> Date? {
+        let fm = FileManager.default
+        guard let e = fm.enumerator(at: url, includingPropertiesForKeys: [.contentModificationDateKey],
+                                    options: [.skipsHiddenFiles]) else { return nil }
+        var newest: Date?
+        var seen = 0
+        for case let f as URL in e {
+            seen += 1
+            if seen > 400 { break }
+            if let d = try? f.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+               d > (newest ?? .distantPast) { newest = d }
+        }
+        return newest
+    }
+
+    func engineIni(project: String) -> URL? {
+        let fm = FileManager.default
+        let users = url.appendingPathComponent("drive_c/users")
+        guard let people = try? fm.contentsOfDirectory(at: users, includingPropertiesForKeys: nil)
+        else { return nil }
+        for person in people {
+            let saved = person.appendingPathComponent("AppData/Local/\(project)/Saved")
+            if fm.fileExists(atPath: saved.path) {
+                return saved.appendingPathComponent("Config/Windows/Engine.ini")
+            }
+        }
+        return nil
+    }
+
+    func hasEngineIni(project: String) -> Bool {
+        guard let path = engineIni(project: project) else { return false }
+        guard let text = try? String(contentsOf: path, encoding: .utf8) else { return false }
+        return text.contains("H264UseOldOutputPath=1")
+    }
+
+    /// Writes the file and makes it read-only, because Unreal rewrites its own
+    /// config on exit and would drop the setting again.
+    @discardableResult
+    func writeEngineIni(project: String) -> String? {
+        guard let path = engineIni(project: project) else {
+            return "This game has not run in \(name) yet, so there is nowhere to put it."
+        }
+        let fm = FileManager.default
+        let dir = path.deletingLastPathComponent()
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            if fm.fileExists(atPath: path.path) {
+                try? fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: path.path)
+            }
+            try Self.contents.write(to: path, atomically: true, encoding: .utf8)
+            try fm.setAttributes([.posixPermissions: 0o444], ofItemAtPath: path.path)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    static let contents = """
+    [SystemSettings]
+    Electra.Win.H264UseOldOutputPath=1
+    Electra.Win.H265UseOldOutputPath=1
+    """
+}
+
+
 // MARK: - Scanning a Steam library
 
 /// One recognised game, and what the scan found out about it.
