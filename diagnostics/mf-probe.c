@@ -430,6 +430,22 @@ static HRESULT WINAPI vpe_GetVideoProcessorRateConversionCaps(
     stub_called("ID3D11VideoProcessorEnumerator::GetVideoProcessorRateConversionCaps");
     if (!caps) return E_INVALIDARG;
     memset(caps, 0, sizeof(*caps));   /* no past or future frames, no telecine */
+
+    /*
+     * The game walks these looking for one specific bit and gives up with
+     * E_FAIL when no entry has it:
+     *
+     *     callq *0x50(%rax)        ; this function
+     *     testb $0x2, 0x27(%rbp)   ; caps is at 0x1f(%rbp), so +8: ProcessorCaps
+     *     jne   <found>
+     *     ...
+     *     movl  $0x80004005, %eax  ; E_FAIL
+     *
+     * Bit 1 of ProcessorCaps is DEINTERLACE_BOB. Claiming it is honest enough:
+     * bob deinterlacing a progressive frame is a copy, which is exactly what
+     * this content needs.
+     */
+    caps->ProcessorCaps = D3D11_VIDEO_PROCESSOR_PROCESSOR_CAPS_DEINTERLACE_BOB;
     return S_OK;
 }
 
