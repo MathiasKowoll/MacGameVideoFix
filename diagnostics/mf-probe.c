@@ -534,19 +534,18 @@ static HRESULT WINAPI vc_VideoProcessorBlt(void *self, void *processor, void *ou
                     (ID3D11Resource *)output_view_resource, (ID3D11Resource *)frame_texture);
 
         /*
-         * And into the shared one. TYPELESS and UNORM of the same base format
-         * are copy-compatible, and that texture is what the D3D12 side reads;
-         * the render target above is only where the real processor would have
-         * left the frame for someone else to move.
+         * Writing into the shared texture as well crashed the game, and the
+         * reason is here rather than in D3D: these pointers are kept raw. The
+         * game builds a fresh pair of textures for every video and releases
+         * the old ones, so by the second cutscene the pointer is to freed
+         * memory. Copying into the one the D3D12 side is reading, without any
+         * synchronisation, is a second reason not to.
+         *
+         * The question that mattered can be answered by watching instead: the
+         * CopyResource hook below says whether the game moves the frame into
+         * that texture itself. Doing it here is only worth attempting after
+         * that answer, and with the reference counts held properly.
          */
-        if (game_shared_texture && (ID3D11Resource *)game_shared_texture
-                                   != (ID3D11Resource *)output_view_resource)
-        {
-            ID3D11DeviceContext_CopyResource(video_context,
-                    (ID3D11Resource *)game_shared_texture, (ID3D11Resource *)frame_texture);
-            if (blit_calls <= 3) logf_("    also copied into the shared texture");
-        }
-        ID3D11DeviceContext_Flush(video_context);
     }
     else if (blit_calls <= 3)
         logf_("    nothing to copy (texture %p, output %p)",
