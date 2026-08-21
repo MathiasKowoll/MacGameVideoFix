@@ -166,6 +166,7 @@ static HANDLE (WINAPI *real_FindFirstFileExW)(LPCWSTR, FINDEX_INFO_LEVELS, LPVOI
                                               FINDEX_SEARCH_OPS, LPVOID, DWORD);
 
 static LONG open_failures;      /* capped, so one missing file cannot flood the log */
+static LONG mf_shutdowns;
 
 /* The game builds movie paths from "DATA:" + "FILE/MOVIE" + "%s/%s/%s" +
  * ".webm", so match on the folder as well as the extension -- a lookup that
@@ -299,23 +300,47 @@ static FARPROC WINAPI my_GetProcAddress(HMODULE module, LPCSTR name)
  * Report the first few and then only the count. */
 static LONG mf_startups;
 
+/*
+ * Where the call came from.
+ *
+ * The game gives up between MFStartup and MFShutdown without calling anything
+ * we can hook: no file, no COM, no other Media Foundation function. Guessing
+ * which API to watch next costs a launch each time. The return address costs
+ * nothing and says exactly which function to disassemble.
+ */
+static void log_caller(const char *what, void *ret)
+{
+    BYTE *base = (BYTE *)GetModuleHandleA(NULL);
+    if (ret && (BYTE *)ret > base)
+        logf_("  %s called from +0x%llx", what, (unsigned long long)((BYTE *)ret - base));
+    else
+        logf_("  %s called from %p (outside the exe)", what, ret);
+}
+
 static HRESULT WINAPI my_MFStartup(ULONG version, DWORD flags)
 {
     HRESULT hr = real_MFStartup(version, flags);
     LONG n = InterlockedIncrement(&mf_startups);
-    if (n <= 3 || FAILED(hr))
+    if (n <= 6 || FAILED(hr))
     {
         logf_("MFStartup(version=0x%lx, flags=%lu)  [#%ld]",
               (unsigned long)version, (unsigned long)flags, n);
+        log_caller("MFStartup", __builtin_return_address(0));
         log_hr("result", hr);
     }
-    else if (n == 4)
+    else if (n == 7)
         logf_("MFStartup ... (further successful calls counted, not logged)");
     return hr;
 }
 
 static HRESULT WINAPI my_MFShutdown(void)
 {
+    LONG n = InterlockedIncrement(&mf_shutdowns);
+    if (n <= 6)
+    {
+        logf_("MFShutdown  [#%ld]", n);
+        log_caller("MFShutdown", __builtin_return_address(0));
+    }
     return real_MFShutdown();
 }
 
@@ -480,8 +505,8 @@ static DWORD WINAPI worker(LPVOID unused)
 static void report_totals(void)
 {
     logf_("");
-    logf_("=== totals: %ld MFStartup, %ld failed file opens ===",
-          mf_startups, open_failures);
+    logf_("=== totals: %ld MFStartup, %ld MFShutdown, %ld failed file opens ===",
+          mf_startups, mf_shutdowns, open_failures);
 }
 
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
