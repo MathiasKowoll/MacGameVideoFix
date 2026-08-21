@@ -210,12 +210,16 @@ static LONG frames_out, output_calls, input_calls;
  * produce.
  *
  * Set BEAST_NO_NV12=1 to watch without intervening. */
-/* Off by default now. With the D3D manager withheld from the MFT, NV12 should
- * be offered on its own -- CrossOver's censoring is conditioned on macOS alone,
- * but winevideo's reading of the same code is that the format is only unusable
- * when bound to a D3D device. Leaving this off makes the log answer whether
- * that is true here rather than hiding it behind a relabel. */
-static BOOL restore_nv12 = FALSE;
+/* Required, as it turns out. Withholding the D3D manager does not make NV12
+ * reappear: measured, the decoder then offers YV12, YV12, IYUV, I420, YUY2 and
+ * no NV12 at all. So in an unpatched CrossOver the censoring really is
+ * conditioned on is_macos() alone, exactly as the disassembly said -- the
+ * have_d3d_manager condition is something winevideo ADDS in patch 0005, not
+ * something already there.
+ *
+ * Relabelling is therefore not a shortcut around the patch, it is the patch,
+ * done from outside. */
+static BOOL restore_nv12 = TRUE;
 
 /* Withhold the D3D manager from the decoder, without denying it to the game.
  *
