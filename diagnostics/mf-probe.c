@@ -354,20 +354,71 @@ static void *patch_vtable_slot(void *object, unsigned slot, void *replacement)
  */
 static HRESULT (WINAPI *real_create_texture2d)(void *, const void *, const void *, void **);
 
+static const char *dxgi_format_name(UINT f)
+{
+    switch (f)
+    {
+    case 87:  return "B8G8R8A8_UNORM";
+    case 88:  return "B8G8R8X8_UNORM";
+    case 90:  return "B8G8R8A8_TYPELESS";
+    case 91:  return "B8G8R8A8_UNORM_SRGB";
+    case 28:  return "R8G8B8A8_UNORM";
+    case 103: return "NV12";
+    case 104: return "P010";
+    default:  return "";
+    }
+}
+
+/*
+ * Log every one of these, not only the failures.
+ *
+ * Helper B builds a D3D11_TEXTURE2D_DESC on the stack and calls this, and its
+ * return value is what the caller tests. The earlier filter -- failures and
+ * NV12 only -- meant a successful BGRA creation said nothing, and there was no
+ * way to tell "succeeded" from "never called".
+ *
+ * The second descriptor it builds carries MiscFlags 2, D3D11_RESOURCE_MISC_SHARED:
+ * a texture the D3D12 renderer can also see. That is the interesting one,
+ * because sharing a resource between a D3D11 device and a D3D12 one is exactly
+ * what a translation layer is least likely to support.
+ */
+static LONG texture_calls;
+
 static HRESULT WINAPI device_create_texture2d(void *self, const void *desc,
                                               const void *initial, void **texture)
 {
     HRESULT hr = real_create_texture2d(self, desc, initial, texture);
-    /* D3D11_TEXTURE2D_DESC: width, height, mips, array, then format. */
-    UINT format = desc ? ((const UINT *)desc)[4] : 0;
+    const UINT *d = desc;
 
-    if (FAILED(hr) || format == 103 || format == 104)
+    if (d && (FAILED(hr) || InterlockedIncrement(&texture_calls) <= 12))
     {
-        const char *name = format == 103 ? "NV12" : format == 104 ? "P010" : "";
-        logf_("ID3D11Device::CreateTexture2D(format=%u %s) %s",
-              format, name, FAILED(hr) ? "FAILED" : "ok");
-        if (FAILED(hr)) log_hr("  result", hr);
+        /* width, height, mips, array, format, sample count, sample quality,
+         * usage, bind flags, cpu access, misc flags */
+        logf_("ID3D11Device::CreateTexture2D %ux%u format=%u %s bind=0x%x misc=0x%x  %s",
+              d[0], d[1], d[4], dxgi_format_name(d[4]), d[8], d[10],
+              FAILED(hr) ? "FAILED" : "ok");
+        if (d[10] & 2) logf_("    MiscFlags carries D3D11_RESOURCE_MISC_SHARED");
+        if (FAILED(hr)) log_hr("    result", hr);
     }
+    return hr;
+}
+
+/* The views built on those textures, so a failure one step later is visible
+ * too. Slot 7 is CreateShaderResourceView, slot 9 CreateRenderTargetView. */
+static HRESULT (WINAPI *real_create_srv)(void *, void *, const void *, void **);
+static HRESULT (WINAPI *real_create_rtv)(void *, void *, const void *, void **);
+
+static HRESULT WINAPI device_create_srv(void *self, void *res, const void *desc, void **view)
+{
+    HRESULT hr = real_create_srv(self, res, desc, view);
+    if (FAILED(hr)) { logf_("ID3D11Device::CreateShaderResourceView FAILED"); log_hr("  result", hr); }
+    return hr;
+}
+
+static HRESULT WINAPI device_create_rtv(void *self, void *res, const void *desc, void **view)
+{
+    HRESULT hr = real_create_rtv(self, res, desc, view);
+    if (FAILED(hr)) { logf_("ID3D11Device::CreateRenderTargetView FAILED"); log_hr("  result", hr); }
     return hr;
 }
 
@@ -381,7 +432,9 @@ static void install_video_stubs(void *device, void *context)
         real_device_qi = patch_vtable_slot(device, 0, device_qi);
         logf_("  video device stub: %s", real_device_qi ? "installed" : "COULD NOT PATCH");
         real_create_texture2d = patch_vtable_slot(device, 5, device_create_texture2d);
-        logf_("  CreateTexture2D watch: %s", real_create_texture2d ? "installed" : "COULD NOT PATCH");
+        real_create_srv       = patch_vtable_slot(device, 7, device_create_srv);
+        real_create_rtv       = patch_vtable_slot(device, 9, device_create_rtv);
+        logf_("  resource watch: %s", real_create_texture2d ? "installed" : "COULD NOT PATCH");
     }
     if (context && !real_context_qi)
     {
