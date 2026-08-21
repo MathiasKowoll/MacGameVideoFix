@@ -24,12 +24,17 @@ Tested on an M4 Max, macOS 27, CrossOver 26.2 with Game Porting Toolkit 4.0b2.
 1. Download `MacGameVideoFix.app` from
    [Releases](../../releases), or build it yourself with `app/build-app.sh`.
 2. Create the user `Engine.ini` described below.
-3. Open the app, drop the game folder on it, and press **Apply Fix**.
+3. Open the app, **pick your game from the list**, drop its folder on it, and
+   press **Apply Fix**.
 
-The app works out which game it is and offers only the fixes that apply. For
-an Unreal title that means a choice of two — leave it on **Runtime patch**
-unless the app says the game ships no `libogg`. For DYNASTY WARRIORS: ORIGINS
-there is one, and step 2 below does not apply.
+Picking the game first is what tells the app which folder to ask for, and it
+says so on the drop zone. For an Unreal title there is then a choice of two
+fixes — leave it on **Runtime patch** unless the app says the game ships no
+`libogg`. For DYNASTY WARRIORS: ORIGINS there is one, and step 2 below does
+not apply.
+
+The app also checks that CrossOver is patched with winevideo and warns if it
+is not, because without it neither fix can change anything on screen.
 
 The two modes solve the same problem, so the app will not let you apply one
 while the other is in place. **Revert** puts everything back either way.

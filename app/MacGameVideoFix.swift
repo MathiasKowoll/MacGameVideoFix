@@ -123,6 +123,89 @@ struct Winevideo {
 }
 
 
+/// The games this knows how to fix.
+///
+/// Chosen first, folder second. Detecting the game from whatever was dropped
+/// works, but it leaves someone who picks the wrong folder with a vague "that
+/// is not a game this knows" and no idea which part they got wrong. Choosing
+/// the title up front means the app can say exactly what it is looking for,
+/// and exactly what was missing when it is not there.
+enum SupportedGame: String, CaseIterable, Identifiable {
+    case dynastyWarriors
+    case unrealVP9
+
+    var id: String { rawValue }
+
+    var name: String {
+        switch self {
+        case .dynastyWarriors: return "DYNASTY WARRIORS: ORIGINS"
+        case .unrealVP9:       return "Unreal Engine 5, VP9 cutscenes"
+        }
+    }
+
+    var symptom: String {
+        switch self {
+        case .dynastyWarriors: return "Cutscene plays with sound, picture black"
+        case .unrealVP9:       return "Crash on the first cutscene"
+        }
+    }
+
+    /// What to select, in the words of what is inside it.
+    var folderHint: String {
+        switch self {
+        case .dynastyWarriors: return "the folder holding DWORIGINS.exe"
+        case .unrealVP9:       return "the folder containing Content"
+        }
+    }
+
+    var example: String {
+        switch self {
+        case .dynastyWarriors: return "…/steamapps/common/DWORIGINS"
+        case .unrealVP9:       return "…/steamapps/common/Sparta/MortalShell2"
+        }
+    }
+
+    var modes: [Mode] {
+        switch self {
+        case .dynastyWarriors: return [.videoBridge]
+        case .unrealVP9:       return [.runtime, .transcode]
+        }
+    }
+
+    /// Said when the folder is not the one this game needs. Naming the thing
+    /// that was missing beats saying the folder is wrong.
+    var mismatch: String {
+        switch self {
+        case .dynastyWarriors:
+            return "No DWORIGINS.exe there. Pick the folder the game's executable is in."
+        case .unrealVP9:
+            return "No Content/Movies and Content/Paks below there. "
+                 + "Pick the folder that contains Content, not Content itself."
+        }
+    }
+
+    /// Accepts the folder itself or the one above it, since a Steam library
+    /// folder and a game folder look alike from the outside.
+    func title(from url: URL) -> Title? {
+        let fm = FileManager.default
+        switch self {
+        case .dynastyWarriors:
+            var candidates = [url]
+            if let subs = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
+                candidates += subs
+            }
+            for c in candidates
+            where fm.fileExists(atPath: c.appendingPathComponent("DWORIGINS.exe").path) {
+                return .dynastyWarriors(c)
+            }
+            return nil
+        case .unrealVP9:
+            return GameFolder.locate(from: url).map { Title.unrealVP9($0) }
+        }
+    }
+}
+
+
 /// Which game a chosen folder turns out to be. Each has its own fixes, and
 /// nothing is offered that does not apply to what was actually found.
 enum Title {
@@ -296,6 +379,20 @@ final class Runner: ObservableObject {
     @Published var busy = false
     @Published var title: Title?
     @Published var winevideo = Winevideo.detect()
+    @Published var chosen: SupportedGame = .dynastyWarriors {
+        didSet { if oldValue != chosen { clearSelection() } }
+    }
+
+    /// Changing the game invalidates whatever folder was picked for the last
+    /// one, rather than leaving a stale path on screen under a new title.
+    private func clearSelection() {
+        title = nil
+        runtimeState = .unknown; transcodeState = .unknown; bridgeState = .unknown
+        log.removeAll()
+        resetProgress()
+        mode = chosen.modes.first ?? .runtime
+        status = "Choose the folder for \(chosen.name)."
+    }
     @Published var status = "Choose your game folder to begin."
 
     /// The Unreal paths still work in terms of a Content folder; this is where
@@ -367,13 +464,13 @@ final class Runner: ObservableObject {
     }
 
     func select(_ url: URL) {
-        guard let t = Title.detect(from: url) else {
-            status = "That folder is not a game this knows how to fix."
+        guard let t = chosen.title(from: url) else {
+            status = chosen.mismatch
             title = nil
             return
         }
         title = t
-        mode = t.modes.first ?? .runtime
+        mode = chosen.modes.first ?? .runtime
         runtimeState = .unknown
         transcodeState = .unknown
         log.removeAll()
@@ -703,7 +800,6 @@ struct ContentView: View {
             supported
             dropZone
             if let t = runner.title {
-                detected(t)
                 if t.modes.count > 1 { modePicker(t) }
                 actions
             }
@@ -755,27 +851,25 @@ struct ContentView: View {
             .fill((runner.winevideo.found ? Color.green : Color.orange).opacity(0.08)))
     }
 
-    /// What this knows how to fix, so it is clear before anything is dropped.
+    /// Pick the game first. The folder to look for depends on it, and saying
+    /// so up front is the difference between guidance and a guessing game.
     private var supported: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Games this can fix")
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Text("Game")
+                    .font(.callout)
+                Picker("", selection: $runner.chosen) {
+                    ForEach(SupportedGame.allCases) { g in Text(g.name).tag(g) }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 340)
+                .disabled(runner.busy)
+                Spacer()
+            }
+            Text(runner.chosen.symptom)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            HStack(alignment: .top, spacing: 18) {
-                supportedEntry("DYNASTY WARRIORS: ORIGINS",
-                               "Cutscene plays with sound, picture black")
-                supportedEntry("Unreal Engine 5, VP9 cutscenes",
-                               "Crash on the first cutscene")
-            }
         }
-    }
-
-    private func supportedEntry(_ name: String, _ symptom: String) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(name).font(.system(size: 12, weight: .medium))
-            Text(symptom).font(.caption).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var dropZone: some View {
@@ -789,11 +883,20 @@ struct ContentView: View {
             .frame(height: 88)
             .overlay(
                 VStack(spacing: 6) {
-                    Text(runner.title.map { $0.path } ?? "Drop your game folder here")
-                        .font(.system(size: 13, design: runner.game == nil ? .default : .monospaced))
-                        .lineLimit(2)
-                        .truncationMode(.head)
-                        .multilineTextAlignment(.center)
+                    if let path = runner.title?.path {
+                        Text(path)
+                            .font(.system(size: 13, design: .monospaced))
+                            .lineLimit(2)
+                            .truncationMode(.head)
+                            .multilineTextAlignment(.center)
+                    } else {
+                        Text("Drop \(runner.chosen.folderHint) here")
+                            .font(.system(size: 13))
+                            .multilineTextAlignment(.center)
+                        Text(runner.chosen.example)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
                     Button("Choose…") { chooseFolder() }
                         .buttonStyle(.link)
                         .disabled(runner.busy)
@@ -808,21 +911,6 @@ struct ContentView: View {
                 }
                 return true
             }
-    }
-
-    /// What the folder turned out to be. With more than one game supported,
-    /// saying so is the difference between confidence and a guess.
-    private func detected(_ t: Title) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: "checkmark.seal")
-                .foregroundStyle(.secondary)
-            Text(t.name)
-                .font(.callout.weight(.medium))
-            Spacer()
-            Text(t.modes.count > 1 ? "\(t.modes.count) fixes" : "1 fix")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
     }
 
     private func modePicker(_ t: Title) -> some View {
@@ -945,7 +1033,7 @@ struct ContentView: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.message = "Select the game folder."
+        panel.message = "Select \(runner.chosen.folderHint)."
         panel.prompt = "Select"
         if panel.runModal() == .OK, let url = panel.url {
             runner.select(url)
