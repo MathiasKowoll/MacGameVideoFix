@@ -12,14 +12,23 @@ the list, drop its folder on it, press Apply.
 | [**Life is Strange: Double Exposure**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Double-Exposure) | Runs, then freezes after a while | Preview 20260821 — freezes on 26.3 |
 | [**Beast of Reincarnation**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Beast-of-Reincarnation) | Startup video plays with sound, no picture | 26.3 and Preview 20260821 |
 | [**Persona 5 Strikers**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Persona-5-Strikers) | Video never starts; sound only | 26.3 and Preview 20260821 |
-| [**DYNASTY WARRIORS: ORIGINS**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Dynasty-Warriors-Origins) | Cutscene plays with sound, picture black | Preview 20260821 — freezes on 26.3 |
+| [**DYNASTY WARRIORS: ORIGINS**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Dynasty-Warriors-Origins) | Cutscene plays with sound, picture black | Preview 20260821 — no video on 26.3 |
 
-"Preview" in that column, and everywhere else in this file, means
-`crossover-preview-arm64-20260821`. The column says which builds a title was
-measured on, never which it might work on. Everything runs on that Preview and
-two are confirmed on stable 26.3 as well — but both Life is Strange titles
-crash on 26.3. That crash is ours, it is open and unexplained, and until it is
-settled those two want Preview.
+**This project targets `crossover-preview-arm64-20260821`**, and that is what
+"Preview" means in the column above and everywhere else in this file. Every title
+is measured and supported there.
+
+Three also run on stable 26.3, and the column says so — but that is a bonus
+rather than a promise. Stable is not what gets tested before a release, and a
+title that stops working there will not hold one up.
+
+That is a choice, not neglect. Preview is far enough ahead — a newer D3DMetal, a
+larger GStreamer plugin set, a newer Wine — that supporting both would mean
+rebuilding each fix against the older engine and keeping it there. What stops the
+other three is in the engine rather than in anything installed beside the game:
+the two Life is Strange titles freeze on 26.3 with the fix removed exactly as
+they do with it, and DYNASTY WARRIORS needs a WebM demuxer that 26.3 has no way
+to reach.
 
 Each row links to a page in the
 [wiki](https://github.com/MathiasKowoll/MacGameVideoFix/wiki) with that game's

@@ -205,3 +205,22 @@ that the bridge carried what was put in it.
 ---
 
 Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md) · [Findings](Findings.md), what the six have in common
+
+### Staging the demuxer was tried, and it was not enough
+
+The obvious move, once Persona 5 Strikers was fixed by staging a codec CrossOver
+does not ship, was to stage `libgstmatroska` the same way. It was built, and it
+resolved cleanly: every library it needs is present in 26.3 -- `libgstriff`,
+`libgsttag`, `libgstpbutils` and the rest -- so only the plugin was missing, and
+the staging carried it with its core symlinked to CrossOver's own.
+
+The video still never starts. The bridge arms and stops one line short of where a
+working session reaches: `D3D12 device reached, bridge armed`, and never `bridge
+ready`, which is the line that reports the frame size. Nothing is ever decoded
+for it to present.
+
+Neither engine's `winegstreamer` mentions Matroska, WebM or even ASF anywhere in
+its strings, so whatever decides which containers Media Foundation will open is
+not reached by putting a plugin on GStreamer's path. That is as far as this was
+taken: the change was reverted rather than left in, because it fixed nothing and
+added a plugin to the environment of a title that does work there.

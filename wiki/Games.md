@@ -17,7 +17,7 @@ otherwise.
 | [Mortal Shell 2](Mortal-Shell-2.md) | Unreal Engine 5.6.1 | Crash on the first cutscene | Runtime patch, 4 sites | D3DMetal | 12 | 26.3 · Preview | Fixed |
 | [Life is Strange: Reunion](Life-is-Strange-Reunion.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard | D3DMetal | 12 | Preview -- 26.3 crashes | Fixed |
 | [Life is Strange: Double Exposure](Life-is-Strange-Double-Exposure.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard, same DLL | D3DMetal | 12 | Preview -- 26.3 crashes | Fixed |
-| [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | Video bridge, D3D11 to D3D12 | D3DMetal | 12 | Preview -- crashes on 26.3 | Fixed |
+| [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | Video bridge, D3D11 to D3D12 | D3DMetal | 12 | Preview -- no video on 26.3 | Fixed |
 | [Beast of Reincarnation](Beast-of-Reincarnation.md) | Unreal Engine 5 | Startup video plays with sound, no picture | NV12 restored, Electra forced to software | D3DMetal | 12 | 26.3 · Preview | Fixed |
 | [Persona 5 Strikers](Persona-5-Strikers.md) | Koei Tecmo, in-house | Video never starts; sound only | Staged VC-1 codec, and a D3D9 to D3D11 bridge | **DXMT** | 11 | 26.3 and Preview | Fixed |
 
@@ -32,9 +32,15 @@ stutter.
 against CrossOver 26.3 and `crossover-preview-arm64-20260821`, and the CrossOver
 column says which of the two a title was measured on rather than which it might
 work on. Everything runs on that Preview. Two are confirmed on 26.3 as well.
-Both Life is Strange titles freeze on 26.3, and the fix is not what does it:
-removing it entirely and running again freezes the same way. What differs is
-D3DMetal -- 3.0 on 26.3 against 4.0b2 on that Preview. Persona 5 Strikers plays on both, which is what its
+This project targets that Preview build, and it is what every title is measured
+and supported on. Three also run on stable 26.3 and the column says so, but as a
+bonus rather than a promise -- stable is not what gets tested before a release.
+
+What stops the other three is in the engine. Both Life is Strange titles freeze
+on 26.3 with the fix removed exactly as they do with it, so nothing installed
+beside the game is involved; what differs is D3DMetal, 3.0 against 4.0b2. And
+DYNASTY WARRIORS needs a WebM demuxer that 26.3 has no way to reach -- staging
+the plugin was tried and the video still never starts. Persona 5 Strikers plays on both, which is what its
 fix predicted: it stages its own decoder, so what CrossOver ships stops
 mattering. A first attempt on 26.3 failed and was recorded as the title not
 working there -- wrongly. The staged codec is built against one CrossOver and is
