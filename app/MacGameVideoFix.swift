@@ -5,6 +5,7 @@
 
 import SwiftUI
 import AppKit
+import Combine
 import UniformTypeIdentifiers
 
 // MARK: - Subprocess plumbing
@@ -39,6 +40,7 @@ private final class LineBuffer: @unchecked Sendable {
 /// be started at all.
 private func runStreaming(_ executable: String,
                           _ arguments: [String],
+                          register: (@Sendable (Process) -> Void)? = nil,
                           onLine: @escaping @Sendable (String) -> Void) async -> Int32 {
     await withCheckedContinuation { (cont: CheckedContinuation<Int32, Never>) in
         let proc = Process()
@@ -76,12 +78,35 @@ private func runStreaming(_ executable: String,
 
         do {
             try proc.run()
+            // Only once it is actually running. Handing back a process that
+            // failed to start would give Stop something to terminate that has
+            // no pid, and the error path below is already the answer there.
+            register?(proc)
         } catch {
             pipe.fileHandleForReading.readabilityHandler = nil
             proc.terminationHandler = nil
             onLine("could not start \(executable): \(error.localizedDescription)")
             cont.resume(returning: -1)
         }
+    }
+}
+
+/// Holds the process a run is using, so Stop can reach it.
+///
+/// A box with a lock rather than a property on the Runner: `register` is
+/// called on whatever thread started the process, and Process is not Sendable,
+/// so storing it would mean hopping to the main actor to put one reference
+/// somewhere. One lock around one reference is smaller than that, and is the
+/// same shape as LineBuffer above.
+private final class ProcessBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var proc: Process?
+
+    func hold(_ p: Process?) { lock.lock(); proc = p; lock.unlock() }
+
+    func terminate() {
+        lock.lock(); let p = proc; lock.unlock()
+        p?.terminate()
     }
 }
 
@@ -355,6 +380,7 @@ enum Phase {
     case idle, restoringPak, restoringMovies
     case installingRuntime, removingRuntime
     case installingBridge, removingBridge
+    case stagingCodec
 
     var label: String {
         switch self {
@@ -365,6 +391,7 @@ enum Phase {
         case .removingRuntime:   return "Removing the runtime patch"
         case .installingBridge:  return "Installing the video bridge"
         case .removingBridge:    return "Removing the video bridge"
+        case .stagingCodec:      return "Staging the codec"
         }
     }
 
@@ -378,7 +405,8 @@ enum Phase {
         case .installingRuntime,
              .removingRuntime,
              .installingBridge,
-             .removingBridge:    return 0...1
+             .removingBridge,
+             .stagingCodec:      return 0...1
         }
     }
 }
@@ -681,7 +709,8 @@ final class Runner: ObservableObject {
     }
 
     /// Runs one phase, streaming its output into the log and moving the bar.
-    private func run(_ phase: Phase, _ exe: String, _ args: [String]) async -> Bool {
+    private func run(_ phase: Phase, _ exe: String, _ args: [String],
+                     register: (@Sendable (Process) -> Void)? = nil) async -> Bool {
         phaseLabel = phase.label
         indeterminate = true
         detail = ""
@@ -690,7 +719,7 @@ final class Runner: ObservableObject {
         note("▸ \(phase.label)")
 
         let span = phase.span
-        let status = await runStreaming(exe, args) { line in
+        let status = await runStreaming(exe, args, register: register) { line in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.note("  " + line)
@@ -905,8 +934,380 @@ final class Runner: ObservableObject {
         }
     }
 
+    // MARK: The codec, the engines, and which bottle uses which
+
+    /// What the whole interface reads. Views never touch `Codecs` for this.
+    @Published var codecs: [Codecs.BottleState] = []
+
+    /// True when something on this Mac is in a state that crashes on the first
+    /// cutscene, or is about to. What puts the banner on screen at launch.
+    ///
+    /// Waiting counts, and that is the point of it. A bottle set to a CrossOver
+    /// it has not been opened with yet is one launch away from two GStreamer
+    /// cores -- the launch being the old engine rather than the new one -- and
+    /// this whole feature exists because that state used to sit on disk in
+    /// silence. It is deliberately not part of `needsRepair`: undoing a choice
+    /// somebody made on purpose is not a repair, so it gets its own sentence in
+    /// the banner and its own button rather than being swept up by Repair.
+    var needsCodecAttention: Bool {
+        codecs.contains { $0.state.needsRepair || $0.state.isWaiting }
+    }
+
+    /// The bottles set to a CrossOver their own "Version" does not name.
+    var waitingRows: [Codecs.BottleState] { codecs.filter { $0.state.isWaiting } }
+
+    /// True while a codec action owns `busy`.
+    ///
+    /// The bulk-patch Stop only sets a flag, and no staging run ever reads it,
+    /// so during codec work that button did nothing and said nothing. Every
+    /// Stop on screen now asks this which of the two it is.
+    @Published var codecWork = false
+
+    /// The last codec result, and the instruction that goes with it, kept after
+    /// the work ends. The sheet's status used to live inside `if runner.busy`,
+    /// so it vanished at the exact instant it had something to report -- and
+    /// the sheet is where the sweep lives, the one action that answers "I
+    /// switched CrossOver, now what?".
+    @Published var codecStatus = ""
+    @Published var codecAdvice = ""
+
+    /// The staging run in flight, and the process it is driving. Both, because
+    /// cancelling the Task does not resume a continuation waiting on a child
+    /// process and terminating the child does not stop the loop around it.
+    private var codecTask: Task<Void, Never>?
+    private let codecProcess = ProcessBox()
+
+    /// Re-reads every bottle into `codecs`.
+    ///
+    /// Deliberately synchronous, and deliberately on the main actor. Moving it
+    /// to a detached task would fill the caches inside `Codecs` from another
+    /// thread while a body on this one reads `Codecs.staged` out of the same
+    /// storage -- a data race, to save microseconds: the survey is two small
+    /// text reads per bottle and one stat per engine.
+    func refreshCodecs() {
+        Codecs.refresh()
+        Codecs.pruneSpentChoices()
+        codecs = Codecs.survey()
+        // Warmed here rather than left to the first body that asks. The survey
+        // fills it as a side effect whenever there is a bottle to classify,
+        // and a Mac with no bottles at all is exactly the one where the sheet
+        // would otherwise scan /Applications from inside a view update.
+        _ = Codecs.installedEngines()
+    }
+
+    /// Clears everything a codec action sets, on every way out of it --
+    /// finished, refused, failed or stopped -- and re-reads the bottles.
+    private func finishCodecWork() {
+        busy = false
+        codecWork = false
+        indeterminate = false
+        phaseLabel = ""
+        detail = ""
+        codecTask = nil
+        codecProcess.hold(nil)
+        // Whatever the action ended up saying, said again somewhere the sheet
+        // can keep it: every codec path sets `status` before it returns, the
+        // ones that changed nothing included.
+        codecStatus = status
+        refreshCodecs()
+    }
+
+    /// The four lines every codec action starts with.
+    private func beginCodecWork() {
+        busy = true
+        codecWork = true
+        stopping = false
+        codecStatus = ""
+        codecAdvice = ""
+    }
+
+    /// Abandons whatever codec work is running.
+    ///
+    /// Staging one engine is a single shell run, so there is no "between
+    /// items" for a flag to be read at: the process has to be terminated or
+    /// the button does nothing. Half a staged directory is safe to leave --
+    /// `Codecs.staged(forEngine:)` refuses one, and no bottle is written until
+    /// it says yes.
+    func stopCodecs() {
+        stopping = true
+        codecProcess.terminate()
+        codecTask?.cancel()
+        status = "Stopping…"
+    }
+
+    /// Said from one place, after any successful write to a bottle.
+    ///
+    /// Worded for the bottle rather than for Steam. The sweeps write every
+    /// bottle in the root, not only the Steam ones, and telling somebody who
+    /// just repaired their Epic bottle to close Steam leaves the wineserver
+    /// they actually have running holding the old configuration -- after which
+    /// the fix looks like it did nothing. nil is the several-bottles case.
+    private func noteRestart(_ bottleName: String?) {
+        let what: String
+        if let name = bottleName {
+            what = name.localizedCaseInsensitiveContains("steam")
+                ? "Close Steam completely before relaunching"
+                : "Quit everything running in \(name) completely before relaunching"
+        } else {
+            what = "Quit everything running in those bottles completely before relaunching"
+        }
+        note("\(what): this is bottle")
+        note("configuration, and a live wineserver keeps the old copy.")
+        codecAdvice = "\(what): this is bottle configuration, and a live "
+                    + "wineserver keeps the old copy."
+    }
+
+    /// Makes sure one engine has a staging, and says whether it now has one.
+    ///
+    /// The directory decides, not the exit code. A stopped run is a terminated
+    /// process reporting failure over a half-built folder, and a script that
+    /// skipped this engine can still exit 0; only `staged(forEngine:)` answers
+    /// the question a bottle actually asks.
+    private func ensureStaged(_ engine: String) async -> Bool {
+        if Codecs.staged(forEngine: engine) { return true }
+        guard Codecs.installedEngines()[engine] != nil else {
+            note("CrossOver \(engine) is not installed on this Mac.")
+            status = "\(Codecs.label(engine)) is not installed."
+            return false
+        }
+        guard Codecs.gstreamerInstalled else {
+            note("")
+            note("GStreamer is not installed. Get the macOS runtime package")
+            note("(1.24 series) and run this again:")
+            note("  \(Codecs.downloadPage)")
+            note("Nothing is redistributed here -- the decoder is borrowed from")
+            note("your own install, which is how winevideo does it too.")
+            status = "GStreamer missing."
+            return false
+        }
+        note("")
+        note("Staging the codec for \(Codecs.label(engine))…")
+        status = "Staging the codec for \(Codecs.label(engine))…"
+        let script = resources.appendingPathComponent("stage-codecs.sh").path
+        _ = await run(.stagingCodec, "/bin/bash", [script, "x86_64", engine],
+                      register: { [box = codecProcess] proc in box.hold(proc) })
+        Codecs.refresh()
+        if Codecs.staged(forEngine: engine) { return true }
+        note(stopping ? "Stopped before the codec was complete. No bottle was changed."
+                      : "Staging did not finish. No bottle was changed.")
+        status = stopping ? "Stopped." : "Staging failed."
+        return false
+    }
+
+    /// Writes the pointer and remembers the choice, or says why it did not.
+    ///
+    /// The choice is stored only while it disagrees with the bottle's own
+    /// "Version". Once CrossOver re-stamps that, automatic gives the same
+    /// answer and a stored one would be nothing but something to go stale.
+    private func wire(_ bottle: Codecs.BottleState, to engine: String, remember: Bool) -> Bool {
+        if let problem = Codecs.configure(bottle: bottle.url, engine: engine) {
+            note(problem)
+            return false
+        }
+        Codecs.setChoice(remember && bottle.runs != engine ? engine : nil, forBottle: bottle.name)
+        return true
+    }
+
+    /// Choosing a CrossOver for one bottle. nil is Automatic.
+    ///
+    /// A complete action, never a note telling the user to go and press
+    /// something else: if the engine has no staging this builds one first, and
+    /// only then is the bottle re-pointed. A staging that fails or is stopped
+    /// leaves the bottle exactly as it was, because `configure` is never
+    /// reached.
+    func selectEngine(_ engine: String?, forBottle bottle: Codecs.BottleState) {
+        guard !busy else { return }
+        guard let engine else {
+            Codecs.setChoice(nil, forBottle: bottle.name)
+            guard let runs = bottle.runs else {
+                note("\(bottle.name) does not record which CrossOver it runs under, "
+                     + "so there is nothing to match automatically. Choose one.")
+                refreshCodecs()
+                return
+            }
+            point(bottle, at: runs, remember: false)
+            return
+        }
+        point(bottle, at: engine, remember: true)
+    }
+
+    private func point(_ bottle: Codecs.BottleState, at engine: String, remember: Bool) {
+        beginCodecWork()
+        codecTask = Task {
+            defer { finishCodecWork() }
+            guard await ensureStaged(engine) else { return }
+            guard wire(bottle, to: engine, remember: remember) else {
+                status = "\(bottle.name) was not changed."
+                return
+            }
+            note("")
+            note("\(bottle.name) now uses the codec staged for \(Codecs.label(engine)).")
+            if let runs = bottle.runs, runs != engine {
+                note("It last ran under \(Codecs.label(runs)). Open it with "
+                     + "\(Codecs.label(engine)) from now on — opening it with the other "
+                     + "one gives the cutscenes two GStreamer cores and it crashes.")
+            }
+            noteRestart(bottle.name)
+            status = "\(bottle.name) configured."
+        }
+    }
+
+    /// The loop behind Repair, Match and the sweep.
+    ///
+    /// All three are the same three steps per bottle: stage that engine if it
+    /// has none, write the pointer, count what happened. They were three copies
+    /// of it, and the copy in Repair used `break` on a staging failure -- so one
+    /// engine that would not stage abandoned every later bottle, including the
+    /// ones needing nothing but a one-line rewrite. A failure about one engine
+    /// says nothing about the next bottle's, so it skips; GStreamer missing and
+    /// a Stop are about all of them, so those still end the run.
+    private func rePoint(_ work: [(bottle: Codecs.BottleState, engine: String, keep: Bool)])
+        async -> (done: Int, left: Int) {
+        var done = 0
+        for item in work {
+            if stopping { break }
+            guard await ensureStaged(item.engine) else {
+                if stopping || !Codecs.gstreamerInstalled { break }
+                continue
+            }
+            guard wire(item.bottle, to: item.engine, remember: item.keep) else { continue }
+            done += 1
+            note("\(item.bottle.name) → codec staged for \(Codecs.label(item.engine))")
+        }
+        return (done, work.count - done)
+    }
+
+    /// How every multi-bottle action ends, including the endings that changed
+    /// nothing.
+    ///
+    /// Those used to return without touching `status`, which left "Stopping…"
+    /// on screen over an app that was idle and offered no way back out of it --
+    /// the transitional state outliving the work, again.
+    private func report(done: Int, left: Int, bottle: String?) {
+        note("")
+        guard done > 0 else {
+            let ending = stopping ? "Stopped. Nothing was changed."
+                                  : "No bottle was changed. The log says why."
+            note(ending)
+            status = ending
+            return
+        }
+        let outcome: String = left == 0
+            ? "\(done) bottle(s) re-pointed."
+            : "\(done) bottle(s) re-pointed, \(left) left as they were."
+        note(stopping ? "Stopped. " + outcome : outcome)
+        noteRestart(bottle)
+        let short: String = left == 0 ? "\(done) bottle(s) re-pointed."
+                                      : "\(done) re-pointed · \(left) left as they were."
+        status = stopping ? "Stopped. " + short : short
+    }
+
+    /// Points every bottle that has drifted at the CrossOver it now runs
+    /// under -- each at its own, because two bottles can honestly be on two
+    /// different CrossOvers, and staging whichever of them has none.
+    func repairDrifted() {
+        guard !busy else { return }
+        let targets = Codecs.bottlesNeedingRepair()
+        guard !targets.isEmpty else { return }
+        beginCodecWork()
+        codecTask = Task {
+            defer { finishCodecWork() }
+            // `keep` follows where the target came from. A bottle whose target
+            // is the engine the user picked has to come out of the repair still
+            // pointing there AND still remembering it: clearing the choice while
+            // writing the file to match it is the two of them disagreeing again
+            // one refresh later, which is how Repair and Re-apply ended up
+            // undoing each other on every press.
+            var work: [(bottle: Codecs.BottleState, engine: String, keep: Bool)] = []
+            for bottle in targets {
+                guard let target = bottle.target else { continue }
+                work.append((bottle: bottle, engine: target, keep: bottle.choice == target))
+            }
+            let (done, left) = await rePoint(work)
+            report(done: done, left: left, bottle: work.count == 1 ? work.first?.bottle.name : nil)
+        }
+    }
+
+    /// Puts the waiting bottles back on the CrossOver they actually run under.
+    ///
+    /// The undo for a choice, and the only way out of the one state nothing
+    /// else touches: a bottle set to an engine it is never opened with stays in
+    /// the crashing configuration for as long as the choice stands, and Repair
+    /// deliberately will not undo a decision somebody made on purpose. So the
+    /// decision gets a button that reverses it, in the banner that reports it.
+    func matchAutomatic() {
+        guard !busy else { return }
+        var work: [(bottle: Codecs.BottleState, engine: String, keep: Bool)] = []
+        for bottle in waitingRows {
+            // A bottle can only be matched to something that is here to match
+            // it to. Without this the run would print "CrossOver x is not
+            // installed" once per bottle and change nothing.
+            guard let runs = bottle.runs, Codecs.installedEngines()[runs] != nil else {
+                note("\(bottle.name) records no CrossOver that is installed. "
+                     + "Choose one for it in the list.")
+                continue
+            }
+            work.append((bottle: bottle, engine: runs, keep: false))
+        }
+        guard !work.isEmpty else { return }
+        beginCodecWork()
+        codecTask = Task {
+            defer { finishCodecWork() }
+            let (done, left) = await rePoint(work)
+            report(done: done, left: left, bottle: work.count == 1 ? work.first?.bottle.name : nil)
+        }
+    }
+
+    /// The literal answer to "I switched CrossOver": one engine, every bottle.
+    ///
+    /// Repair has nothing to do until a bottle has actually been opened under
+    /// the new engine, and someone who has just switched has not opened them
+    /// yet. This is the sweep for that moment.
+    func useEngineEverywhere(_ engine: String) {
+        guard !busy else { return }
+        beginCodecWork()
+        codecTask = Task {
+            defer { finishCodecWork() }
+            guard await ensureStaged(engine) else { return }
+            var skipped = 0
+            var work: [(bottle: Codecs.BottleState, engine: String, keep: Bool)] = []
+            for bottle in Codecs.survey() {
+                if case .unreadable = bottle.state {
+                    skipped += 1
+                    note("Cannot read \(bottle.name)'s configuration.")
+                    continue
+                }
+                // The one test that decides it: does the file hold a value this
+                // app wrote? A bottle nobody has wired is not one to start
+                // wiring from a button about which CrossOver to use, and a
+                // value someone else set is not ours to replace without being
+                // asked on the row that shows it.
+                guard let path = bottle.pointsAt else {
+                    skipped += 1
+                    note("\(bottle.name) has no codec set. Left alone.")
+                    continue
+                }
+                guard Codecs.isOurs(path) else {
+                    skipped += 1
+                    note("\(bottle.name) has a GST_PLUGIN_PATH this app did not set. "
+                         + "Left alone — choose a CrossOver for it to replace that value.")
+                    continue
+                }
+                work.append((bottle: bottle, engine: engine, keep: true))
+            }
+            let (done, left) = await rePoint(work)
+            if done > 0 {
+                note("")
+                note("Open them with \(Codecs.label(engine)) from now on — opening one with "
+                     + "another CrossOver gives the cutscenes two GStreamer cores and it crashes.")
+            }
+            report(done: done, left: left + skipped, bottle: nil)
+        }
+    }
+
     /// Stages the codec and points every bottle that runs a game at it.
     func stageCodecs() {
+        guard !busy else { return }
         guard Codecs.gstreamerInstalled else {
             note("")
             note("GStreamer is not installed. Get the macOS runtime package")
@@ -917,9 +1318,9 @@ final class Runner: ObservableObject {
             status = "GStreamer missing."
             return
         }
-        busy = true
-        Task {
-            defer { busy = false; indeterminate = false; phaseLabel = "" }
+        beginCodecWork()
+        codecTask = Task {
+            defer { finishCodecWork() }
             if let v = Codecs.version {
                 note("GStreamer \(v) found"
                      + (Codecs.versionIsTested ? ""
@@ -927,24 +1328,41 @@ final class Runner: ObservableObject {
             }
             status = "Staging the codec…"
             let script = resources.appendingPathComponent("stage-codecs.sh").path
-            let ok = await run(.installingBridge, "/bin/bash", [script, "x86_64"])
-            guard ok else { status = "Staging failed."; return }
+            let ok = await run(.stagingCodec, "/bin/bash", [script, "x86_64"],
+                               register: { [box = codecProcess] proc in box.hold(proc) })
+            guard ok else { status = stopping ? "Stopped." : "Staging failed."; return }
+            // A Stop pressed during the staging used to change nothing: the flag
+            // was read for the status string and never again, so every bottle
+            // was written anyway by a run the user had told to stop.
+            guard !stopping else {
+                note("")
+                note("Stopped after staging. No bottle was changed.")
+                status = "Stopped. No bottle was changed."
+                return
+            }
+            Codecs.refresh()
 
+            // Driven from the survey rather than from the P5S candidates plus a
+            // directory listing: those two overlap, so a bottle holding a P5S
+            // save was written twice and counted twice, and the total is now a
+            // number the user can check against the list in the sheet.
+            //
+            // Each bottle is written for the engine it should be on -- the one
+            // the user chose, or failing that its own "Version". Following the
+            // file alone overwrote a choice made in the sheet without saying so
+            // and left the two disagreeing, which the next survey reported as
+            // drift the user had not caused.
             var touched: [String] = []
-            for bottle in Bottle.candidates(forProject: "P5S").map(\.url)
-                        + ((try? FileManager.default.contentsOfDirectory(
-                              at: Bottle.root, includingPropertiesForKeys: nil)) ?? []) {
-                if FileManager.default.fileExists(
-                    atPath: bottle.appendingPathComponent("cxbottle.conf").path),
-                   Codecs.configure(bottle: bottle) == nil {
-                    touched.append(bottle.lastPathComponent)
+            for bottle in Codecs.survey() {
+                guard let target = bottle.target else { continue }
+                if Codecs.configure(bottle: bottle.url, engine: target) == nil {
+                    touched.append(bottle.name)
                 }
             }
             note("")
             Codecs.refresh()
             note("Codec staged, and \(touched.count) bottle(s) pointed at it.")
-            note("Close Steam completely before relaunching: this is bottle")
-            note("configuration, and a live wineserver keeps the old copy.")
+            noteRestart(touched.count == 1 ? touched.first : nil)
             status = "Codec ready."
         }
     }
@@ -1370,6 +1788,8 @@ enum Codecs {
         cachedEngineNames = nil
         cachedFramework = nil
         cachedStaged = nil
+        cachedSurvey = nil
+        cachedChoices = nil
     }
 
     private static func readVersion() -> String? {
@@ -1461,22 +1881,26 @@ enum Codecs {
         engine(ofStagedPath: path) != nil || tidy(path) == tidy(legacyStagedPath)
     }
 
-    /// The plugin, and something for it to resolve through @loader_path/../lib.
+    /// A staging the script says it finished, not a directory that exists.
     ///
-    /// Both halves, because stage-codecs.sh copies the plugin before the loop
-    /// that fills lib/ -- and staging can now be stopped, which makes that
-    /// half-finished directory reachable on purpose rather than only after a
-    /// crash. A plugin with nothing to link against is not a staging, and
-    /// pointing a bottle at it is the same silence as pointing it nowhere.
+    /// Completeness is a fact recorded by the thing that knows it. This used to
+    /// be inferred from a listing -- the plugin is there and lib/ is not empty
+    /// -- which is true after the *first* support library lands with a dozen
+    /// still missing, because stage-codecs.sh copies the plugin before it walks
+    /// the dependencies. Stop the run there and `ensureStaged` said yes, a
+    /// bottle was pointed at the folder, and the row showed a green check over
+    /// a codec that cannot load. Now the script writes `.complete` last, into a
+    /// directory it then moves into place in one step, so a run that was
+    /// stopped or crashed leaves either the previous complete staging or
+    /// nothing at all.
     static func staged(forEngine version: String) -> Bool {
         let fm = FileManager.default
         let dir = stagedPath(forEngine: version)
-        guard fm.fileExists(
-            atPath: (dir as NSString).appendingPathComponent("libgstlibav.dylib"))
+        let arch = (dir as NSString).deletingLastPathComponent
+        guard fm.fileExists(atPath: (arch as NSString).appendingPathComponent(".complete"))
         else { return false }
-        let lib = ((dir as NSString).deletingLastPathComponent as NSString)
-            .appendingPathComponent("lib")
-        return !((try? fm.contentsOfDirectory(atPath: lib))?.isEmpty ?? true)
+        return fm.fileExists(
+            atPath: (dir as NSString).appendingPathComponent("libgstlibav.dylib"))
     }
 
     private static var cachedEngines: [String: URL]?
@@ -1545,6 +1969,31 @@ enum Codecs {
         return found
     }
 
+    /// One key out of a cxbottle.conf, for the two this app has any business
+    /// reading: "Version" and "GST_PLUGIN_PATH".
+    ///
+    /// The closing quote is part of the prefix. No key here is a prefix of
+    /// another today, and the parser is not the thing that should have to be
+    /// re-checked on the day one is.
+    ///
+    /// Leading whitespace is skipped, because the writer strips indented keys
+    /// too. Reader and writer have to agree on what counts as a key: while they
+    /// did not, an indented "GST_PLUGIN_PATH" survived the strip, the file ended
+    /// up with two of them, and this read only ours -- a conf with two answers
+    /// reported as correctly configured.
+    static func value(of key: String, in text: String) -> String? {
+        let prefix = "\"\(key)\""
+        for raw in text.split(separator: "\n") {
+            let line = raw.drop { $0 == " " || $0 == "\t" }
+            guard line.hasPrefix(prefix) else { continue }
+            guard let open = line.range(of: "= \""),
+                  let close = line.range(of: "\"", range: open.upperBound..<line.endIndex)
+            else { continue }
+            return String(line[open.upperBound..<close.lowerBound])
+        }
+        return nil
+    }
+
     /// The engine a bottle last ran under: CrossOver stamps its own
     /// CFBundleVersion into cxbottle.conf as "Version", and re-stamps it when
     /// another install migrates the bottle. That makes it the right signal --
@@ -1554,36 +2003,221 @@ enum Codecs {
         guard let text = try? String(
             contentsOf: bottle.appendingPathComponent("cxbottle.conf"), encoding: .utf8)
         else { return nil }
-        for line in text.split(separator: "\n") where line.hasPrefix("\"Version\"") {
-            guard let open = line.range(of: "= \""),
-                  let close = line.range(of: "\"", range: open.upperBound..<line.endIndex)
-            else { continue }
-            return String(line[open.upperBound..<close.lowerBound])
-        }
-        return nil
+        return value(of: "Version", in: text)
     }
 
-    /// Bottles that already point at the staged folder.
-    private static var cachedBottles: [String]?
+    /// What one bottle is wired to, and what it ought to be wired to.
+    ///
+    /// Two keys out of cxbottle.conf and the folder's own name. Nothing here
+    /// opens drive_c: which games are inside a bottle is not this app's
+    /// business, and a row that said so would be a row enumerating them.
+    struct BottleState: Identifiable, Equatable {
+        let url: URL
+        /// "Version": the engine that last updated the bottle.
+        let runs: String?
+        /// GST_PLUGIN_PATH, verbatim.
+        let pointsAt: String?
+        /// The engine that path was staged for, when it is one of ours.
+        let pathEngine: String?
+        /// The engine the user picked, while it still disagrees with `runs`.
+        let choice: String?
+        let state: Wiring
 
-    /// Cached for the same reason the version is: a SwiftUI body asks for this
-    /// on every published change, and answering means reading every bottle's
-    /// cxbottle.conf off disk.
-    static func bottlesConfigured() -> [String] {
-        if let c = cachedBottles { return c }
-        let found = readBottlesConfigured()
-        cachedBottles = found
+        var id: String { url.path }
+        /// The user's own label for the bottle. Never its contents.
+        var name: String { url.lastPathComponent }
+        /// What this bottle should be pointing at: what the user said, or
+        /// failing that what the bottle itself records.
+        var target: String? { choice ?? runs }
+    }
+
+    /// The verdicts. Separate cases rather than a bool, because the repair is
+    /// different in each: a drifted bottle is re-pointed, one whose staging is
+    /// gone needs the staging built first, and a value this app did not write
+    /// is not ours to replace without being asked.
+    enum Wiring: Equatable {
+        case unreadable
+        /// No "Version" and no choice: nothing to judge the pointer against.
+        case engineUnknown
+        /// The engine it should use is not on this Mac.
+        case engineGone(String)
+        /// No GST_PLUGIN_PATH. Neutral -- most bottles never need one.
+        case unwired(String)
+        case matched(String)
+        /// A chosen engine the bottle's own "Version" has not caught up with.
+        /// The "Version" travels with it, because the sentence that matters is
+        /// about the engine the bottle would open under today, not the chosen
+        /// one -- and that sentence is the whole warning.
+        case waiting(chosen: String, runs: String?)
+        /// The pointer names another engine's staging. `runs` is carried apart
+        /// from `to` because `to` can come from a choice rather than from the
+        /// file, and "now runs under \(to)" is then a sentence about an engine
+        /// the bottle is not running under at all.
+        case drifted(from: String, to: String, runs: String?)
+        /// The right engine, but its staging is not on disk.
+        case missing(String)
+        /// Someone else's value -- or, when `legacy`, the single directory the
+        /// layout before this one used, which is ours but unattributable.
+        case foreign(path: String, legacy: Bool)
+
+        var isCorrect: Bool { if case .matched = self { return true }; return false }
+
+        /// Set to one CrossOver, last opened with another. Not repairable --
+        /// see `Runner.needsCodecAttention` -- but never invisible either.
+        var isWaiting: Bool { if case .waiting = self { return true }; return false }
+
+        /// Repairable with no further question asked. A non-legacy foreign
+        /// value is deliberately not: replacing something this app did not
+        /// write belongs on the row where the user can see what it says.
+        var needsRepair: Bool {
+            switch self {
+            case .drifted, .missing:      return true
+            case .foreign(_, let legacy): return legacy
+            default:                      return false
+            }
+        }
+    }
+
+    private static var cachedSurvey: [BottleState]?
+
+    /// Every bottle, sorted by name, with its verdict.
+    ///
+    /// Cached for the same reason the version is: this used to be asked from a
+    /// SwiftUI body on every published change, and answering means reading
+    /// every bottle's cxbottle.conf off disk. Now `Runner.refreshCodecs()` is
+    /// the only caller and the views read its published copy -- but the cache
+    /// stays, because it is also what makes several actions in a row cheap.
+    static func survey() -> [BottleState] {
+        if let c = cachedSurvey { return c }
+        let found = readSurvey()
+        cachedSurvey = found
         return found
     }
 
-    private static func readBottlesConfigured() -> [String] {
-        (try? FileManager.default.contentsOfDirectory(at: Bottle.root, includingPropertiesForKeys: nil))?
-            .filter { bottle in
-                guard let conf = try? String(contentsOf: bottle.appendingPathComponent("cxbottle.conf"),
-                                             encoding: .utf8) else { return false }
-                return conf.contains("GST_PLUGIN_PATH")
+    private static func readSurvey() -> [BottleState] {
+        let fm = FileManager.default
+        let chosen = choices()
+        return ((try? fm.contentsOfDirectory(at: Bottle.root, includingPropertiesForKeys: nil)) ?? [])
+            .filter { fm.fileExists(atPath: $0.appendingPathComponent("cxbottle.conf").path) }
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent)
+                      == .orderedAscending }
+            .map { classify($0, choice: chosen[$0.lastPathComponent]) }
+    }
+
+    /// The order of these tests is load-bearing.
+    ///
+    /// An engine that is not installed is ranked above every test on the path,
+    /// because no staging can be built for it and a Repair button on that row
+    /// would be a button that lies. Drift is ranked above the staging test,
+    /// because a drifted bottle whose target has no staging is still drift --
+    /// the repair stages, then re-points, in that order.
+    private static func classify(_ url: URL, choice: String?) -> BottleState {
+        func made(_ runs: String?, _ pointsAt: String?, _ pathEngine: String?,
+                  _ state: Wiring) -> BottleState {
+            BottleState(url: url, runs: runs, pointsAt: pointsAt,
+                        pathEngine: pathEngine, choice: choice, state: state)
+        }
+        guard let text = try? String(
+            contentsOf: url.appendingPathComponent("cxbottle.conf"), encoding: .utf8)
+        else { return made(nil, nil, nil, .unreadable) }
+
+        let runs = value(of: "Version", in: text)
+        let pointsAt = value(of: "GST_PLUGIN_PATH", in: text)
+        let pathEngine = pointsAt.flatMap { engine(ofStagedPath: $0) }
+        func here(_ state: Wiring) -> BottleState { made(runs, pointsAt, pathEngine, state) }
+
+        guard let target = choice ?? runs else { return here(.engineUnknown) }
+        guard installedEngines()[target] != nil else { return here(.engineGone(target)) }
+        guard let pointsAt else { return here(.unwired(target)) }
+        guard let pathEngine else {
+            return here(.foreign(path: pointsAt, legacy: tidy(pointsAt) == tidy(legacyStagedPath)))
+        }
+        guard pathEngine == target else {
+            return here(.drifted(from: pathEngine, to: target, runs: runs))
+        }
+        guard staged(forEngine: target) else { return here(.missing(target)) }
+        if let choice, runs != choice { return here(.waiting(chosen: choice, runs: runs)) }
+        return here(.matched(target))
+    }
+
+    /// Bottles pointing at the codec staged for the engine they run under.
+    ///
+    /// It used to be every bottle holding any GST_PLUGIN_PATH at all, which
+    /// counted a bottle pointing at another CrossOver's directory as fine and
+    /// so reported everything in order in exactly the situation that crashes.
+    /// Configured means correctly configured or it means nothing.
+    /// One definition, in one place, and the count on screen reads it too:
+    /// this used to be the only statement of what "configured" means while the
+    /// banner filtered the published survey itself, so widening one of them
+    /// would silently not widen the other.
+    static func configured(in rows: [BottleState]) -> [BottleState] {
+        rows.filter { $0.state.isCorrect }
+    }
+
+    static func bottlesConfigured() -> [String] {
+        configured(in: survey()).map { $0.name }
+    }
+
+    /// The ones a single button can put right.
+    static func bottlesNeedingRepair() -> [BottleState] {
+        survey().filter { $0.state.needsRepair }
+    }
+
+    // MARK: An engine chosen by hand
+
+    /// Kept in UserDefaults, keyed by the bottle's folder name.
+    ///
+    /// It has to persist: without it the banner would nag about a decision
+    /// made on purpose, and Repair would undo it a second later. Renaming a
+    /// bottle in CrossOver orphans its entry, which `pruneSpentChoices` and a
+    /// later re-point cost nothing to recover from -- keying by path has the
+    /// same exposure, since every bottle lives under the one root.
+    private static let choiceKey = "BottleEngineChoice"
+    private static var cachedChoices: [String: String]?
+
+    static func choices() -> [String: String] {
+        if let c = cachedChoices { return c }
+        let stored = (UserDefaults.standard.dictionary(forKey: choiceKey) as? [String: String]) ?? [:]
+        cachedChoices = stored
+        return stored
+    }
+
+    /// nil clears the choice, which is what "Automatic" means.
+    static func setChoice(_ engine: String?, forBottle name: String) {
+        var stored = choices()
+        if let engine { stored[name] = engine } else { stored.removeValue(forKey: name) }
+        guard stored != cachedChoices else { return }
+        UserDefaults.standard.set(stored, forKey: choiceKey)
+        cachedChoices = stored
+        cachedSurvey = nil
+    }
+
+    /// Drops a choice once the bottle's own "Version" says the same thing.
+    ///
+    /// At that point automatic gives the identical answer, so the stored one
+    /// is nothing but something left to go stale. Reads disk, so it is called
+    /// from the refresh and never from inside `survey()`.
+    static func pruneSpentChoices() {
+        let stored = choices()
+        guard !stored.isEmpty else { return }
+        var kept = stored
+        for (name, engine) in stored {
+            guard let text = try? String(
+                contentsOf: Bottle.root.appendingPathComponent(name)
+                    .appendingPathComponent("cxbottle.conf"), encoding: .utf8)
+            else { continue }
+            // Spent when the bottle agrees with it, and equally spent when the
+            // engine it names has been uninstalled: a choice nothing can act on
+            // is not a preference any more, and leaving it in place turns the
+            // row into a dead end that only says the CrossOver is gone.
+            if value(of: "Version", in: text) == engine || installedEngines()[engine] == nil {
+                kept.removeValue(forKey: name)
             }
-            .map(\.lastPathComponent) ?? []
+        }
+        guard kept != stored else { return }
+        UserDefaults.standard.set(kept, forKey: choiceKey)
+        cachedChoices = kept
+        cachedSurvey = nil
     }
 
     /// Adds GST_PLUGIN_PATH to a bottle, once.
@@ -1592,14 +2226,25 @@ enum Codecs {
     /// and the launcher never sets this variable, so the entry survives. A
     /// live wineserver caches the old configuration, which is why the caller
     /// is told to close the game entirely rather than just relaunch it.
-    static func configure(bottle: URL) -> String? {
+    /// `forced` is the engine the user picked. Without one this follows the
+    /// bottle's own "Version", which is what every existing caller wants and
+    /// why the parameter is defaulted rather than a second overload.
+    static func configure(bottle: URL, engine forced: String? = nil) -> String? {
         let conf = bottle.appendingPathComponent("cxbottle.conf")
         guard var text = try? String(contentsOf: conf, encoding: .utf8) else {
             return "Cannot read \(bottle.lastPathComponent)'s configuration."
         }
-        guard let engine = engineVersion(ofBottle: bottle) else {
+        guard let engine = forced ?? value(of: "Version", in: text) else {
             return "\(bottle.lastPathComponent) does not record which CrossOver it runs under."
         }
+        // The staged directory symlinks into that CrossOver's own bundle, so an
+        // engine that is not on this Mac means a folder of dangling links.
+        guard installedEngines()[engine] != nil else {
+            return "CrossOver \(engine) is not installed on this Mac."
+        }
+        // Before the write, and it stays before the write: a staging that
+        // failed half way must not leave the bottle naming a directory that
+        // was never built.
         guard staged(forEngine: engine) else {
             return "\(bottle.lastPathComponent) runs under a CrossOver with no staged codec."
         }
@@ -1614,9 +2259,18 @@ enum Codecs {
         // outside [EnvironmentVariables] left the file with two, and a config
         // file with two answers has no answer. Stripping first is idempotent.
         text = text.replacingOccurrences(
-            of: #"(?m)^"GST_PLUGIN_PATH"[^\n]*\n?"#, with: "", options: .regularExpression)
+            of: #"(?m)^[ \t]*"GST_PLUGIN_PATH"[^\n]*\n?"#, with: "", options: .regularExpression)
+        // A conf with no [EnvironmentVariables] used to be refused, which left
+        // the bottle unrepairable from inside the app and counted in the banner
+        // for good, with one log line as the only explanation. The strip above
+        // has already removed any stray key, so creating the section is the
+        // same idempotent write as inserting into an existing one.
+        if text.range(of: "[EnvironmentVariables]") == nil {
+            if !text.isEmpty, !text.hasSuffix("\n") { text += "\n" }
+            text += "\n[EnvironmentVariables]\n"
+        }
         guard let range = text.range(of: "[EnvironmentVariables]") else {
-            return "\(bottle.lastPathComponent) has no [EnvironmentVariables] section."
+            return "\(bottle.lastPathComponent)'s configuration could not be updated."
         }
         text.replaceSubrange(range,
             with: "[EnvironmentVariables]\n\"GST_PLUGIN_PATH\" = \"\(want)\"")
@@ -2170,10 +2824,10 @@ enum SteamLibrary {
 
 struct ContentView: View {
     @State private var confirming = false
-    /// Bumped to re-read the GStreamer state after the user installs it,
-    /// so the banner updates without relaunching the app.
-    @State private var codecCheck = 0
     @State private var installAction = true
+    /// The bottle list. A sheet rather than a disclosure, because it is a list
+    /// with a control on every row and nothing else on screen relates to it.
+    @State private var showingBottles = false
     @StateObject private var runner = Runner()
     @State private var dropping = false
     /// Its own flag rather than sharing `dropping`. The two zones never appear
@@ -2186,6 +2840,11 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 16) {
             header
             requirement
+            // Drift is a fact about this Mac, not about a scan: it belongs on
+            // screen at launch, in either mode, with nothing chosen. The other
+            // codec banner is drawn from the plan table and so cannot be
+            // reached until bulk mode, a library, a scan and P5S in the plan.
+            if runner.needsCodecAttention { driftBanner }
             if runner.bulk {
                 bulkHeader
                 stepChoose
@@ -2206,6 +2865,17 @@ struct ContentView: View {
         }
         .padding(22)
         .frame(minWidth: 700, minHeight: 720)
+        .sheet(isPresented: $showingBottles) { bottlesSheet }
+        .task { runner.refreshCodecs() }
+        // Switching CrossOver means leaving this window and coming back to it,
+        // and the survey used to run only at launch -- so the app answered the
+        // user's question with whatever had been true before they left, and the
+        // only way to be told anything was to quit and relaunch.
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didBecomeActiveNotification)) { _ in
+            guard !runner.busy else { return }
+            runner.refreshCodecs()
+        }
     }
 
     private var header: some View {
@@ -2223,7 +2893,425 @@ struct ContentView: View {
         HStack(spacing: 8) {
             Image(systemName: "info.circle").foregroundStyle(.secondary)
             Text(Requirements.note).font(.caption).foregroundStyle(.secondary)
+            // Reachable in single-game mode, and when nothing is wrong. Someone
+            // who has just switched CrossOver has nothing drifted yet, so the
+            // banner that would otherwise be the only way in is not there.
+            Button("CrossOver and bottles…") { showingBottles = true }
+                .buttonStyle(.link)
+                .font(.caption)
+                .help("See which CrossOver each bottle runs under, choose one yourself, "
+                      + "or point every bottle at the CrossOver you have switched to.")
             Spacer()
+        }
+    }
+
+    // MARK: Bottles and the CrossOver each runs under
+
+    /// The repairable rows, read from the Runner's published survey. No disk.
+    private var driftRows: [Codecs.BottleState] {
+        runner.codecs.filter { $0.state.needsRepair }
+    }
+
+    /// The rows set to a CrossOver they have not been opened with yet. Not
+    /// repairable -- undoing a deliberate choice is not a repair -- and not
+    /// silent either: they get their own sentence and the button that reverses
+    /// them, because the state they describe crashes on the first cutscene if
+    /// the bottle is opened with the CrossOver it last ran under.
+    private var waitingRows: [Codecs.BottleState] { runner.waitingRows }
+
+    /// Cached inside `Codecs`, and warm by the time this is asked: the survey
+    /// that fills `runner.codecs` reads the same table.
+    private var engineVersions: [String] {
+        Codecs.installedEngines().keys.sorted()
+    }
+
+    private enum DriftGroup: Hashable { case drifted, missing, legacy }
+
+    /// Which kinds of trouble are actually on screen.
+    ///
+    /// The message used to be built from all-or-nothing tests, so a legacy row
+    /// and a missing row together produced one sentence that was false for
+    /// whichever of the two it was not about. Each group present now gets its
+    /// own clause and nothing claims anything about the others.
+    private var driftGroups: Set<DriftGroup> {
+        Set(driftRows.compactMap { row -> DriftGroup? in
+            switch row.state {
+            case .drifted: return .drifted
+            case .missing: return .missing
+            case .foreign: return .legacy
+            default:       return nil
+            }
+        })
+    }
+
+    /// The answer to "I switched CrossOver, now what?", on screen at launch.
+    private var driftBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: driftRows.isEmpty ? "clock.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(driftHeadline)
+                    .font(.callout.weight(.medium))
+                Text(driftMessage)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            // None of these takes the default action. The plan table's Fix
+            // button and the codec banner's Stage codec already claim Return,
+            // and a third would make one key mean different things at
+            // different depths of the same flow.
+            if !driftRows.isEmpty {
+                Button(repairTitle) { runner.repairDrifted() }
+                    .disabled(runner.busy)
+                    .help("The codec staged for one CrossOver cannot be loaded under "
+                          + "another. Two GStreamer cores is a crash, not a warning.")
+            }
+            if !waitingRows.isEmpty {
+                Button("Match \(waitingRows.count) to their CrossOver") { runner.matchAutomatic() }
+                    .disabled(runner.busy)
+                    .help("Points them back at the codec for the CrossOver their own "
+                          + "configuration records, and forgets the choice.")
+            }
+            Button("Bottles…") { showingBottles = true }
+        }
+        .padding(11)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.orange.opacity(0.08)))
+    }
+
+    /// Plain strings rather than inline conditionals, for the same reason
+    /// `codecMessage` is one: the compiler gives up type-checking them.
+    private var repairTitle: String { "Repair \(driftRows.count) bottle(s)" }
+
+    private var driftHeadline: String {
+        let n = driftRows.count
+        guard n > 0 else {
+            return "\(waitingRows.count) bottle(s) are set to a CrossOver they have not "
+                 + "been opened with"
+        }
+        let groups = driftGroups
+        guard groups.count == 1, let only = groups.first else {
+            return "\(n) bottle(s) need their codec re-pointed"
+        }
+        switch only {
+        case .drifted: return "\(n) bottle(s) point at the codec for another CrossOver"
+        case .missing: return "\(n) bottle(s) point at a codec that is not staged"
+        case .legacy:  return "\(n) bottle(s) point at an older layout's codec folder"
+        }
+    }
+
+    private var driftMessage: String {
+        let groups = driftGroups
+        // "They" only when the whole set is one kind of trouble. With two kinds
+        // on screen every clause is about part of the set, and saying so is the
+        // difference between a summary and a false statement.
+        let subject = groups.count == 1 ? "They" : "Some"
+        var parts: [String] = []
+        if groups.contains(.drifted) { parts.append(driftedSentence(subject)) }
+        if groups.contains(.missing) {
+            parts.append("\(subject) point at a codec folder that is not staged. Staging it "
+                       + "again takes a moment and needs no download.")
+        }
+        if groups.contains(.legacy) {
+            parts.append("\(subject) point at the codec folder an earlier version of this app "
+                       + "used. That folder was built against whichever CrossOver was "
+                       + "installed at the time, which is not knowable now.")
+        }
+        if !driftRows.isEmpty {
+            parts.append("A game started that way loads two GStreamer cores and crashes on "
+                       + "the first cutscene. Repairing points each bottle at the CrossOver "
+                       + "it should be using, and stages that codec first if it has none.")
+        }
+        if !waitingRows.isEmpty { parts.append(waitingSentence) }
+        return parts.joined(separator: " ")
+    }
+
+    /// The drifted clause. `to` is where the bottle should point, which is not
+    /// always where it runs: when the target came from a choice, "they now run
+    /// under \(to)" names the engine the user picked while the bottle is
+    /// running under the other one -- backwards, in the one sentence the user
+    /// is meant to reason from.
+    private func driftedSentence(_ subject: String) -> String {
+        let rows = driftRows.compactMap { row -> (from: String, to: String, runs: String?)? in
+            if case .drifted(let from, let to, let runs) = row.state { return (from, to, runs) }
+            return nil
+        }
+        let froms = Set(rows.map { $0.from })
+        let tos = Set(rows.map { $0.to })
+        let runs = Set(rows.map { $0.runs ?? "" })
+        guard froms.count == 1, tos.count == 1, runs.count == 1, let only = rows.first else {
+            return "\(subject) have moved to another CrossOver and still point at the codec "
+                 + "staged for the one they left."
+        }
+        if only.runs == only.to {
+            return "\(subject) now run under \(Codecs.label(only.to)) and still point at the "
+                 + "codec staged for \(Codecs.label(only.from))."
+        }
+        let ran: String = only.runs.map(Codecs.label) ?? "a CrossOver they do not record"
+        return "\(subject) run under \(ran), are set to \(Codecs.label(only.to)), and point "
+             + "at the codec staged for \(Codecs.label(only.from))."
+    }
+
+    private var waitingSentence: String {
+        let chosen = Set(waitingRows.compactMap { row -> String? in
+            if case .waiting(let engine, _) = row.state { return engine }
+            return nil
+        })
+        let one: String? = chosen.count == 1 ? chosen.first : nil
+        let name: String = one.map(Codecs.label) ?? "a CrossOver"
+        return "\(waitingRows.count) bottle(s) point at the codec for \(name) and have not "
+             + "been opened with it yet. Open them with it from now on — opening one with the "
+             + "CrossOver it last ran under loads two GStreamer cores and crashes on the first "
+             + "cutscene. Matching them undoes the choice."
+    }
+
+    private var bottlesSheet: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Bottles and CrossOver")
+                .font(.system(size: 17, weight: .semibold))
+            Text("A bottle runs under the CrossOver that last opened it, and needs the "
+                 + "codec staged for that same CrossOver. Automatic keeps the two "
+                 + "together. Choose a CrossOver yourself only if you know the bottle "
+                 + "runs under it — a bottle that has been opened by a newer CrossOver "
+                 + "records that one, so if you have gone back to an older install, say "
+                 + "so here rather than leaving it on Automatic.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if runner.codecs.isEmpty {
+                Text("No bottles in ~/Library/Application Support/CrossOver/Bottles.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 24)
+            } else {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(runner.codecs) { bottle in
+                            bottleRow(bottle)
+                            Divider()
+                        }
+                    }
+                }
+                .frame(minHeight: 200, maxHeight: 340)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.03)))
+            }
+
+            HStack(spacing: 12) {
+                // Safe here in a way it is not in the main window: a sheet is
+                // its own key context, so Return means this and nothing else.
+                Button(repairTitle) { runner.repairDrifted() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(runner.busy || driftRows.isEmpty)
+
+                // Asked before it runs, because this is the one action that
+                // moves bottles which are correct at this moment: a bottle
+                // still on the other CrossOver comes out of the sweep pointing
+                // somewhere it must not be opened from.
+                Menu("Use one CrossOver for every bottle") {
+                    ForEach(engineVersions, id: \.self) { v in
+                        Button(Codecs.label(v)) { sweeping = v }
+                    }
+                }
+                .frame(width: 250)
+                .disabled(runner.busy || engineVersions.isEmpty)
+
+                Spacer()
+
+                if runner.busy {
+                    // The main window's progress bar is behind the sheet, so
+                    // the status line and the way out have to be repeated here.
+                    Text(runner.status)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.tail)
+                    Button("Stop") { runner.stopCodecs() }
+                        .help("Stops now. A codec that was still being staged is left "
+                              + "unfinished, and no further bottle is changed.")
+                } else {
+                    Button("Check again") { runner.refreshCodecs() }
+                        .help("Re-reads every bottle's configuration.")
+                }
+                // Never disabled, for the same reason leaving bulk mode stays
+                // reachable during a scan: a run that hangs must not be able to
+                // trap someone in a sheet.
+                Button("Done") { showingBottles = false }
+            }
+
+            // What just happened, kept on screen. This used to be inside the
+            // busy branch above, so it disappeared at the instant it had
+            // something to report -- and the restart instruction went only to
+            // a log behind the sheet, which is the wrong place for the one
+            // thing standing between a correct configuration and a user who
+            // thinks the fix did not work.
+            if !runner.busy, !runner.codecStatus.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(runner.codecStatus).font(.caption)
+                    if !runner.codecAdvice.isEmpty {
+                        Text(runner.codecAdvice)
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 700)
+        .onChange(of: runner.busy) { _, busy in if !busy { pending = nil } }
+        .alert("Point every bottle at \(Codecs.label(sweeping ?? ""))?",
+               isPresented: Binding(get: { sweeping != nil },
+                                    set: { if !$0 { sweeping = nil } })) {
+            Button("Use it everywhere") {
+                if let engine = sweeping { runner.useEngineEverywhere(engine) }
+                sweeping = nil
+            }
+            Button("Cancel", role: .cancel) { sweeping = nil }
+        } message: {
+            Text(sweepWarning)
+        }
+    }
+
+    /// The engine the sweep is about to use, while its confirmation is up.
+    @State private var sweeping: String?
+
+    private var sweepWarning: String {
+        guard let sweeping else { return "" }
+        let moving = runner.codecs.filter { $0.state.isCorrect && $0.runs != sweeping }.count
+        let base = "Every bottle this app has already wired is pointed at the codec staged "
+                 + "for \(Codecs.label(sweeping)). Bottles with no codec set, and values "
+                 + "this app did not write, are left alone."
+        guard moving > 0 else { return base }
+        return base + " \(moving) of them match the CrossOver they run under today: after "
+             + "this they must be opened with \(Codecs.label(sweeping)), or they load two "
+             + "GStreamer cores and crash on the first cutscene."
+    }
+
+    private func bottleRow(_ bottle: Codecs.BottleState) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: rowSymbol(bottle.state))
+                .foregroundStyle(rowTint(bottle.state))
+                .help(rowTooltip(bottle.state))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(bottle.name).font(.callout)
+                Text(rowCaption(bottle))
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            Picker("", selection: Binding(
+                get: { shownChoice(bottle) },
+                set: { engine in
+                    pending = PendingPick(name: bottle.name, engine: engine)
+                    runner.selectEngine(engine, forBottle: bottle)
+                })) {
+                Text(automaticLabel(bottle)).tag(String?.none)
+                ForEach(engineVersions, id: \.self) { v in
+                    Text(Codecs.label(v)).tag(String?.some(v))
+                }
+            }
+            .labelsHidden()
+            .frame(width: 250)
+            .disabled(runner.busy)
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+    }
+
+    /// The selection the user just made, held until the work applying it ends.
+    ///
+    /// The picker reads a published snapshot that does not change until then,
+    /// and the row is disabled meanwhile, so a choice that starts a staging run
+    /// snapped back to the previous value and greyed out for the length of it.
+    /// That reads as the app refusing the choice.
+    private struct PendingPick: Equatable { let name: String; let engine: String? }
+    @State private var pending: PendingPick?
+
+    private func shownChoice(_ bottle: Codecs.BottleState) -> String? {
+        if runner.busy, let pending, pending.name == bottle.name { return pending.engine }
+        return bottle.choice
+    }
+
+    /// Always offered, even when the bottle records no "Version".
+    ///
+    /// The Automatic row used to be emitted only when there was one, so a
+    /// bottle with nothing to be automatic about got a picker with no option
+    /// matching its selection -- which SwiftUI draws empty, on the one row
+    /// whose caption is telling the user to choose something. An engine that is
+    /// no longer installed says so here rather than only in the log after the
+    /// user has picked it and been refused.
+    private func automaticLabel(_ bottle: Codecs.BottleState) -> String {
+        guard let runs = bottle.runs else { return "Automatic (not recorded)" }
+        if Codecs.installedEngines()[runs] == nil {
+            return "Automatic (\(Codecs.label(runs)) — not installed)"
+        }
+        return "Automatic (\(Codecs.label(runs)))"
+    }
+
+    private func rowSymbol(_ state: Codecs.Wiring) -> String {
+        switch state {
+        case .matched:                 return "checkmark.seal"
+        case .waiting:                 return "clock"
+        case .drifted, .missing:       return "exclamationmark.triangle"
+        case .engineGone:              return "exclamationmark.triangle"
+        case .foreign(_, let legacy):  return legacy ? "exclamationmark.triangle"
+                                                     : "questionmark.circle"
+        case .engineUnknown:           return "questionmark.circle"
+        case .unwired:                 return "minus.circle"
+        case .unreadable:              return "xmark.circle"
+        }
+    }
+
+    private func rowTint(_ state: Codecs.Wiring) -> Color {
+        if case .matched = state { return .green }
+        if state.needsRepair { return .orange }
+        if case .waiting = state { return .orange }
+        if case .engineGone = state { return .orange }
+        return .secondary
+    }
+
+    private func rowTooltip(_ state: Codecs.Wiring) -> String {
+        switch state {
+        case .drifted, .foreign(_, true):
+            return "The codec staged for one CrossOver cannot be loaded under another. "
+                 + "Two GStreamer cores is a crash, not a warning."
+        default:
+            return ""
+        }
+    }
+
+    private func rowCaption(_ bottle: Codecs.BottleState) -> String {
+        switch bottle.state {
+        case .matched(let v):
+            return "Runs under \(Codecs.label(v)) · codec matches"
+        case .waiting(let chosen, let runs):
+            let ran: String = runs.map(Codecs.label) ?? "another CrossOver"
+            // The consequence, not just the intent: this row is the crashing
+            // configuration for as long as the bottle is opened the old way.
+            return "Set to \(Codecs.label(chosen)) · it last ran under \(ran). Open it with "
+                 + "\(Codecs.label(chosen)) from now on — opening it with \(ran) loads two "
+                 + "GStreamer cores and crashes on the first cutscene."
+        case .drifted(let from, let to, let runs):
+            if let runs, runs != to {
+                return "Runs under \(Codecs.label(runs)) · set to \(Codecs.label(to)) · "
+                     + "points at the codec for \(Codecs.label(from))"
+            }
+            return "Now runs under \(Codecs.label(to)) · still points at the codec for "
+                 + "\(Codecs.label(from))"
+        case .missing(let v):
+            return "Runs under \(Codecs.label(v)) · its codec is not staged"
+        case .foreign(_, let legacy):
+            return legacy
+                ? "Points at the codec folder an earlier version of this app used"
+                : "Something else set GST_PLUGIN_PATH here. Choosing a CrossOver "
+                  + "replaces it."
+        case .unwired(let v):
+            return "Runs under \(Codecs.label(v)) · no codec set"
+        case .engineUnknown:
+            return "Does not record which CrossOver it runs under. Open it once in "
+                 + "CrossOver, or choose one here."
+        case .engineGone(let v):
+            return "Runs under \(Codecs.label(v)), which is not installed any more. "
+                 + "Choose a CrossOver it can use, or put that one back."
+        case .unreadable:
+            return "Its configuration cannot be read."
         }
     }
 
@@ -2390,12 +3478,23 @@ struct ContentView: View {
 
     /// Only shown when a scanned game needs it, so it is not a permanent
     /// button for a thing five of the six games have nothing to do with.
+    /// Everything staged AND every bottle pointing at the right one.
+    ///
+    /// The banner used to take its symbol, tint and title from `Codecs.staged`
+    /// alone, which asks only whether each installed engine has a directory. So
+    /// it showed a green seal and "VC-1 codec staged" directly above its own
+    /// caption saying six bottles would crash on the first cutscene, and anyone
+    /// scanning for colour read green and moved on.
+    private var codecHealthy: Bool {
+        Codecs.staged && driftRows.isEmpty && waitingRows.isEmpty
+    }
+
     private var codecBanner: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: Codecs.staged ? "checkmark.seal" : "shippingbox")
-                .foregroundStyle(Codecs.staged ? .green : .orange)
+            Image(systemName: codecBannerSymbol)
+                .foregroundStyle(codecHealthy ? Color.green : Color.orange)
             VStack(alignment: .leading, spacing: 3) {
-                Text(Codecs.staged ? "VC-1 codec staged" : "Persona 5 Strikers needs a VC-1 codec")
+                Text(codecBannerTitle)
                     .font(.callout.weight(.medium))
                 Text(codecMessage)
                     .font(.caption).foregroundStyle(.secondary)
@@ -2428,18 +3527,28 @@ struct ContentView: View {
                         }
                     }
                     .keyboardShortcut(.defaultAction)
-                    Button("Check again") {
-                        Codecs.refresh()
-                        codecCheck &+= 1
-                    }
+                    Button("Check again") { runner.refreshCodecs() }
                         .help("After installing it, check without restarting.")
                 }
+                Button("Bottles…") { showingBottles = true }
+                    .help("See which CrossOver each bottle runs under, and which "
+                          + "staged codec it points at.")
             }
         }
-        .id(codecCheck)
         .padding(11)
         .background(RoundedRectangle(cornerRadius: 10)
-            .fill((Codecs.staged ? Color.green : Color.orange).opacity(0.08)))
+            .fill((codecHealthy ? Color.green : Color.orange).opacity(0.08)))
+    }
+
+    private var codecBannerSymbol: String {
+        if codecHealthy { return "checkmark.seal" }
+        return Codecs.staged ? "exclamationmark.triangle" : "shippingbox"
+    }
+
+    private var codecBannerTitle: String {
+        if codecHealthy { return "VC-1 codec staged" }
+        if Codecs.staged { return "VC-1 codec staged, but some bottles point at the wrong one" }
+        return "Persona 5 Strikers needs a VC-1 codec"
     }
 
     /// Built as a plain string rather than inline: the compiler gave up
@@ -2452,8 +3561,24 @@ struct ContentView: View {
 
     private var codecMessage: String {
         if Codecs.staged {
-            let n = Codecs.bottlesConfigured().count
-            return "Borrowed from your GStreamer install, and \(n) bottle(s) point at it."
+            // The one definition of "configured", rather than a second copy of
+            // the filter living here where a later change to the first would
+            // silently not reach it.
+            let ok = Codecs.configured(in: runner.codecs).count
+            let bad = driftRows.count
+            let waiting = waitingRows.count
+            var text = bad == 0
+                ? "Borrowed from your GStreamer install, and \(ok) bottle(s) point at "
+                  + "the codec for the CrossOver they run under."
+                : "Borrowed from your GStreamer install. \(ok) bottle(s) point at the "
+                  + "codec for the CrossOver they run under; \(bad) do not, and will "
+                  + "crash on the first cutscene until they are repaired."
+            if waiting > 0 {
+                text += " \(waiting) bottle(s) are set to a CrossOver they have not been "
+                      + "opened with yet, and crash on the first cutscene if they are "
+                      + "opened with the one they last ran under."
+            }
+            return text
         }
         guard Codecs.gstreamerInstalled else {
             return "GStreamer is not installed. Get the macOS runtime package: "
@@ -2874,8 +3999,18 @@ struct ContentView: View {
                 .disabled(runner.busy)
 
                 if runner.busy {
-                    Button("Stop") { runner.stopping = true }
-                        .help("Finishes the game it is on, then stops.")
+                    // Two kinds of work reach this button. The flag is the
+                    // bulk-patch one, read between games; codec work is a shell
+                    // run that never reads it, so pressing Stop during a
+                    // staging changed nothing and said nothing, and every
+                    // bottle was written anyway.
+                    Button("Stop") {
+                        if runner.codecWork { runner.stopCodecs() } else { runner.stopping = true }
+                    }
+                    .help(runner.codecWork
+                          ? "Stops now. A codec that was still being staged is left "
+                            + "unfinished, and no bottle is changed."
+                          : "Finishes the game it is on, then stops.")
                 }
                 Spacer()
             }
@@ -2990,6 +4125,15 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                // Repair from the banner can start a staging run, which is the
+                // long job this window had no Stop for at all: the only one was
+                // inside the sheet, behind the button next to the one the user
+                // had just pressed.
+                if runner.codecWork {
+                    Button("Stop") { runner.stopCodecs() }
+                        .help("Stops now. A codec that was still being staged is left "
+                              + "unfinished, and no further bottle is changed.")
+                }
             }
         }
     }

@@ -117,6 +117,15 @@ stage_one() {
     return 0
   fi
   OUT="$ROOT/$VER/$ARCH"
+  # Built somewhere else and moved into place in one step, because bottles point
+  # at $OUT while this runs. Emptying it first meant a re-stage destroyed a live
+  # staging for the length of the build, and a run that was stopped or crashed
+  # left a half-built directory there that nothing could tell from a finished
+  # one -- the app pointed bottles at it and the game failed on the first
+  # cutscene with unresolved dependencies.
+  TMP="$ROOT/$VER/.$ARCH.incoming.$$"
+  mkdir -p "$ROOT/$VER"
+  find "$ROOT/$VER" -maxdepth 1 -name ".$ARCH.incoming.*" -exec rm -rf {} + 2>/dev/null || true
 
   echo "engine    : $ENGINE  ($VER, $ARCH)"
   echo "framework : $FRAMEWORK"
@@ -126,11 +135,10 @@ stage_one() {
   # it tries to load everything in it as a plugin -- so the support libraries go
   # one level out, in lib/, where the plugin's own @loader_path/../lib finds them
   # and the scanner never looks.
-  rm -rf "$OUT"
-  mkdir -p "$OUT/gstreamer-1.0" "$OUT/lib"
+  mkdir -p "$TMP/gstreamer-1.0" "$TMP/lib"
 
   # The plugin itself, and ffmpeg, which is the whole point of taking it.
-  cp "$FRAMEWORK/lib/gstreamer-1.0/libgstlibav.dylib" "$OUT/gstreamer-1.0/"
+  cp "$FRAMEWORK/lib/gstreamer-1.0/libgstlibav.dylib" "$TMP/gstreamer-1.0/"
 
   # Everything the plugin and ffmpeg need. Names beginning libgst, libglib,
   # libgobject and friends must come from CrossOver -- taking those from the
@@ -144,7 +152,7 @@ stage_one() {
 
   needed() { otool -L "$1" 2>/dev/null | grep -oE '@rpath/[^ ]+\.dylib' | sed 's|@rpath/||' | sort -u; }
 
-  pending=$(needed "$OUT/gstreamer-1.0/libgstlibav.dylib")
+  pending=$(needed "$TMP/gstreamer-1.0/libgstlibav.dylib")
   seen=""
   while [ -n "$pending" ]; do
     next=""
@@ -152,29 +160,47 @@ stage_one() {
       case " $seen " in *" $lib "*) continue;; esac
       seen="$seen $lib"
       if from_crossover "$lib"; then
-        [ -e "$SRC/$lib" ] && ln -sf "$SRC/$lib" "$OUT/lib/$lib"
+        [ -e "$SRC/$lib" ] && ln -sf "$SRC/$lib" "$TMP/lib/$lib"
       elif [ -f "$FRAMEWORK/lib/$lib" ]; then
-        cp -f "$FRAMEWORK/lib/$lib" "$OUT/lib/$lib"
-        next="$next $(needed "$OUT/lib/$lib")"
+        cp -f "$FRAMEWORK/lib/$lib" "$TMP/lib/$lib"
+        next="$next $(needed "$TMP/lib/$lib")"
       fi
     done
     pending="$next"
   done
 
-  copied=$(find "$OUT" -type f -name '*.dylib' | wc -l | tr -d ' ')
-  linked=$(find "$OUT" -type l | wc -l | tr -d ' ')
+  copied=$(find "$TMP" -type f -name '*.dylib' | wc -l | tr -d ' ')
+  linked=$(find "$TMP" -type l | wc -l | tr -d ' ')
   echo
   echo "  ffmpeg and friends copied : $copied"
   echo "  CrossOver libraries linked: $linked"
   echo
 
-  # Appended straight to the file rather than to a variable: the loop below
-  # runs in a subshell, so a variable would not survive it.
+  # The marker the app reads, written last: completeness is a fact recorded by
+  # the thing that knows it, not something inferred from a directory listing --
+  # the plugin is copied before the walk above, so a listing says "staged" while
+  # a dozen support libraries are still missing.
+  date -u +'%Y-%m-%dT%H:%M:%SZ' > "$TMP/.complete"
+
+  rm -rf "$OUT"
+  mv "$TMP" "$OUT"
+
+  # Written to the file rather than to a variable: the loop below runs in a
+  # subshell, so a variable would not survive it. This engine's own line is
+  # replaced rather than appended, so re-staging one engine cannot leave the
+  # map holding two answers for it.
+  if [ -f "$ROOT/.map" ]; then
+    grep -v "^$VER|" "$ROOT/.map" > "$ROOT/.map.new" || true
+    mv "$ROOT/.map.new" "$ROOT/.map"
+  fi
   printf '%s|%s|%s\n' "$VER" "$ENGINE" "$OUT/gstreamer-1.0" >> "$ROOT/.map"
 }
 
 mkdir -p "$ROOT"
-: > "$ROOT/.map"
+# Truncated only for a full run. Per-engine staging is now the normal case --
+# every repair invokes this with one version -- and wiping the map would leave
+# it describing whichever engine was fixed last.
+[ -n "$WANT" ] || : > "$ROOT/.map"
 printf '%s\n' "$ENGINES" | while IFS='|' read -r ver app; do
   [ -n "$ver" ] || continue
   echo
