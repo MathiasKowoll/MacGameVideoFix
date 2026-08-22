@@ -250,3 +250,31 @@ A VP9 decoder reachable from Media Foundation. Three ways, none small:
 
 Until one of those exists, the honest status is unchanged: not fixed, and the
 reason is a codec, not anti-tamper.
+
+### The DirectStorage refusal, named
+
+Disassembling both binaries afterwards answered the question the live probes
+could not, and the answer is in D3DMetal rather than in DirectStorage.
+
+`D3D12Device::EnumerateMetaCommands` decides its return value from a per-title
+override table — 49 records matched against the executable's basename. One byte
+of the matched record selects the answer:
+
+    cmpb  $0x0, 0x24(%rax)        ; the matched title's record
+    movl  $0x887a0004, %eax       ; DXGI_ERROR_UNSUPPORTED
+    cmovnel %ecx, %eax            ; non-zero -> S_OK
+
+Exactly one of the 49 has that byte set: `Wreckfest2.exe`. Anything unlisted
+gets `_UnknownApp`, whose byte is zero, and therefore the error — deterministically,
+every launch.
+
+DirectStorage calls it unguarded, immediately after the `D3D12_OPTIONS4` query
+that ends our trace, and rethrows the HRESULT verbatim out of `CreateQueue`.
+The asymmetry is the whole defect: *no metacommand available* is handled
+gracefully — the code falls through to an HLSL compute path that this device's
+capabilities do support — but a *failing HRESULT* is not caught. Returning
+`S_OK` with a count of zero would have been the answer that let this work.
+
+So the refusal is not a capability this Mac lacks. It is an unimplemented call
+answering with an error where an empty result was expected, and it is worth
+reporting upstream on those terms.

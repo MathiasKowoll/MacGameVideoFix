@@ -53,12 +53,12 @@ while IFS= read -r app; do
   [ -n "$ver" ] || continue
   ENGINES="$ENGINES$ver|$app"$'\n'
 done <<EOF
-$(mdfind "kMDItemCFBundleIdentifier == 'com.codeweavers.CrossOver'" 2>/dev/null)
-$(ls -d /Applications/*.app "$HOME/Applications"/*.app 2>/dev/null)
+$(ls -d /Applications/*.app 2>/dev/null)
 EOF
 
-# Spotlight can be off or stale, hence the directory listing as well; both
-# feeds are deduplicated here rather than trusted to be disjoint.
+# /Applications only, deliberately. A CrossOver in ~/Applications is as likely
+# to be a copy kept for an experiment as one someone actually runs games with,
+# and staging against an engine nobody uses is work that can only mislead.
 ENGINES="$(printf '%s' "$ENGINES" | sort -u -t'|' -k1,1 | grep -v '^$' || true)"
 [ -n "$ENGINES" ] || { echo "error: no CrossOver installation found" >&2; exit 1; }
 

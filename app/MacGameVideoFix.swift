@@ -1031,13 +1031,35 @@ final class Runner: ObservableObject {
     ///
     /// Off the main actor and never called from a view body: it lists every
     /// bottle, reads a vdf out of each and stats one directory per library.
+    private var surveyTask: Task<Void, Never>?
+
     func findLibraries() {
         guard !lookingForLibraries else { return }
         lookingForLibraries = true
-        Task {
-            defer { lookingForLibraries = false }
-            survey = await Task.detached { SteamLibrary.survey() }.value
+        surveyTask = Task {
+            // Cleared on every exit, cancellation included. A flag set here and
+            // cleared only on the happy path is how a spinner outlives its work
+            // and leaves someone watching an app that is doing nothing.
+            defer { lookingForLibraries = false; surveyTask = nil }
+            let found = await Task.detached { SteamLibrary.survey() }.value
+            guard !Task.isCancelled else { return }
+            survey = found
         }
+    }
+
+    /// Abandons the search. It is quick, but "quick" is a measurement from this
+    /// machine, and a disconnected network volume is not obliged to agree.
+    func stopLooking() {
+        surveyTask?.cancel()
+        surveyTask = nil
+        lookingForLibraries = false
+    }
+
+    /// Abandons a scan from the UI. `cancelScan` is the private version the
+    /// folder-changing paths use; this is the button.
+    func stopScan() {
+        cancelScan()
+        status = "Scan stopped."
     }
 
     /// Step 2. Scans the one folder step 1 chose, and there is no other way in
@@ -1408,8 +1430,11 @@ enum Codecs {
         if let c = cachedEngines { return c }
         let fm = FileManager.default
         var found: [String: URL] = [:]
-        for dir in ["/Applications",
-                    (NSHomeDirectory() as NSString).appendingPathComponent("Applications")] {
+        // /Applications only. A CrossOver in ~/Applications is as likely to be
+        // a copy kept for an experiment as one someone actually runs games
+        // with, and staging against an engine the user does not use is work
+        // that can only mislead.
+        for dir in ["/Applications"] {
             for app in (try? fm.contentsOfDirectory(
                             at: URL(fileURLWithPath: dir),
                             includingPropertiesForKeys: nil)) ?? [] {
@@ -2520,8 +2545,21 @@ struct ContentView: View {
                     .help("After connecting a drive, check without relaunching.")
             }
 
-            if runner.survey == nil {
-                Text("Looking in your CrossOver bottles…")
+            if runner.lookingForLibraries {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Looking in your CrossOver bottles…")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Stop") { runner.stopLooking() }
+                        .buttonStyle(.link).font(.caption)
+                }
+            } else if runner.survey == nil {
+                // Reached when the search was stopped, or never ran. It used to
+                // render the same "Looking…" line as the state above, purely
+                // because both mean survey == nil -- so a search that ended
+                // left a sentence saying it was still going, over an app doing
+                // nothing at all, with no way out.
+                Text("Not searched yet. Drop your library above, or look again.")
                     .font(.caption).foregroundStyle(.secondary)
             } else if let found = runner.survey?.libraries, !found.isEmpty {
                 ScrollView {
@@ -2600,6 +2638,12 @@ struct ContentView: View {
                     .disabled(runner.libraryRoot == nil || runner.busy || runner.scanning)
                 if runner.scanning {
                     ProgressView().progressViewStyle(.linear).frame(maxWidth: 200)
+                    // A running scan spawns one --status per game found. Fast
+                    // here, but the folder may be on a drive that is not, and a
+                    // progress bar with no way out is a worse answer than a
+                    // slow one.
+                    Button("Stop") { runner.stopScan() }
+                        .buttonStyle(.link)
                 }
                 Spacer()
             }
