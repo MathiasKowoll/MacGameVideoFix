@@ -607,7 +607,7 @@ final class Runner: ObservableObject {
         statusAnswer = ""
         let code = await runStreaming("/bin/bash", [script, folder.path, "--status"]) { line in
             Task { @MainActor [weak self] in
-                guard let self, self.statusAnswer.isEmpty else { return }
+                guard let self, Self.isStateWord(line) else { return }
                 self.statusAnswer = line
             }
         }
@@ -669,7 +669,7 @@ final class Runner: ObservableObject {
         // capturing a local -- same pattern as run().
         let code = await runStreaming("/bin/bash", [script, g.root.path, "--status"]) { line in
             Task { @MainActor [weak self] in
-                guard let self, self.statusAnswer.isEmpty else { return }
+                guard let self, Self.isStateWord(line) else { return }
                 self.statusAnswer = line
             }
         }
@@ -1647,6 +1647,22 @@ final class Runner: ObservableObject {
     ///
     /// Only the state word is kept. --status also prints the path it found,
     /// and that belongs nowhere near a log someone might paste in public.
+    /// The words an installer's --status is allowed to answer with.
+    ///
+    /// Keeping the FIRST line of anything was the bug: install-runtime-fix.sh
+    /// emits an advisory to stderr during its folder walk, the app merges stderr
+    /// into the same pipe, and so the answer became "warning:". That fell to
+    /// default -- not applied -- for a game whose original was saved aside with
+    /// nothing live, which will not start. Revert is offered only for applied or
+    /// partial, so the one control that puts the DLL back was greyed out.
+    ///
+    /// Matching the word instead of trusting the position also means the next
+    /// advisory anyone adds cannot re-open this.
+    private static func isStateWord(_ line: String) -> Bool {
+        ["installed", "broken", "half", "absent"]
+            .contains(line.trimmingCharacters(in: .whitespaces))
+    }
+
     private func probe(_ hit: ScanHit) async -> ScanHit {
         var hit = hit
         let script = resources.appendingPathComponent(hit.game.installer).path
@@ -1654,7 +1670,7 @@ final class Runner: ObservableObject {
         statusAnswer = ""
         let code = await runStreaming("/bin/bash", [script, hit.root.path, "--status"]) { line in
             Task { @MainActor [weak self] in
-                guard let self, self.statusAnswer.isEmpty else { return }
+                guard let self, Self.isStateWord(line) else { return }
                 self.statusAnswer = line
             }
         }
@@ -1670,6 +1686,17 @@ final class Runner: ObservableObject {
         case "installed":
             hit.state = .applied
             hit.selected = false
+        // Half belongs with broken, not with default. Falling to default made it
+        // .notApplied with no blocker, so the row was pre-selected and offered
+        // as fixable; the installer then refused it, and Remove skips
+        // .notApplied, so neither button did anything. A user with a game that
+        // will not start, in a mode with no way out, and a log cleared by the
+        // next scan.
+        case "half":
+            hit.state = .partial
+            hit.selected = false
+            hit.blocker = "Half installed: the original is saved aside and "
+                        + "nothing is in its place. Revert puts it back."
         case "broken":
             hit.state = .partial
             hit.selected = false

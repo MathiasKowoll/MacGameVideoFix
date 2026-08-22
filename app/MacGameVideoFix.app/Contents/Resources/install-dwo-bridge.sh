@@ -25,7 +25,7 @@
 # Part of MacGameVideoFix — https://github.com/MathiasKowoll/MacGameVideoFix
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-set -uo pipefail
+set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PROXY="${PROXY_DLL:-$HERE/libxess.dll}"
@@ -66,6 +66,13 @@ is_ours() { [ -f "$1" ] && LC_ALL=C grep -qa "$MARKER" "$1"; }
 status() {
   if is_ours "$LIVE" && [ -f "$REAL" ]; then echo installed
   elif is_ours "$LIVE"; then echo broken       # proxy present, original missing
+  elif [ ! -f "$LIVE" ] && [ -f "$REAL" ]; then
+    # The original is saved aside and nothing is live: the game will not start.
+    # Both sibling installers report this and this one did not, so an install
+    # interrupted between the move and the copy left the original stranded under
+    # a name nothing looks for, while the app said "not patched yet" and greyed
+    # out the one control that puts it back.
+    echo half
   else echo absent
   fi
 }
@@ -98,6 +105,17 @@ case "$MODE" in
   if [ "$(status)" = installed ]; then
     echo "the bridge is already installed, nothing to do"
     exit 0
+  fi
+
+  # Half-installed: the original is saved aside and nothing is live. Installing
+  # on top would move whatever is in its place over the saved original and lose
+  # it. Restoring first is the only safe order, and the only one that leaves the
+  # game able to start.
+  if [ "$(status)" = half ]; then
+    echo "error: this install is half finished — the original is at $REAL" >&2
+    echo "       and nothing is in its place, so the game will not start." >&2
+    echo "       Run with --restore first, then install again." >&2
+    exit 1
   fi
 
   echo "[1/4] checking libxess.dll"
@@ -145,10 +163,27 @@ case "$MODE" in
   fi
 
   echo "[3/4] moving the original aside as libxess_real.dll"
-  mv -f "$LIVE" "$REAL"
+  # Nothing may write over $LIVE until the original is known to be safe under
+  # $REAL. Without this the two commands are independent: on a directory that
+  # denies rename but leaves the file writable -- a network library, a restored
+  # backup, a deny-delete_child ACL -- the mv fails, the cp truncates the original
+  # in place, and the script exits 0 printing "installed". Reproduced exactly that
+  # way against a chmod 555 directory. There is no undo; the file is gone.
+  mv -f "$LIVE" "$REAL" || {
+    echo "error: could not move the original aside; nothing was changed" >&2
+    exit 1
+  }
+  [ -f "$REAL" ] || {
+    echo "error: the original is not where it should be; refusing to write" >&2
+    exit 1
+  }
 
   echo "[4/4] installing the bridge"
-  cp "$PROXY" "$LIVE"
+  cp "$PROXY" "$LIVE" || {
+    echo "error: could not install the bridge; putting the original back" >&2
+    mv -f "$REAL" "$LIVE" || echo "       and that failed too -- it is at $REAL" >&2
+    exit 1
+  }
 
   echo
   echo "installed — the cutscenes should play"
