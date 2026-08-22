@@ -1447,6 +1447,9 @@ enum SteamLibrary {
 
 struct ContentView: View {
     @State private var confirming = false
+    /// Bumped to re-read the GStreamer state after the user installs it,
+    /// so the banner updates without relaunching the app.
+    @State private var codecCheck = 0
     @State private var installAction = true
     @StateObject private var runner = Runner()
     @State private var dropping = false
@@ -1666,10 +1669,26 @@ struct ContentView: View {
             }
             Spacer()
             if !Codecs.staged {
-                Button("Stage codec") { runner.stageCodecs() }
-                    .disabled(runner.busy || !Codecs.gstreamerInstalled)
+                if Codecs.gstreamerInstalled {
+                    Button("Stage codec") { runner.stageCodecs() }
+                        .disabled(runner.busy)
+                        .keyboardShortcut(.defaultAction)
+                } else {
+                    /// The button that resolves the problem, rather than a URL
+                    /// to copy out by hand. It is the only thing standing
+                    /// between this row and a working game.
+                    Button("Get GStreamer…") {
+                        if let url = URL(string: Codecs.downloadPage) {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    Button("Check again") { codecCheck &+= 1 }
+                        .help("After installing it, check without restarting.")
+                }
             }
         }
+        .id(codecCheck)
         .padding(11)
         .background(RoundedRectangle(cornerRadius: 10)
             .fill((Codecs.staged ? Color.green : Color.orange).opacity(0.08)))
@@ -1689,14 +1708,20 @@ struct ContentView: View {
             return "Borrowed from your GStreamer install, and \(n) bottle(s) point at it."
         }
         guard Codecs.gstreamerInstalled else {
-            return "Install the GStreamer 1.24.14 macOS runtime package first. "
-                 + "Nothing is redistributed here — the decoder is borrowed from "
-                 + "your own install."
+            return "GStreamer is not installed. Get the macOS runtime package — "
+                 + "1.24.14 is the tested version — and this borrows the decoder "
+                 + "from it. Nothing is redistributed here."
         }
-        let found = Codecs.version ?? "your install"
-        let caveat = Codecs.versionIsTested ? "" : " (1.24 is the tested series)"
-        return "CrossOver ships no VC-1 decoder. It can be borrowed from "
-             + "GStreamer \(found)\(caveat); nothing is redistributed."
+        guard let found = Codecs.version else {
+            return "GStreamer is installed but its version cannot be read. "
+                 + "Staging will go ahead and say what it finds."
+        }
+        if Codecs.versionIsTested {
+            return "CrossOver ships no VC-1 decoder. GStreamer \(found) is "
+                 + "installed and will be borrowed from — nothing is redistributed."
+        }
+        return "GStreamer \(found) is installed, and 1.24.14 is the tested "
+             + "version. This will go ahead with what you have and say so."
     }
 
     private var planTable: some View {
