@@ -1183,6 +1183,95 @@ static void note_shared(const char *what, UINT w, UINT h, DWORD fmt,
               : "");
 }
 
+
+/* Hand back a real shared handle, and see whether the game carries on.
+ *
+ * Wine's d3d9 answers CreateRenderTarget with S_OK and a null handle: it warns
+ * and continues rather than failing, so the game believes it succeeded and
+ * gives up quietly later, without ever calling ReadSample.
+ *
+ * DXMT's d3d11 does implement sharing -- GetSharedHandle and
+ * CreateSharedHandle are both present in it, against none in Wine's -- so a
+ * genuine handle can be made here. This creates a D3D11 texture of our own and
+ * returns its handle.
+ *
+ * This alone cannot show the video: nothing yet copies from that texture to the
+ * D3D9 surface the game actually draws. It is the step that produces evidence
+ * before the expensive part is built. If the game starts reading samples, the
+ * account is right and only the copy is missing. If it still does not, the
+ * account is wrong, and better to learn that from one build than from three
+ * days of bridge.
+ */
+static void *sidecar_device, *sidecar_context, *sidecar_texture;
+static HANDLE sidecar_handle;
+
+static const GUID iid_dxgi_resource =
+    { 0x035f3ab4, 0x482e, 0x4e50, { 0xb4, 0x1f, 0x8a, 0x7f, 0x8b, 0xd8, 0x96, 0x0b } };
+
+static BOOL make_sidecar(UINT width, UINT height)
+{
+    typedef HRESULT (WINAPI *create_dev_t)(void *, UINT, void *, UINT, const UINT *,
+                                           UINT, UINT, void **, UINT *, void **);
+    create_dev_t create_dev;
+    HMODULE d3d11;
+    /* D3D11_TEXTURE2D_DESC */
+    struct { UINT w, h, mips, arr; DWORD fmt; struct { UINT c, q; } sample;
+             UINT usage; UINT bind; UINT cpu; UINT misc; } desc;
+    HRESULT hr;
+
+    if (sidecar_handle) return TRUE;
+
+    d3d11 = LoadLibraryA("d3d11.dll");
+    if (!d3d11) { logf_("sidecar: no d3d11.dll"); return FALSE; }
+    create_dev = (create_dev_t)GetProcAddress(d3d11, "D3D11CreateDevice");
+    if (!create_dev) { logf_("sidecar: no D3D11CreateDevice"); return FALSE; }
+
+    hr = create_dev(NULL, 1 /* HARDWARE */, NULL, 0, NULL, 0, 7 /* SDK */,
+                    &sidecar_device, NULL, &sidecar_context);
+    if (FAILED(hr) || !sidecar_device)
+    {
+        logf_("sidecar: D3D11CreateDevice -> 0x%08lx", hr);
+        return FALSE;
+    }
+
+    ZeroMemory(&desc, sizeof(desc));
+    desc.w = width; desc.h = height; desc.mips = 1; desc.arr = 1;
+    desc.fmt = 87;              /* DXGI_FORMAT_B8G8R8A8_UNORM, matching D3DFMT_X8R8G8B8 */
+    desc.sample.c = 1;
+    desc.usage = 0;             /* DEFAULT */
+    desc.bind = 8 | 32;         /* SHADER_RESOURCE | RENDER_TARGET */
+    desc.misc = 2;              /* D3D11_RESOURCE_MISC_SHARED */
+    {
+        HRESULT (WINAPI *create_tex)(void *, const void *, const void *, void **) =
+            (HRESULT (WINAPI *)(void *, const void *, const void *, void **))
+            (*(void ***)sidecar_device)[5];   /* ID3D11Device::CreateTexture2D */
+        hr = create_tex(sidecar_device, &desc, NULL, &sidecar_texture);
+    }
+    if (FAILED(hr) || !sidecar_texture)
+    {
+        logf_("sidecar: CreateTexture2D -> 0x%08lx", hr);
+        return FALSE;
+    }
+    {
+        void *res = NULL;
+        HRESULT (WINAPI *qi)(void *, const GUID *, void **) =
+            (HRESULT (WINAPI *)(void *, const GUID *, void **))(*(void ***)sidecar_texture)[0];
+        hr = qi(sidecar_texture, &iid_dxgi_resource, &res);
+        if (SUCCEEDED(hr) && res)
+        {
+            /* IDXGIResource::GetSharedHandle is slot 3(IUnknown) + 4(IDXGIObject
+             * and IDXGIDeviceSubObject) + 1 = 8. */
+            HRESULT (WINAPI *get_shared)(void *, HANDLE *) =
+                (HRESULT (WINAPI *)(void *, HANDLE *))(*(void ***)res)[8];
+            hr = get_shared(res, &sidecar_handle);
+            release_obj(res);
+        }
+    }
+    logf_("sidecar: %ux%u texture, GetSharedHandle -> 0x%08lx, handle %p",
+          width, height, hr, sidecar_handle);
+    return sidecar_handle != NULL;
+}
+
 static HRESULT WINAPI my_CreateTexture(void *self, UINT w, UINT h, UINT levels,
                                        DWORD usage, DWORD fmt, DWORD pool,
                                        void **tex, HANDLE *shared)
@@ -1198,6 +1287,16 @@ static HRESULT WINAPI my_CreateRenderTarget(void *self, UINT w, UINT h, DWORD fm
 {
     HRESULT hr = real_CreateRenderTarget(self, w, h, fmt, ms, msq, lockable, surface, shared);
     note_shared("CreateRenderTarget", w, h, fmt, hr, shared);
+    /* Only where Wine left a hole: it succeeded and shared nothing. */
+    if (SUCCEEDED(hr) && shared && !*shared && make_sidecar(w, h))
+    {
+        static LONG said;
+        *shared = sidecar_handle;
+        if (InterlockedIncrement(&said) == 1)
+            logf_("  handed the game a real shared handle %p instead of null -- "
+                  "nothing copies into it yet; this only asks whether the game "
+                  "then carries on", sidecar_handle);
+    }
     return hr;
 }
 
