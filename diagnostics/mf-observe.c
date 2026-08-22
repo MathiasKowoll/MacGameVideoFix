@@ -1666,6 +1666,14 @@ static HRESULT WINAPI my_D3D11CreateDevice(void *adapter, UINT type, void *sw, U
     return hr;
 }
 
+/* Magenta filled the screen, so the writes land and the texture is the one the
+ * game shows. Whatever is wrong is in the content, which is the cheaper half.
+ *
+ * Back to real frames, and sampling the luma over time rather than three times
+ * at the start: the first samples read 16,16 then 15..50, which is a fade in
+ * from black. It is entirely possible the video is being carried correctly and
+ * only its dark opening was ever measured. */
+static BOOL paint_magenta = FALSE;
 static void *owning_device;
 
 static void fill_sidecar_from_surface(const char *why)
@@ -1918,7 +1926,8 @@ static void take_from_source(void *self, void *src)
              * which is what settled the same ambiguity on DYNASTY WARRIORS. */
             {
                 static LONG sampled;
-                if (InterlockedIncrement(&sampled) <= 3)
+                LONG n = InterlockedIncrement(&sampled);
+                if (n <= 3 || (n % 60) == 0)
                 {
                     const BYTE *y = (const BYTE *)r.pBits;
                     unsigned long long sum = 0;
@@ -1931,14 +1940,36 @@ static void take_from_source(void *self, void *src)
                             if (v < lo) lo = v;
                             if (v > hi) hi = v;
                         }
-                    logf_("source luma: average %llu, range %u..%u  << %s",
+                    logf_("source luma [%ld]: average %llu, range %u..%u  << %s", n,
                           sum / (((sidecar_h + 7) / 8) * ((sidecar_w + 7) / 8)),
                           lo, hi,
-                          hi <= 16 ? "the SOURCE is black -- the frame is not here"
-                                   : "the source HAS a picture -- the loss is after this");
+                          hi <= 16 ? "black" : "has picture");
                 }
             }
-            if (d.fmt == 0x3231564E)      /* NV12 */
+            /* Write something that cannot be mistaken for anything else.
+             *
+             * The source has a picture -- luma range 15..50 on the third
+             * sample, dark but real, after two genuinely black frames of a fade
+             * in. So the frame exists and is lost after this point, and the two
+             * remaining explanations are that our writes do not land or that
+             * the game samples something else. On a black screen those look
+             * identical.
+             *
+             * Solid magenta tells them apart in one run. Set P5S_REAL_FRAMES=1
+             * to carry the video instead. This is the measurement that settled
+             * the same question on DYNASTY WARRIORS. */
+            if (paint_magenta)
+            {
+                UINT i, n = sidecar_w * sidecar_h;
+                for (i = 0; i < n; i++)
+                {
+                    scratch[i * 4 + 0] = 0xFF;
+                    scratch[i * 4 + 1] = 0x00;
+                    scratch[i * 4 + 2] = 0xFF;
+                    scratch[i * 4 + 3] = 0xFF;
+                }
+            }
+            else if (d.fmt == 0x3231564E)      /* NV12 */
                 nv12_to_bgra((const BYTE *)r.pBits, (UINT)r.Pitch, scratch,
                              sidecar_w * 4, sidecar_w, sidecar_h);
             else
@@ -2106,6 +2137,9 @@ static DWORD WINAPI worker(LPVOID unused)
         v[0] = 0;
         if (GetEnvironmentVariableA("BEAST_FORCE_NV12", v, sizeof(v)) && v[0] == '1')
             restore_nv12 = TRUE;
+        v[0] = 0;
+        if (GetEnvironmentVariableA("P5S_REAL_FRAMES", v, sizeof(v)) && v[0] == '1')
+            paint_magenta = FALSE;
     }
     /* Hook the import table as well as GetProcAddress.
      *
@@ -2150,7 +2184,9 @@ static DWORD WINAPI worker(LPVOID unused)
               got, (int)(sizeof(hooks) / sizeof(hooks[0])) + 2);
     }
 
-    logf_("---- write-path hooks %s ----", watch_write_path ? "ON" : "off");
+    logf_("---- write-path hooks %s | painting %s ----",
+          watch_write_path ? "ON" : "off",
+          paint_magenta ? "SOLID MAGENTA" : "the real frames");
     logf_("---- armed: D3D manager %s from the MFT | NV12 relabel %s | "
           "MFCreateDXGIDeviceManager %s ----",
           withhold_d3d_from_mft ? "WITHHELD" : "passed",
