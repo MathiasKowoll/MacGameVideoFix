@@ -57,6 +57,10 @@ GAMES = [
      "Failed to play movie", "The DYNASTY WARRIORS bridge, unchanged",
      "D3DMetal", "12", "Preview -- not tried on 26.3",
      "Fixed", "Nioh-3"),
+    ("NieR Replicant ver.1.22474487139", "Toylogic, in-house",
+     "Crashes when the first video starts", "Software decode, and the frame written into the game's target",
+     "D3DMetal", "11", "Preview -- not tried on 26.3",
+     "Fixed", "NieR-Replicant"),
 ]
 
 HEAD = ("| Game | Engine | Symptom | Fix | Backend | DX | CrossOver | Status |\n"
@@ -67,7 +71,8 @@ NOTE = """
 Strikers, Nioh and Nioh 2 only work on DXMT: all three need a shared D3D9
 surface handle, and DXMT implements sharing where D3DMetal has none to build on.
 Nioh 3, despite the name, belongs with the other group -- it is D3D12 on
-D3DMetal and never touches D3D9. The other six run on
+D3DMetal and never touches D3D9, and NieR Replicant is D3D11 on D3DMetal. The
+other seven run on
 D3DMetal with the D3D12 renderer, which is also what keeps PSO precompilation
 -- `-dx11` dodges some of these faults and costs permanent shader-compilation
 stutter.
@@ -92,8 +97,9 @@ not usable under another, and none had been built for 26.3 yet.
 DYNASTY WARRIORS crashes there too; that much was run, while the reason given for
 it is read from the two installs' plugin sets rather than from watching it fail.
 
-The three Nioh rows record an absence rather than a result: all were fixed on
-Preview and none was launched on 26.3, so nothing is claimed either way.
+Four rows record an absence rather than a result: the three Nioh titles and
+NieR Replicant were fixed on Preview and none was launched on 26.3, so nothing
+is claimed either way.
 Their codec is staged the same way Strikers' is, which is the half that made
 Strikers portable, but the bridge half has only ever run against the Preview
 build's DXMT.

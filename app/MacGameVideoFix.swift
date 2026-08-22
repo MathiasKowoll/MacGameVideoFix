@@ -155,6 +155,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
     case nioh
     case nioh2
     case nioh3
+    case nierReplicant
 
     var id: String { rawValue }
 
@@ -170,6 +171,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .nioh:              return "Nioh"
         case .nioh2:             return "Nioh 2"
         case .nioh3:             return "Nioh 3"
+        case .nierReplicant:     return "NieR Replicant ver.1.22474487139"
         }
     }
 
@@ -184,6 +186,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .personaStrikers:   return "Video never starts; sound only"
         case .nioh, .nioh2:      return "Cutscene refuses to play, then crashes"
         case .nioh3:             return "Failed to play movie"
+        case .nierReplicant:     return "Crashes when the first video starts"
         }
     }
 
@@ -202,6 +205,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .nioh:              return "nioh.exe"
         case .nioh2:             return "nioh2.exe"
         case .nioh3:             return "Nioh3.exe"
+        case .nierReplicant:     return "NieR Replicant ver.1.22474487139.exe"
         }
     }
 
@@ -225,13 +229,15 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .nioh:              return "…/steamapps/common/Nioh"
         case .nioh2:             return "…/steamapps/common/Nioh2"
         case .nioh3:             return "…/steamapps/common/Nioh3"
+        case .nierReplicant:     return "…/steamapps/common/NieR Replicant ver.1.22474487139"
         }
     }
 
     var modes: [Mode] {
         switch self {
         case .dynastyWarriors, .personaStrikers,
-             .nioh, .nioh2, .nioh3:              return [.videoBridge]
+             .nioh, .nioh2, .nioh3,
+             .nierReplicant:                     return [.videoBridge]
         default:                                 return [.runtime]
         }
     }
@@ -251,6 +257,9 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         /* Nioh 3 is the DYNASTY WARRIORS bridge on a different carrier, not
          * the one its two predecessors use. Same series, different fault. */
         case .nioh3:           return "install-nioh3-bridge.sh"
+        /* The only one that also writes a registry key: its carrier is a DLL
+         * Wine implements, so an override is needed for ours to load at all. */
+        case .nierReplicant:   return "install-nier-bridge.sh"
         default:               return "install-runtime-fix.sh"
         }
     }
@@ -313,7 +322,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         }
         // nioh.exe and nioh2.exe are distinct names, so the wrong one of the
         // pair fails to match rather than being accepted as the other.
-        if self == .nioh || self == .nioh2 || self == .nioh3 {
+        if self == .nioh || self == .nioh2 || self == .nioh3 || self == .nierReplicant {
             guard let exe = executable else { return nil }
             var candidates = [url]
             if let subs = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
@@ -385,6 +394,10 @@ enum Title {
         }
         for c in candidates where fm.fileExists(atPath: c.appendingPathComponent("Nioh3.exe").path) {
             return .bridgeGame(c, .nioh3)
+        }
+        for c in candidates
+        where fm.fileExists(atPath: c.appendingPathComponent("NieR Replicant ver.1.22474487139.exe").path) {
+            return .bridgeGame(c, .nierReplicant)
         }
         if let g = GameFolder.locate(from: url) { return .unrealVP9(g) }
         return nil
@@ -2824,7 +2837,7 @@ extension SupportedGame {
         /// folder itself. Persona 5 Strikers was missing from every scan
         /// because it was being looked for in the Unreal place.
         switch self {
-        case .dynastyWarriors, .personaStrikers, .nioh, .nioh2, .nioh3:
+        case .dynastyWarriors, .personaStrikers, .nioh, .nioh2, .nioh3, .nierReplicant:
             return FileManager.default.fileExists(
                 atPath: folder.appendingPathComponent(exe).path)
         default:

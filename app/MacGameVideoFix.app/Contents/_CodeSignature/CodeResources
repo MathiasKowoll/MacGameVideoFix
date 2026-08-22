@@ -14,15 +14,23 @@
 		</data>
 		<key>Resources/amd_ags_x64-nioh3.dll</key>
 		<data>
-		vIabY2UQg2BzdM9afBeJ+KR29xc=
+		SFp79+PbAicrBNc7TtCJ904PPHw=
 		</data>
 		<key>Resources/amd_ags_x64.dll</key>
 		<data>
 		o3nwm4CJdsXGHC1OrA/m2Ci1pbc=
 		</data>
+		<key>Resources/dinput8-nier.dll</key>
+		<data>
+		UawzYw4g5gMCvQXbeijmpbWDib8=
+		</data>
 		<key>Resources/install-dwo-bridge.sh</key>
 		<data>
 		myKVV0a/j4mBCsa/PJ+YWpPoAnw=
+		</data>
+		<key>Resources/install-nier-bridge.sh</key>
+		<data>
+		mfc19CDhrFn6wXLM7VJu8gGEBt8=
 		</data>
 		<key>Resources/install-nioh-bridge.sh</key>
 		<data>
@@ -46,7 +54,7 @@
 		</data>
 		<key>Resources/libxess.dll</key>
 		<data>
-		dZJZ+xyrbX+1G0Uv7Z/tstHVnK4=
+		7YPEMhcALfW1zEe3gXNH6Y8iUu0=
 		</data>
 		<key>Resources/pak-hide-videos.py</key>
 		<data>
@@ -85,7 +93,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			MyuZnZUrO0VizOV3tCsD/ocK045Eo+r3xMKazmxRZa8=
+			LYX+zMZuqkg0cnOkRnY5otUtiS2mcA77ZNbKcbEsX50=
 			</data>
 		</dict>
 		<key>Resources/amd_ags_x64.dll</key>
@@ -95,11 +103,25 @@
 			NfYjg8eP2Q26L+UzczDP5ApWQ3wqXO4FNZkkImOLTfE=
 			</data>
 		</dict>
+		<key>Resources/dinput8-nier.dll</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			QJ66peQtsZjLUL9lr9OyrMkSp6VQYkLUUFU2v/fyFo8=
+			</data>
+		</dict>
 		<key>Resources/install-dwo-bridge.sh</key>
 		<dict>
 			<key>hash2</key>
 			<data>
 			l3s+nTyrnGIjHZZh+MwIJSmGA/LfNox9cIWpxGtus7Q=
+			</data>
+		</dict>
+		<key>Resources/install-nier-bridge.sh</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			qmnTtshe0HzxT+BTFYY8EUkwTkBGEJa2kmmMSeXb+yI=
 			</data>
 		</dict>
 		<key>Resources/install-nioh-bridge.sh</key>
@@ -141,7 +163,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			1fNet2THDa4atMWEm7HeYkdCpxIPATavbHji78ibwqE=
+			HqlKjVUihVHkn6zjDn765PWQaOPTUkBMBW/3nWPUq+w=
 			</data>
 		</dict>
 		<key>Resources/pak-hide-videos.py</key>

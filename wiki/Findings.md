@@ -144,6 +144,22 @@ Four words are used precisely: **measured** (observed directly here),
   and can live without it.
 - *Standing.* **Measured.**
 
+**Removing the D3D manager moves the frames somewhere the game does not look.**
+
+- *Observed.* Stripping `MF_SOURCE_READER_D3D_MANAGER` is what makes the
+  software path available and stops a title crashing, and it changes where the
+  sample data lives: system memory rather than a DXGI buffer. A player whose
+  upload step expects a DXGI buffer then never fills the surface it hands the
+  video processor. That surface was read directly and measured flat -- average
+  0, range 0..0 -- while the reader was delivering three hundred good samples.
+- *Why this belongs here.* The workaround is only complete for a title that can
+  take its frames from system memory. Anything relying on the D3D-backed buffer
+  needs the frame delivered for it by hand, which is what this project ends up
+  doing. A fallback inside Media Foundation would not need to.
+- *Reproduce.* NieR Replicant with the two attributes stripped; read back the
+  texture passed to `VideoProcessorBlt`.
+- *Standing.* **Measured.**
+
 **`IDXGIResource::GetSharedHandle` is `E_NOTIMPL`.**
 
 - *Consequence.* Decoding video on a D3D11 device and presenting it with a
@@ -205,6 +221,21 @@ Four words are used precisely: **measured** (observed directly here),
   so that a change to it is known to break something.
 - *Standing.* **Measured** on Preview. **Inferred** for other builds — not
   checked on any.
+
+### A note on method
+
+**A black screen with correct audio has two causes, and they are separable.**
+A frame that never arrives and a frame written somewhere that is never
+displayed look identical from outside. Painting the target a colour the game
+could not produce tells them apart in a single run: if it appears, the write
+path is right and the fault is upstream of it. That test is what turned NieR
+Replicant from a guess into an implementation, and it had settled the same
+question for the DYNASTY WARRIORS bridge earlier.
+
+The corollary is the reason frames are read back rather than trusted: a bridge
+that hands over a valid but empty surface produces a game that runs and a
+screen that is black, and nothing distinguishes that from success without
+looking at the pixels.
 
 ### Open, and attributable to nobody yet
 

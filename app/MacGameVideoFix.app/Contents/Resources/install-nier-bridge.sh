@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+#
+# Install the NieR Replicant ver.1.22474487139 video bridge.
+#
+#     install-nier-bridge.sh <game folder>            install
+#     install-nier-bridge.sh <game folder> --status   report
+#     install-nier-bridge.sh <game folder> --restore  undo
+#
+# This one is different from the other nine, in two ways worth knowing before
+# running it.
+#
+# THE CARRIER IS NOT THE GAME'S. NieR ships exactly one DLL of its own,
+# steam_api64.dll, and nothing here rides on Steam's API or re-exports a
+# Steamworks entry point. So the bridge rides on dinput8.dll, which the game
+# imports and which has five exports and nothing to do with rendering. The
+# original is CrossOver's own: this script copies it out of your bottle and
+# beside the game as dinput8_real.dll. Nothing is redistributed -- the copy is
+# your file -- but it is a copy, so re-run this after a CrossOver upgrade if
+# input ever misbehaves.
+#
+# IT WRITES ONE REGISTRY KEY. Wine implements dinput8 itself and prefers its
+# own build, so a DLL sitting beside the game is never loaded. The override
+# below says otherwise, and is scoped to this executable alone: no other title
+# in the bottle sees it. --restore removes it.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+set -euo pipefail
+
+usage() { sed -n '3,25p' "$0" >&2; exit 1; }
+[ $# -ge 1 ] || usage
+
+GAME="$1"
+MODE="${2:---install}"
+if [ "${MGVF_STATUS_ONLY:-0}" = 1 ]; then MODE=--status; fi
+HERE="$(cd "$(dirname "$0")" && pwd)"
+
+EXE_NAME='NieR Replicant ver.1.22474487139.exe'
+LIVE="$GAME/dinput8.dll"
+REAL="$GAME/dinput8_real.dll"
+PROXY="$HERE/dinput8-nier.dll"
+EXPORTS="$HERE/pe.py"
+MARKER='dwo-video-bridge.log'
+
+is_ours() { [ -f "$1" ] && LC_ALL=C grep -qa "$MARKER" "$1"; }
+
+[ -f "$GAME/$EXE_NAME" ] || {
+  echo "error: no '$EXE_NAME' in $GAME" >&2
+  echo "       Pick the folder NieR Replicant is installed in." >&2
+  exit 1
+}
+
+# The bottle holding this game, and the CrossOver that runs it. Both are needed
+# for the registry override; the bottle is also where the original dinput8
+# comes from.
+BOTTLES="$HOME/Library/Application Support/CrossOver/Bottles"
+find_bottle() {
+  local b
+  for b in "$BOTTLES"/*/; do
+    [ -f "$b/drive_c/windows/system32/dinput8.dll" ] || continue
+    printf '%s' "${b%/}"; return 0
+  done
+  return 1
+}
+find_crossover() {
+  local a
+  for a in "/Applications/CrossOver Preview.app" "/Applications/CrossOver.app"; do
+    [ -x "$a/Contents/SharedSupport/CrossOver/bin/wine" ] || continue
+    printf '%s' "$a/Contents/SharedSupport/CrossOver"; return 0
+  done
+  return 1
+}
+
+case "$MODE" in
+--status)
+  if is_ours "$LIVE" && [ -f "$REAL" ]; then echo installed
+  elif is_ours "$LIVE"; then echo broken
+  elif [ ! -f "$LIVE" ] && [ -f "$REAL" ]; then echo half
+  else echo absent; fi
+  exit 0
+  ;;
+--restore)
+  rm -f "$LIVE" "$REAL"
+  if BOTTLE="$(find_bottle)" && CX="$(find_crossover)"; then
+    "$CX/bin/wine" --bottle "$(basename "$BOTTLE")" --cx-app reg.exe delete \
+      "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$EXE_NAME\\DllOverrides" \
+      /v dinput8 /f >/dev/null 2>&1 || true
+  fi
+  echo "restored — the bridge and the dinput8 override are gone"
+  exit 0
+  ;;
+--install) ;;
+*) usage ;;
+esac
+
+if is_ours "$LIVE" && [ -f "$REAL" ]; then
+  echo "the bridge is already installed, nothing to do"
+  exit 0
+fi
+
+echo "[1/4] finding the bottle and the CrossOver that runs it"
+BOTTLE="$(find_bottle)" || {
+  echo "error: no CrossOver bottle with a dinput8.dll was found" >&2
+  echo "       Run the game once first, so its bottle exists." >&2
+  exit 1
+}
+CX="$(find_crossover)" || {
+  echo "error: no CrossOver installation was found in /Applications" >&2
+  exit 1
+}
+echo "      bottle: $(basename "$BOTTLE")"
+
+echo "[2/4] taking a copy of the bottle's own dinput8"
+# Never over a proxy: if $LIVE is already ours, $REAL would be overwritten with
+# the proxy and the original lost for good.
+if is_ours "$LIVE"; then
+  echo "error: $LIVE is already a proxy but $REAL is gone." >&2
+  echo "       Verify the game files in Steam, then run this again." >&2
+  exit 1
+fi
+cp "$BOTTLE/drive_c/windows/system32/dinput8.dll" "$REAL" || {
+  echo "error: could not copy the original beside the game" >&2
+  exit 1
+}
+
+echo "[3/4] checking the proxy forwards everything the original exports"
+if ! real_exports="$(python3 "$EXPORTS" exports "$REAL" 2>&1)"; then
+  echo "error: cannot read the exports of $REAL" >&2; rm -f "$REAL"; exit 1
+fi
+if ! proxy_exports="$(python3 "$EXPORTS" exports "$PROXY" 2>&1)"; then
+  echo "error: cannot read the exports of $PROXY" >&2; rm -f "$REAL"; exit 1
+fi
+missing="$(comm -23 <(printf '%s\n' "$real_exports" | sort) \
+                    <(printf '%s\n' "$proxy_exports" | sort))"
+if [ -n "$missing" ]; then
+  echo "error: this CrossOver's dinput8 exports symbols the shipped proxy does not:" >&2
+  echo "$missing" | sed 's/^/       /' >&2
+  echo "       Rebuild the proxy against it; nothing was installed." >&2
+  rm -f "$REAL"
+  exit 1
+fi
+cp "$PROXY" "$LIVE" || { echo "error: could not install the bridge" >&2; rm -f "$REAL"; exit 1; }
+
+echo "[4/4] telling Wine to prefer it, for this game only"
+"$CX/bin/wine" --bottle "$(basename "$BOTTLE")" --cx-app reg.exe add \
+  "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$EXE_NAME\\DllOverrides" \
+  /v dinput8 /d "native,builtin" /f >/dev/null 2>&1 || {
+    echo "error: the registry override could not be written." >&2
+    echo "       Without it Wine loads its own dinput8 and the bridge never runs." >&2
+    rm -f "$LIVE"; mv -f "$REAL" "$LIVE" 2>/dev/null || true
+    exit 1
+  }
+echo
+echo "installed"
+echo "  the video bridge is in place, and dinput8 is overridden for this game only"
+echo "  no staged codec is needed for this one"
