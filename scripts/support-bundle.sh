@@ -1317,10 +1317,12 @@ if [ "$GAME_FAMILY" = dwo ]; then
 fi
 
 hr; echo "NOTES FOR THE READER"; hr
-[ "$FOLDER_STATE" = ok ] \
-  && echo " * The title above was INFERRED from the folder, by exact filename. If it is
-   wrong, say so: everything downstream routes off it." \
-  || echo " * No game folder was given, so every folder-scoped fact above is blank."
+if [ "$FOLDER_STATE" = ok ]; then
+  echo " * The title above was INFERRED from the folder, by exact filename. If it is"
+  echo "   wrong, say so: everything downstream routes off it."
+else
+  echo " * No game folder was given, so every folder-scoped fact above is blank."
+fi
 echo " * The runtime patch aims at ONE crash: EXCEPTION_ACCESS_VIOLATION reading"
 echo "   0x0 in FElectraMediaDecoderOutputBufferPoolBlock_DX12::AllocateBuffer, from"
 echo "   FVideoDecoderVPxElectra::ConvertDecodedImageToNV12orP010. A crash dialog"

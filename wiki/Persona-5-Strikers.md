@@ -10,7 +10,7 @@ and no error anywhere.
 | Symptom | Sound plays, the picture never appears |
 | Fix | Stage a VC-1 decoder, then bridge D3D9 to D3D11 |
 | Backend | **DXMT only.** D3DMetal cannot produce a shared handle at all |
-| CrossOver | Measured on stable **26.3** and on Preview — see below |
+| CrossOver | Measured on Preview. 26.3 expected but not yet tried |
 
 ## The one that does not need Preview
 
@@ -19,8 +19,10 @@ they were validated on Preview. This one leans on nothing: the VC-1 decoder is
 staged beside it out of the official GStreamer framework, so what CrossOver does
 or does not ship stops mattering.
 
-Measured, not deduced: it plays on stable CrossOver 26.3. The backend requirement
-is unchanged — DXMT, for the shared handle — and so is the staged codec.
+So it ought to play on a stable build as well as on Preview. That is a
+prediction from how it was fixed, not a measurement -- it has only been tried on
+Preview so far, and this page will say so until it has been. The backend
+requirement is unchanged either way: DXMT, for the shared handle.
 
 ## Not VP9
 

@@ -102,16 +102,23 @@ first launch. Right click it and choose **Open**, then confirm.
 Measured on this machine, CrossOver 26.3 against a current Preview. Blank means
 not measured rather than not working — the claim is only ever what was tried.
 
-| Title | Preview | Stable 26.3 | |
-| --- | --- | --- | --- |
-| Mortal Shell 2 | works | works | |
-| Beast of Reincarnation | works | works | |
-| Persona 5 Strikers | works | works | stages its own decoder |
-| Life is Strange: Reunion | works | **crashes** | our defect, open |
-| Life is Strange: Double Exposure | works | **crashes** | our defect, open |
-| DYNASTY WARRIORS: ORIGINS | works | **crashes** | needs a VP9 decoder |
+| Title | CrossOver | |
+| --- | --- | --- |
+| Mortal Shell 2 | 26.3 · Preview | |
+| Beast of Reincarnation | 26.3 · Preview | |
+| Persona 5 Strikers | Preview | 26.3 expected, not yet measured |
+| Life is Strange: Reunion | Preview | crashes on 26.3 — our defect, open |
+| Life is Strange: Double Exposure | Preview | crashes on 26.3 — our defect, open |
+| DYNASTY WARRIORS: ORIGINS | Preview | 26.3 cannot demux WebM |
 
-Three fail on stable, for two unrelated reasons.
+Measured against CrossOver 26.3 and Preview build 20260821. Everything runs on
+that Preview; two are confirmed on 26.3 as well.
+
+Persona 5 Strikers ought to join them, since it stages its own decoder and leans
+on no engine's codecs — but it has not been measured there, and this table says
+only what was tried.
+
+Of the two that do fail on 26.3, the reasons are unrelated.
 
 **DYNASTY WARRIORS is a container, not a codec.** Comparing the two installs
 plugin by plugin, stable 26.3 ships 17 GStreamer plugins and Preview 19. The

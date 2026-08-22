@@ -9,14 +9,14 @@ Tested on an M4 Max, macOS 27, CrossOver 26.2 patched with
 
 <!-- games:begin -->
 
-| Game | Engine | Symptom | Fix | Backend | DX | Status |
-| --- | --- | --- | --- | --- | --- | --- |
-| [Mortal Shell 2](Mortal-Shell-2.md) | Unreal Engine 5.6.1 | Crash on the first cutscene | Runtime patch, 4 sites | D3DMetal | 12 | Fixed |
-| [Life is Strange: Reunion](Life-is-Strange-Reunion.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard | D3DMetal | 12 | Fixed |
-| [Life is Strange: Double Exposure](Life-is-Strange-Double-Exposure.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard, same DLL | D3DMetal | 12 | Fixed |
-| [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | Video bridge, D3D11 to D3D12 | D3DMetal | 12 | Fixed |
-| [Beast of Reincarnation](Beast-of-Reincarnation.md) | Unreal Engine 5 | Startup video plays with sound, no picture | NV12 restored, Electra forced to software | D3DMetal | 12 | Fixed |
-| [Persona 5 Strikers](Persona-5-Strikers.md) | Koei Tecmo, in-house | Video never starts; sound only | Staged VC-1 codec, and a D3D9 to D3D11 bridge | **DXMT** | 11 | Fixed |
+| Game | Engine | Symptom | Fix | Backend | DX | CrossOver | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| [Mortal Shell 2](Mortal-Shell-2.md) | Unreal Engine 5.6.1 | Crash on the first cutscene | Runtime patch, 4 sites | D3DMetal | 12 | 26.3 · Preview | Fixed |
+| [Life is Strange: Reunion](Life-is-Strange-Reunion.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard | D3DMetal | 12 | Preview | Fixed |
+| [Life is Strange: Double Exposure](Life-is-Strange-Double-Exposure.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard, same DLL | D3DMetal | 12 | Preview | Fixed |
+| [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | Video bridge, D3D11 to D3D12 | D3DMetal | 12 | Preview | Fixed |
+| [Beast of Reincarnation](Beast-of-Reincarnation.md) | Unreal Engine 5 | Startup video plays with sound, no picture | NV12 restored, Electra forced to software | D3DMetal | 12 | 26.3 · Preview | Fixed |
+| [Persona 5 Strikers](Persona-5-Strikers.md) | Koei Tecmo, in-house | Video never starts; sound only | Staged VC-1 codec, and a D3D9 to D3D11 bridge | **DXMT** | 11 | Preview | Fixed |
 
 **Backend and DX are not preferences, they are requirements.** Persona 5
 Strikers only works on DXMT: it needs a shared D3D9 surface handle, and DXMT
@@ -35,8 +35,13 @@ current Preview it does not. Persona 5 Strikers needs a VC-1 decoder no CrossOve
 ships, and that is staged beside it rather than patched into it -- which also
 makes it the one title here that does not care what CrossOver decodes.
 
-**Which engine, per title.** Measured: Mortal Shell 2, Beast of Reincarnation and
-Persona 5 Strikers run on stable 26.3 and on Preview. The other three crash on
+**Which engine, per title**, and the CrossOver column says it. Measured on
+CrossOver 26.3 and on Preview build 20260821. Every title runs on that Preview.
+Only Mortal Shell 2 and Beast of Reincarnation are confirmed on 26.3.
+
+Persona 5 Strikers is expected to run there -- it stages its own decoder and so
+depends on no engine's codecs -- but expected is not measured, and the column
+says only what was tried. The other three crash on
 stable, for two unrelated reasons. DYNASTY WARRIORS turns out to be a container
 problem, not a codec one: stable 26.3 ships 17 GStreamer plugins to Preview's 19,
 and the one that matters is `matroska`. Both decode VP9 identically through

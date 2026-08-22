@@ -1361,15 +1361,15 @@ enum Codecs {
         return v
     }
 
-    private static var cachedBottles: [String]?
-
     /// Drops everything remembered here, so "Check again" genuinely checks
-    /// again after the user installs GStreamer, and so the bottle list is
-    /// re-read once staging has pointed new bottles at the codec.
+    /// again after the user installs GStreamer, and so the survey is re-read
+    /// once staging has pointed new bottles at the codec.
     static func refresh() {
         cached = nil
-        cachedBottles = nil
+        cachedSurvey = nil
+        cachedChoices = nil
         cachedEngines = nil
+        cachedEngineNames = nil
         cachedFramework = nil
         cachedStaged = nil
     }
@@ -1415,13 +1415,74 @@ enum Codecs {
             .appendingPathComponent("x86_64/gstreamer-1.0")
     }
 
+    /// Where the layout before this one put the single staging there was.
+    ///
+    /// It is ours, but which CrossOver it was built against is not knowable now
+    /// -- so a bottle still pointing at it has to be re-pointed rather than
+    /// trusted, and that is a different verdict from a value someone else set.
+    static var legacyStagedPath: String {
+        ((stagedRoot as NSString).appendingPathComponent("x86_64") as NSString)
+            .appendingPathComponent("gstreamer-1.0")
+    }
+
+    /// Trailing slashes, and nothing that touches the disk. Every path compared
+    /// here is one this app wrote; resolving symlinks to be thorough would mean
+    /// a stat per bottle inside the survey, for a case that does not occur.
+    private static func tidy(_ path: String) -> String {
+        var p = path
+        while p.count > 1, p.hasSuffix("/") { p.removeLast() }
+        return p
+    }
+
+    /// The engine a GST_PLUGIN_PATH was staged for, or nil when the path is not
+    /// one of the per-engine directories.
+    ///
+    /// The test is the shape of the first component under `stagedRoot`: dot
+    /// separated digits, which is what a CFBundleVersion looks like. A string
+    /// test rather than a stat, deliberately -- an engine the user has since
+    /// uninstalled stays nameable, so the row can say which CrossOver to put
+    /// back instead of calling the path unrecognisable; and the old layout's
+    /// "x86_64" fails it, which is how the two are told apart without asking
+    /// the disk anything.
+    static func engine(ofStagedPath path: String) -> String? {
+        let root = tidy(stagedRoot)
+        let full = tidy(path)
+        guard full.hasPrefix(root + "/") else { return nil }
+        guard let first = full.dropFirst(root.count + 1).split(separator: "/").first
+        else { return nil }
+        let parts = first.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count >= 2,
+              parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) })
+        else { return nil }
+        return String(first)
+    }
+
+    /// Is this a value this app wrote -- either layout? What decides whether a
+    /// GST_PLUGIN_PATH may be replaced without asking.
+    static func isOurs(_ path: String) -> Bool {
+        engine(ofStagedPath: path) != nil || tidy(path) == tidy(legacyStagedPath)
+    }
+
+    /// The plugin, and something for it to resolve through @loader_path/../lib.
+    ///
+    /// Both halves, because stage-codecs.sh copies the plugin before the loop
+    /// that fills lib/ -- and staging can now be stopped, which makes that
+    /// half-finished directory reachable on purpose rather than only after a
+    /// crash. A plugin with nothing to link against is not a staging, and
+    /// pointing a bottle at it is the same silence as pointing it nowhere.
     static func staged(forEngine version: String) -> Bool {
-        FileManager.default.fileExists(
-            atPath: (stagedPath(forEngine: version) as NSString)
-                .appendingPathComponent("libgstlibav.dylib"))
+        let fm = FileManager.default
+        let dir = stagedPath(forEngine: version)
+        guard fm.fileExists(
+            atPath: (dir as NSString).appendingPathComponent("libgstlibav.dylib"))
+        else { return false }
+        let lib = ((dir as NSString).deletingLastPathComponent as NSString)
+            .appendingPathComponent("lib")
+        return !((try? fm.contentsOfDirectory(atPath: lib))?.isEmpty ?? true)
     }
 
     private static var cachedEngines: [String: URL]?
+    private static var cachedEngineNames: [String: String]?
 
     /// Every CrossOver on this Mac, keyed by CFBundleVersion.
     ///
@@ -1434,6 +1495,7 @@ enum Codecs {
         if let c = cachedEngines { return c }
         let fm = FileManager.default
         var found: [String: URL] = [:]
+        var names: [String: String] = [:]
         // /Applications only. A CrossOver in ~/Applications is as likely to be
         // a copy kept for an experiment as one someone actually runs games
         // with, and staging against an engine the user does not use is work
@@ -1450,10 +1512,24 @@ enum Codecs {
                       let version = plist["CFBundleVersion"] as? String
                 else { continue }
                 found[version] = app
+                names[version] = (plist["CFBundleName"] as? String)
+                    ?? app.deletingPathExtension().lastPathComponent
             }
         }
         cachedEngines = found
+        cachedEngineNames = names
         return found
+    }
+
+    /// "CrossOver Preview (27.0.0.40921)" -- the name the bundle declares, and
+    /// the version, because two installs can call themselves the same thing and
+    /// only the version says which staging a bottle needs. An engine that is no
+    /// longer on this Mac still gets a name, so a row about it can be read.
+    /// No extra IO: the names come from the same pass that found the bundles.
+    static func label(_ version: String) -> String {
+        _ = installedEngines()
+        guard let name = cachedEngineNames?[version] else { return "CrossOver \(version)" }
+        return "\(name) (\(version))"
     }
 
     private static var cachedStaged: Bool?
