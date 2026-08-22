@@ -513,9 +513,10 @@ GStreamer you already have installed:
   needed). `libgstlibav` in it carries ffmpeg, which decodes VC-1, WMV3 and
   WMA.
 
-  **1.24.14 is the version to install**, because it is the one measured working
-  here rather than the one that ought to. winevideo names 1.24.13 for the same
-  titles and that series is what matters — the plugin has to be ABI-compatible
+  **1.24.14 is the version to install**, because it is the one this was
+  verified with rather than the one that ought to work. Others may well be
+  fine — winevideo names 1.24.13 for the same titles, and the 1.24 series is
+  what matters — the plugin has to be ABI-compatible
   with the CrossOver GStreamer core it is re-homed onto, which GStreamer
   guarantees across 1.x. `stage-codecs.sh` prints the version it finds and says
   so when it is outside 1.24, reporting rather than refusing: turning away

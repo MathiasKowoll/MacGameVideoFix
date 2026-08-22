@@ -47,7 +47,7 @@ SRC="$CX/lib/$ARCH"
   echo "error: GStreamer.framework is not installed." >&2
   echo "       Install the macOS *runtime* package, 1.24 series:" >&2
   echo "       https://gstreamer.freedesktop.org/data/pkg/osx/1.24.14/" >&2
-  echo "       1.24.14 is the version measured working here." >&2
+  echo "       1.24.14 is the version this was verified with." >&2
   exit 1
 }
 
@@ -73,7 +73,8 @@ else
   echo "gstreamer : version not readable"
 fi
 if [ -n "$gst_minor" ] && [ "$gst_minor" != "24" ]; then
-  echo "            note: 1.24.14 is the tested version. Carrying on with this one." >&2
+  echo "            note: 1.24.14 is the version this was verified with." >&2
+  echo "            Yours may work perfectly well. Carrying on." >&2
 fi
 
 echo "engine    : $ENGINE ($ARCH)"

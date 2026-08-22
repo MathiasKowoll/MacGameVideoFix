@@ -822,7 +822,8 @@ final class Runner: ObservableObject {
             defer { busy = false; indeterminate = false; phaseLabel = "" }
             if let v = Codecs.version {
                 note("GStreamer \(v) found"
-                     + (Codecs.versionIsTested ? "" : " — 1.24 is the tested series, carrying on"))
+                     + (Codecs.versionIsTested ? ""
+                        : " — 1.24.14 is the verified one; carrying on with yours"))
             }
             status = "Staging the codec…"
             let script = resources.appendingPathComponent("stage-codecs.sh").path
@@ -1708,9 +1709,10 @@ struct ContentView: View {
             return "Borrowed from your GStreamer install, and \(n) bottle(s) point at it."
         }
         guard Codecs.gstreamerInstalled else {
-            return "GStreamer is not installed. Get the macOS runtime package — "
-                 + "1.24.14 is the tested version — and this borrows the decoder "
-                 + "from it. Nothing is redistributed here."
+            return "GStreamer is not installed. Get the macOS runtime package: "
+                 + "1.24.14 is the version this was verified with, and others in "
+                 + "the 1.24 series should work. Nothing is redistributed here — "
+                 + "the decoder is borrowed from your install."
         }
         guard let found = Codecs.version else {
             return "GStreamer is installed but its version cannot be read. "
@@ -1720,8 +1722,9 @@ struct ContentView: View {
             return "CrossOver ships no VC-1 decoder. GStreamer \(found) is "
                  + "installed and will be borrowed from — nothing is redistributed."
         }
-        return "GStreamer \(found) is installed, and 1.24.14 is the tested "
-             + "version. This will go ahead with what you have and say so."
+        return "GStreamer \(found) is installed. 1.24.14 is the version this "
+             + "was verified with; yours may work perfectly well. Staging will go "
+             + "ahead and say what it finds."
     }
 
     private var planTable: some View {
