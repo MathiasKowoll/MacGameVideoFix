@@ -12,6 +12,10 @@
 		<data>
 		wG5rSxkutVSq2WB/fBdimJEzF9g=
 		</data>
+		<key>Resources/amd_ags_x64-nioh3.dll</key>
+		<data>
+		vIabY2UQg2BzdM9afBeJ+KR29xc=
+		</data>
 		<key>Resources/amd_ags_x64.dll</key>
 		<data>
 		o3nwm4CJdsXGHC1OrA/m2Ci1pbc=
@@ -23,6 +27,10 @@
 		<key>Resources/install-nioh-bridge.sh</key>
 		<data>
 		bDZu2A7Fyif1yftwkA/AsUrsBkY=
+		</data>
+		<key>Resources/install-nioh3-bridge.sh</key>
+		<data>
+		4ZS5Rtzy9IMCMPnLcn1zR0AKm9Q=
 		</data>
 		<key>Resources/install-p5s-bridge.sh</key>
 		<data>
@@ -38,7 +46,7 @@
 		</data>
 		<key>Resources/libxess.dll</key>
 		<data>
-		ByXOvUs6NWytPP7LHkPxzXb6a90=
+		dZJZ+xyrbX+1G0Uv7Z/tstHVnK4=
 		</data>
 		<key>Resources/pak-hide-videos.py</key>
 		<data>
@@ -73,6 +81,13 @@
 			63LET2v0N+nUBn1FwRcI1fxKiZv4b6F7zHS4aeN2tC4=
 			</data>
 		</dict>
+		<key>Resources/amd_ags_x64-nioh3.dll</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			MyuZnZUrO0VizOV3tCsD/ocK045Eo+r3xMKazmxRZa8=
+			</data>
+		</dict>
 		<key>Resources/amd_ags_x64.dll</key>
 		<dict>
 			<key>hash2</key>
@@ -92,6 +107,13 @@
 			<key>hash2</key>
 			<data>
 			ni2Y8ohSrTpN8KXJQGen0ibj9pNJaumw/FR6btI+5Mg=
+			</data>
+		</dict>
+		<key>Resources/install-nioh3-bridge.sh</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			msjYY2XzS9Pf7WtrOC4zok510hxWkE3/3SLN+i+abEw=
 			</data>
 		</dict>
 		<key>Resources/install-p5s-bridge.sh</key>
@@ -119,7 +141,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			4b1ydY0Gruqy1RZIQ7tdJGA+JvNk1CSmptde0T13TQ0=
+			1fNet2THDa4atMWEm7HeYkdCpxIPATavbHji78ibwqE=
 			</data>
 		</dict>
 		<key>Resources/pak-hide-videos.py</key>

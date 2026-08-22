@@ -60,10 +60,11 @@ fi
 echo "==> bundling scripts"
 cp "$ROOT/scripts/transcode-movies.sh" "$ROOT/scripts/pak-hide-videos.py" "$RES/"
 cp "$ROOT/runtime/install-p5s-bridge.sh" "$ROOT/runtime/amd_ags_x64.dll" "$RES/"
-cp "$ROOT/runtime/install-nioh-bridge.sh" "$RES/"
+cp "$ROOT/runtime/install-nioh-bridge.sh" "$ROOT/runtime/install-nioh3-bridge.sh" "$RES/"
 cp "$ROOT/runtime/stage-codecs.sh" "$RES/"
 chmod +x "$RES/transcode-movies.sh" "$RES/pak-hide-videos.py" \
-         "$RES/install-p5s-bridge.sh" "$RES/install-nioh-bridge.sh"
+         "$RES/install-p5s-bridge.sh" "$RES/install-nioh-bridge.sh" \
+         "$RES/install-nioh3-bridge.sh"
 
 # The runtime patch: the installer resolves the proxy and the PE reader next to
 # itself, so all three have to land in the same folder.
@@ -73,7 +74,7 @@ chmod +x "$RES/install-runtime-fix.sh" "$RES/install-dwo-bridge.sh" "$RES/pe.py"
 
 # One prebuilt carrier per game. Missing one disables that game's fix rather
 # than failing the build, so the app is still usable for the other.
-for dll in libogg_64.dll libxess.dll GfeSDK.dll; do
+for dll in libogg_64.dll libxess.dll GfeSDK.dll amd_ags_x64-nioh3.dll; do
   if [ -f "$ROOT/runtime/$dll" ]; then
     cp "$ROOT/runtime/$dll" "$RES/"
   else
