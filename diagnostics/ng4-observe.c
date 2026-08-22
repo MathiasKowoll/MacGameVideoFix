@@ -42,6 +42,9 @@ static const char *process_name(void)
 }
 
 static LONG log_lines;
+static HRESULT (WINAPI *real_D3D12CreateDevice)(void *, UINT, const GUID *, void **);
+static HRESULT WINAPI my_D3D12CreateDevice(void *, UINT, const GUID *, void **);
+
 
 static void logf_(const char *fmt, ...)
 {
@@ -923,6 +926,46 @@ static HRESULT (WINAPI *real_MFCreateDXGIDeviceManager)(UINT *, void **);
  * variable the code branches on. */
 static BOOL refuse_d3d_manager = FALSE;
 
+
+/* Follow the DXGI device manager, which is where this stops.
+ *
+ * The game resolves exactly three Media Foundation functions -- MFStartup,
+ * MFTEnumEx and MFCreateDXGIDeviceManager -- and never asks for
+ * MFCreateSourceReaderFromURL, which is in its binary. So it gives up between
+ * creating the manager and opening a file.
+ *
+ * What sits in that gap is ResetDevice: a manager is useless until a D3D11
+ * device is bound to it. If that fails under D3DMetal the player has nowhere
+ * to decode into and stops without ever reaching the video.
+ *
+ * IMFDXGIDeviceManager: CloseDeviceHandle 3, GetVideoService 4, LockDevice 5,
+ * OpenDeviceHandle 6, ResetDevice 7, TestDevice 8, UnlockDevice 9.
+ */
+#define SLOT_DXGIMGR_RESETDEVICE 7
+#define SLOT_DXGIMGR_TESTDEVICE  8
+
+static HRESULT (WINAPI *real_ResetDevice)(void *, void *, UINT);
+static HRESULT (WINAPI *real_TestDevice)(void *, HANDLE);
+
+static HRESULT WINAPI my_ResetDevice(void *self, void *device, UINT token)
+{
+    HRESULT hr = real_ResetDevice(self, device, token);
+    logf_("IMFDXGIDeviceManager::ResetDevice(device=%p) -> 0x%08lx%s",
+          device, hr,
+          FAILED(hr) ? "   << the manager has no device, so nothing can decode"
+                     : "   << a device is bound");
+    return hr;
+}
+
+static HRESULT WINAPI my_TestDevice(void *self, HANDLE h)
+{
+    static LONG said;
+    HRESULT hr = real_TestDevice(self, h);
+    if (InterlockedIncrement(&said) <= 2)
+        logf_("IMFDXGIDeviceManager::TestDevice -> 0x%08lx", hr);
+    return hr;
+}
+
 static HRESULT WINAPI my_MFCreateDXGIDeviceManager(UINT *token, void **manager)
 {
     if (refuse_d3d_manager)
@@ -935,7 +978,20 @@ static HRESULT WINAPI my_MFCreateDXGIDeviceManager(UINT *token, void **manager)
     }
     {
         HRESULT hr = real_MFCreateDXGIDeviceManager(token, manager);
-        logf_("MFCreateDXGIDeviceManager -> 0x%08lx (allowed through)", hr);
+        logf_("MFCreateDXGIDeviceManager -> 0x%08lx", hr);
+        if (SUCCEEDED(hr) && manager && *manager)
+        {
+            static void *rd, *td;
+            void **vt = *(void ***)*manager;
+            real_ResetDevice = (HRESULT (WINAPI *)(void *, void *, UINT))vt[SLOT_DXGIMGR_RESETDEVICE];
+            real_TestDevice  = (HRESULT (WINAPI *)(void *, HANDLE))vt[SLOT_DXGIMGR_TESTDEVICE];
+            if (!patch_slot("dxgi manager ResetDevice", *manager,
+                            SLOT_DXGIMGR_RESETDEVICE, (void *)my_ResetDevice, &rd))
+                real_ResetDevice = NULL;
+            if (!patch_slot("dxgi manager TestDevice", *manager,
+                            SLOT_DXGIMGR_TESTDEVICE, (void *)my_TestDevice, &td))
+                real_TestDevice = NULL;
+        }
         return hr;
     }
 }
@@ -1143,6 +1199,7 @@ static FARPROC WINAPI my_GetProcAddress(HMODULE module, LPCSTR name)
     SWAP(MFCreateSourceReaderFromByteStream)
     SWAP(MFCreateSourceReaderFromURL)
     SWAP(MFCreateDXGIDeviceManager)
+    SWAP(D3D12CreateDevice)
 #undef SWAP
 
     /* Name every media entry point the game asks for, resolved or not. The
@@ -2186,6 +2243,153 @@ static HRESULT WINAPI my_Direct3DCreate9Ex(UINT sdk, void **out)
     return hr;
 }
 
+
+/* Watch D3D12, which is the other lead and the untested one.
+ *
+ * Everything Media Foundation does here succeeds -- startup, the decoder gate
+ * once answered, the DXGI manager, and binding a device to it -- and the game
+ * still never asks to open a video. So the black screen is probably not about
+ * video at all, and the one thing seen on the CrossOver console was
+ *
+ *     D3DMetal ID3DDestructionNot...
+ *
+ * D3DMetal reporting a query for ID3DDestructionNotifier, which it does not
+ * implement. The game ships its own D3D12Core.dll -- the Agility SDK -- and
+ * that binary does carry the interface's GUID and name. It is also the
+ * interface behind Mortal Shell 2's crash.
+ *
+ * This only watches: who asks, and what they are told.
+ *
+ * ID3D12Device: CreateCommittedResource 27, CreateHeap 28.
+ */
+#define SLOT_D3D12_CREATECOMMITTED 27
+
+static const GUID iid_destruction_notifier =
+    { 0xa06eb39a, 0x50da, 0x425b, { 0x8c, 0x31, 0x4e, 0xec, 0xd6, 0xc2, 0x70, 0xf3 } };
+
+static HRESULT (WINAPI *real_dev12_QI)(void *, const GUID *, void **);
+static HRESULT (WINAPI *real_CreateCommitted)(void *, const void *, UINT, const void *,
+                                              UINT, const void *, const GUID *, void **);
+static HRESULT (WINAPI *real_res12_QI)(void *, const GUID *, void **);
+
+static void note_query(const char *who, const GUID *iid, HRESULT hr)
+{
+    static LONG said;
+    if (!iid) return;
+    if (IsEqualGUID(iid, &iid_destruction_notifier))
+    {
+        if (InterlockedIncrement(&said) <= 4)
+            logf_("%s asked for ID3DDestructionNotifier -> 0x%08lx%s", who, hr,
+                  FAILED(hr) ? "   << D3DMetal does not implement it" : "");
+    }
+}
+
+static HRESULT WINAPI my_res12_QI(void *self, const GUID *iid, void **out)
+{
+    HRESULT hr = real_res12_QI ? real_res12_QI(self, iid, out) : E_NOINTERFACE;
+    note_query("a D3D12 resource", iid, hr);
+    return hr;
+}
+
+static HRESULT WINAPI my_CreateCommitted(void *self, const void *heap, UINT hflags,
+                                         const void *desc, UINT state,
+                                         const void *clear, const GUID *iid, void **out)
+{
+    HRESULT hr = real_CreateCommitted(self, heap, hflags, desc, state, clear, iid, out);
+    if (SUCCEEDED(hr) && out && *out && !real_res12_QI)
+    {
+        static void *saved;
+        void **vt = *(void ***)*out;
+        real_res12_QI = (HRESULT (WINAPI *)(void *, const GUID *, void **))vt[0];
+        if (!patch_slot("d3d12 resource QueryInterface", *out, 0,
+                        (void *)my_res12_QI, &saved))
+            real_res12_QI = NULL;
+    }
+    return hr;
+}
+
+static HRESULT WINAPI my_dev12_QI(void *self, const GUID *iid, void **out)
+{
+    HRESULT hr = real_dev12_QI ? real_dev12_QI(self, iid, out) : E_NOINTERFACE;
+    note_query("the D3D12 device", iid, hr);
+    return hr;
+}
+
+static HRESULT WINAPI my_D3D12CreateDevice(void *adapter, UINT level,
+                                           const GUID *iid, void **device)
+{
+    HRESULT hr = real_D3D12CreateDevice(adapter, level, iid, device);
+    logf_("D3D12CreateDevice(featureLevel=0x%lx) -> 0x%08lx", level, hr);
+    if (SUCCEEDED(hr) && device && *device)
+    {
+        static void *qi, *cc;
+        void **vt = *(void ***)*device;
+        real_dev12_QI = (HRESULT (WINAPI *)(void *, const GUID *, void **))vt[0];
+        real_CreateCommitted = (HRESULT (WINAPI *)(void *, const void *, UINT, const void *,
+                                                   UINT, const void *, const GUID *, void **))
+                               vt[SLOT_D3D12_CREATECOMMITTED];
+        if (!patch_slot("d3d12 device QueryInterface", *device, 0, (void *)my_dev12_QI, &qi))
+            real_dev12_QI = NULL;
+        if (!patch_slot("d3d12 CreateCommittedResource", *device,
+                        SLOT_D3D12_CREATECOMMITTED, (void *)my_CreateCommitted, &cc))
+            real_CreateCommitted = NULL;
+    }
+    return hr;
+}
+
+/* By ordinal, because that is how this game imports it.
+ *
+ * The import table lists d3d12.dll #101 -- D3D12CreateDevice with no name --
+ * and hook_import walks names only, skipping ordinal entries outright. So the
+ * hook installed, reported itself installed, and was never called: the log
+ * showed no D3D12 device being created because nothing was watching the door
+ * it came through.
+ *
+ * DYNASTY WARRIORS did exactly this and the lesson is written down in this
+ * repository. Walking into it a second time is what comes of deriving a probe
+ * from the wrong sibling -- this one grew from the Media Foundation probe,
+ * which never needed ordinals. */
+static void *hook_import_ordinal(const char *dll, WORD ordinal, void *replacement)
+{
+    BYTE *base = (BYTE *)GetModuleHandleA(NULL);
+    IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;
+    IMAGE_NT_HEADERS *nt;
+    IMAGE_IMPORT_DESCRIPTOR *desc;
+    DWORD rva;
+
+    if (!base || dos->e_magic != IMAGE_DOS_SIGNATURE) return NULL;
+    nt = (IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
+    rva = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+    if (!rva) return NULL;
+
+    for (desc = (IMAGE_IMPORT_DESCRIPTOR *)(base + rva); desc->Name; ++desc)
+    {
+        IMAGE_THUNK_DATA *names, *addrs;
+
+        if (lstrcmpiA((const char *)(base + desc->Name), dll)) continue;
+        if (!desc->OriginalFirstThunk) continue;
+
+        names = (IMAGE_THUNK_DATA *)(base + desc->OriginalFirstThunk);
+        addrs = (IMAGE_THUNK_DATA *)(base + desc->FirstThunk);
+
+        for (; names->u1.AddressOfData; ++names, ++addrs)
+        {
+            void *previous;
+            DWORD old;
+
+            if (!IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal)) continue;
+            if (IMAGE_ORDINAL(names->u1.Ordinal) != ordinal) continue;
+
+            previous = (void *)addrs->u1.Function;
+            if (!VirtualProtect(addrs, sizeof(*addrs), PAGE_READWRITE, &old)) return NULL;
+            addrs->u1.Function = (ULONGLONG)(ULONG_PTR)replacement;
+            VirtualProtect(addrs, sizeof(*addrs), old, &old);
+            return previous;
+        }
+    }
+    return NULL;
+}
+
 static DWORD WINAPI worker(LPVOID unused)
 {
     (void)unused;
@@ -2240,6 +2444,15 @@ static DWORD WINAPI worker(LPVOID unused)
                 { *(void **)&real_Direct3DCreate9Ex = was; got++; }
             if ((was = hook_import("d3d11.dll", "D3D11CreateDevice", (void *)my_D3D11CreateDevice)))
                 { *(void **)&real_D3D11CreateDevice = was; got++; }
+            if ((was = hook_import("d3d12.dll", "D3D12CreateDevice", (void *)my_D3D12CreateDevice)))
+                { *(void **)&real_D3D12CreateDevice = was; got++; }
+            if (!real_D3D12CreateDevice
+                && (was = hook_import_ordinal("d3d12.dll", 101, (void *)my_D3D12CreateDevice)))
+                { *(void **)&real_D3D12CreateDevice = was; got++; }
+            if ((was = hook_import("sl.interposer.dll", "D3D12CreateDevice",
+                                   (void *)my_D3D12CreateDevice)))
+                { if (!real_D3D12CreateDevice) *(void **)&real_D3D12CreateDevice = was;
+                  got++; }
         }
         logf_("import table: %d of %d Media Foundation and D3D9 entries hooked "
               "(0 here means this game resolves them some other way)",

@@ -111,6 +111,46 @@ interface, that output is discarded.
 same as a program giving up, and treating one as the other produced a confident
 account of two independent faults that the evidence did not support.
 
+## What was ruled out, in order
+
+Each of these was a reasonable hypothesis and each is now measured rather than
+argued. None of them is the black screen.
+
+| Hypothesis | Result |
+| --- | --- |
+| Videos are CRI Sofdec, not Media Foundation | **no** — 399 of 400 are WebM/VP9 |
+| The graphics backend was wrong (DXMT) | **no** — the same on D3DMetal |
+| No VP9 decoder MFT, so the gate fails | **real, and answered** — see below |
+| No `.webm` byte-stream handler | **real, and registered** — never reached |
+| The DXGI device manager binds no device | **no** — `ResetDevice` returns S_OK |
+| `ID3DDestructionNotifier` is refused | **not observed** — nothing asks for it |
+| D3D12 device creation fails | **no** — succeeds at feature level 11_0 |
+
+So Media Foundation initialises completely, D3D12 comes up, committed
+resources are created, and the screen is black. Whatever stops it is past all
+of that, and `MFCreateSourceReaderFromURL` is still never called even though it
+is in the binary.
+
+**The MFT gate is genuinely fixed.** When the game asks for a VP9 decoder and
+gets none, the query is repeated for H.264 -- registered, real -- and that list
+handed back. The game only counts them; the disassembly shows `count > 0`
+setting a single bit, and it never activates them. It went from zero to one and
+stayed there. Necessary, evidently not sufficient.
+
+**Two traps cost runs here, both of them already documented in this
+repository.** The game imports `D3D12CreateDevice` from `d3d12.dll` **by
+ordinal 101**, with no name, and `hook_import` walks names only -- it skips
+ordinal entries with an explicit `continue`. The hook installed, reported
+itself installed, and was never called, so the log showed no D3D12 device
+because nothing watched the door it came through. DYNASTY WARRIORS did exactly
+this and `hook_import_ordinal` was written for it months ago. This probe was
+derived from the Media Foundation probe, which never needed ordinals.
+
+And a terminal capture produced two lines of `msync` and nothing else for three
+attempts, because launching Steam captures nothing: Steam forks and returns, so
+the command finishes before the game starts and the game's output belongs to
+another process.
+
 ## Risk, since the question comes up
 
 Assessed rather than assumed. The protection is a whole-section code-encryption

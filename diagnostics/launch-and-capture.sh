@@ -43,9 +43,26 @@ echo "Start the game from Steam. Everything it says lands in that file."
 echo "Close the game when you are done, then Ctrl-C here."
 echo
 
+# Launching Steam captures nothing, and it took a run to see why: Steam forks
+# and returns, so the command finishes before the game starts and the game is a
+# different process whose output goes nowhere. Two lines of msync and an empty
+# file is what that looks like.
+#
+# So the game is launched directly, as a child of this terminal. Steam has to
+# be running already -- most titles call SteamAPI_RestartAppIfNecessary, which
+# finds the running client and carries on rather than relaunching.
+#
 # WINEDEBUG is left alone deliberately. Turning on channels floods the output
 # and buries the one line that matters; the defaults already carry D3DMetal's
 # and DXMT's own complaints.
-"$APP/Contents/SharedSupport/CrossOver/bin/wine" \
-  --bottle "$BOTTLE" --cx-app 'C:\Program Files (x86)\Steam\steam.exe' 2>&1 \
-  | tee "$OUT"
+if [ -n "${EXE:-}" ]; then
+  echo "launching $EXE directly, with Steam expected to be already running"
+  "$APP/Contents/SharedSupport/CrossOver/bin/wine" \
+    --bottle "$BOTTLE" --cx-app "$EXE" 2>&1 | tee "$OUT"
+else
+  echo "no EXE given -- launching Steam, which will NOT capture the game's own"
+  echo "output because Steam detaches. Set EXE to the game to capture it:"
+  echo "  EXE='Z:\\path\\to\\game.exe' $0 $BOTTLE"
+  "$APP/Contents/SharedSupport/CrossOver/bin/wine" \
+    --bottle "$BOTTLE" --cx-app 'C:\Program Files (x86)\Steam\steam.exe' 2>&1 | tee "$OUT"
+fi
