@@ -130,6 +130,24 @@ stage_one() {
     return 0
   fi
   OUT="$ROOT/$SLUG/$ARCH"
+
+  # Already built, from this same engine, and finished: leave it alone.
+  #
+  # Re-staging an identical directory is not free. It replaces something bottles
+  # point at, for no gain, every time anyone presses the button -- and the safest
+  # replacement is still a replacement. The reason to rebuild is that the engine
+  # has been updated underneath it, and .built-against is what says so.
+  # FORCE=1 rebuilds regardless, which is the escape when a staging is suspect
+  # rather than merely old.
+  if [ "${FORCE:-0}" != 1 ] &&
+     [ -f "$OUT/.complete" ] &&
+     [ "$(cat "$OUT/.built-against" 2>/dev/null)" = "$VER" ]; then
+    echo
+    echo "engine    : $ENGINE  ($VER, $ARCH)"
+    echo "staging   : already built from this CrossOver, left untouched"
+    printf '%s|%s|%s\n' "$VER" "$ENGINE" "$OUT/gstreamer-1.0" >> "$ROOT/.map"
+    return 0
+  fi
   # Built somewhere else and moved into place in one step, because bottles point
   # at $OUT while this runs. Emptying it first meant a re-stage destroyed a live
   # staging for the length of the build, and a run that was stopped or crashed
@@ -137,7 +155,7 @@ stage_one() {
   # one -- the app pointed bottles at it and the game failed on the first
   # cutscene with unresolved dependencies.
   TMP="$ROOT/$SLUG/.$ARCH.incoming.$$"
-  mkdir -p "$ROOT/$VER"
+  mkdir -p "$ROOT/$SLUG"
   find "$ROOT/$SLUG" -maxdepth 1 -name ".$ARCH.incoming.*" -exec rm -rf {} + 2>/dev/null || true
 
   echo "engine    : $ENGINE  ($VER, $ARCH)"
@@ -195,8 +213,21 @@ stage_one() {
   # a dozen support libraries are still missing.
   date -u +'%Y-%m-%dT%H:%M:%SZ' > "$TMP/.complete"
 
-  rm -rf "$OUT"
-  mv "$TMP" "$OUT"
+  # Put the new one in place before removing the old, not after. Deleting first
+  # left the path a bottle points at absent for as long as an rm -rf of thirty
+  # megabytes takes, and a game started in that window finds nothing there. Two
+  # renames instead: the gap is now the time between them.
+  OLD=""
+  if [ -d "$OUT" ]; then
+    OLD="$OUT.replaced.$$"
+    mv "$OUT" "$OLD" || { echo "error: could not move the previous staging aside" >&2; exit 1; }
+  fi
+  if ! mv "$TMP" "$OUT"; then
+    echo "error: could not put the new staging in place" >&2
+    [ -n "$OLD" ] && mv "$OLD" "$OUT"
+    exit 1
+  fi
+  [ -n "$OLD" ] && rm -rf "$OLD"
 
   # Written to the file rather than to a variable: the loop below runs in a
   # subshell, so a variable would not survive it. This engine's own line is
