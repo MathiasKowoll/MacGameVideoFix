@@ -1067,13 +1067,95 @@ static HRESULT WINAPI my_ReadSample(void *self, DWORD stream, DWORD flags,
     return hr;
 }
 
+/* Which engine is underneath.
+ *
+ * The bridge's log is shared across every run in a bottle, and nothing in it
+ * said which CrossOver each session ran under -- so telling a working session
+ * from a failing one meant counting errors and inferring. Wine answers this for
+ * free through two ntdll exports, and one line at startup ends the guessing. */
+static void log_engine_(void)
+{
+    const char *(CDECL *get_version)(void);
+    const char *(CDECL *get_build_id)(void);
+    HMODULE nt = GetModuleHandleA("ntdll.dll");
+
+    *(FARPROC *)&get_version  = GetProcAddress(nt, "wine_get_version");
+    *(FARPROC *)&get_build_id = GetProcAddress(nt, "wine_get_build_id");
+    logf_("engine: wine %s, build %s",
+          get_version  ? get_version()  : "(not wine)",
+          get_build_id ? get_build_id() : "(unknown)");
+}
+
+/* What Media Foundation was actually handed.
+ *
+ * MF_E_UNSUPPORTED_BYTESTREAM_TYPE says the resolver could not identify the
+ * content, and FromByteStream identifies by content rather than by name -- so
+ * the only question that matters is what the first bytes are. ASF opens with a
+ * fixed GUID, 30 26 B2 75 8E 66 CF 11. If those are the bytes, the container is
+ * right and the refusal belongs to the engine; if they are not, the game handed
+ * over something else and the fault is upstream of Media Foundation entirely.
+ *
+ * The stream is left where it was found: position saved, rewound, read, put
+ * back. A probe that moves the caller's cursor would break the very thing it is
+ * trying to explain. */
+#define SLOT_BS_GETLENGTH   4
+#define SLOT_BS_GETPOS      6
+#define SLOT_BS_SETPOS      7
+#define SLOT_BS_READ        9
+
+static void sniff_stream_(void *stream)
+{
+    HRESULT (WINAPI *get_len)(void *, ULONGLONG *);
+    HRESULT (WINAPI *get_pos)(void *, ULONGLONG *);
+    HRESULT (WINAPI *set_pos)(void *, ULONGLONG);
+    HRESULT (WINAPI *read_at)(void *, BYTE *, ULONG, ULONG *);
+    void **vt;
+    BYTE head[16] = { 0 };
+    ULONGLONG len = 0, pos = 0;
+    ULONG got = 0;
+    char hex[16 * 3 + 1];
+    int i;
+    static const BYTE asf[8] = { 0x30, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF, 0x11 };
+
+    if (!stream) { logf_("  the stream itself is NULL"); return; }
+    vt = *(void ***)stream;
+    if (!vt) return;
+
+    *(void **)&get_len = vt[SLOT_BS_GETLENGTH];
+    *(void **)&get_pos = vt[SLOT_BS_GETPOS];
+    *(void **)&set_pos = vt[SLOT_BS_SETPOS];
+    *(void **)&read_at = vt[SLOT_BS_READ];
+    if (!get_pos || !set_pos || !read_at) return;
+
+    if (get_len) get_len(stream, &len);
+    if (FAILED(get_pos(stream, &pos))) return;
+    if (SUCCEEDED(set_pos(stream, 0)))
+    {
+        read_at(stream, head, sizeof(head), &got);
+        set_pos(stream, pos);                 /* put the cursor back */
+    }
+
+    for (i = 0; i < (int)got && i < 16; i++) sprintf(hex + i * 3, "%02x ", head[i]);
+    hex[got ? got * 3 : 0] = 0;
+    logf_("  stream: %llu bytes, cursor was %llu, first %lu: %s",
+          (unsigned long long)len, (unsigned long long)pos, got, hex);
+    if (got >= 8)
+        logf_("  -> %s", memcmp(head, asf, 8) == 0
+              ? "ASF header, so the container is what it should be"
+              : "NOT an ASF header -- Media Foundation was handed something else");
+}
+
 static HRESULT WINAPI my_MFCreateSourceReaderFromByteStream(void *stream, void *attrs, void **reader)
 {
-    static LONG made;
+    static LONG made, sniffed;
     HRESULT hr = real_MFCreateSourceReaderFromByteStream(stream, attrs, reader);
     LONG n = InterlockedIncrement(&made);
     if (n == 1 || FAILED(hr))
         logf_("MFCreateSourceReaderFromByteStream -> 0x%08lx (reader %ld)", hr, n);
+    /* Only the first few. The game opens hundreds of these and the answer is the
+     * same every time; a log that repeats it is a log nobody reads to the end. */
+    if (InterlockedIncrement(&sniffed) <= 3)
+        sniff_stream_(stream);
     if (SUCCEEDED(hr) && reader && *reader)
     {
         static void *gn, *sc, *rs;
@@ -2214,6 +2296,7 @@ static DWORD WINAPI worker(LPVOID unused)
             if ((was = hook_import("d3d11.dll", "D3D11CreateDevice", (void *)my_D3D11CreateDevice)))
                 { *(void **)&real_D3D11CreateDevice = was; got++; }
         }
+        log_engine_();
         logf_("import table: %d of %d Media Foundation and D3D9 entries hooked "
               "(0 here means this game resolves them some other way)",
               got, (int)(sizeof(hooks) / sizeof(hooks[0])) + 2);

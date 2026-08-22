@@ -19,7 +19,7 @@ otherwise.
 | [Life is Strange: Double Exposure](Life-is-Strange-Double-Exposure.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard, same DLL | D3DMetal | 12 | Preview -- 26.3 crashes | Fixed |
 | [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | Video bridge, D3D11 to D3D12 | D3DMetal | 12 | Preview -- crashes on 26.3 | Fixed |
 | [Beast of Reincarnation](Beast-of-Reincarnation.md) | Unreal Engine 5 | Startup video plays with sound, no picture | NV12 restored, Electra forced to software | D3DMetal | 12 | 26.3 · Preview | Fixed |
-| [Persona 5 Strikers](Persona-5-Strikers.md) | Koei Tecmo, in-house | Video never starts; sound only | Staged VC-1 codec, and a D3D9 to D3D11 bridge | **DXMT** | 11 | Preview -- does not work on 26.3 | Fixed |
+| [Persona 5 Strikers](Persona-5-Strikers.md) | Koei Tecmo, in-house | Video never starts; sound only | Staged VC-1 codec, and a D3D9 to D3D11 bridge | **DXMT** | 11 | 26.3 and Preview | Fixed |
 
 **Backend and DX are not preferences, they are requirements.** Persona 5
 Strikers only works on DXMT: it needs a shared D3D9 surface handle, and DXMT
@@ -33,9 +33,11 @@ against CrossOver 26.3 and `crossover-preview-arm64-20260821`, and the CrossOver
 column says which of the two a title was measured on rather than which it might
 work on. Everything runs on that Preview. Two are confirmed on 26.3 as well.
 Both Life is Strange titles crash on 26.3, which is our defect and is open and
-unexplained. Persona 5 Strikers does not work on 26.3 either, which
-was not the expectation -- it depends on no decoder of CrossOver's, so it looked
-like the one that would carry over. It did not, and why is not established.
+unexplained. Persona 5 Strikers plays on both, which is what its
+fix predicted: it stages its own decoder, so what CrossOver ships stops
+mattering. A first attempt on 26.3 failed and was recorded as the title not
+working there -- wrongly. The staged codec is built against one CrossOver and is
+not usable under another, and none had been built for 26.3 yet.
 DYNASTY WARRIORS crashes there too; that much was run, while the reason given for
 it is read from the two installs' plugin sets rather than from watching it fail.
 

@@ -10,7 +10,7 @@ and no error anywhere.
 | Symptom | Sound plays, the picture never appears |
 | Fix | Stage a VC-1 decoder, then bridge D3D9 to D3D11 |
 | Backend | **DXMT only.** D3DMetal cannot produce a shared handle at all |
-| CrossOver | `crossover-preview-arm64-20260821`. **Does not work on 26.3** — measured, and unexplained |
+| CrossOver | Plays on 26.3 and on `crossover-preview-arm64-20260821` — see below for what the first measurement on 26.3 got wrong |
 
 ## The one that should not need Preview
 
@@ -19,18 +19,23 @@ CrossOver's own media stack can open and decode. This one depends on none of
 it: the VC-1 decoder is staged beside the game out of the official GStreamer
 framework, so what CrossOver ships stops mattering.
 
-It ought to follow that this one plays on a stable build too. It does not: tried
-on 26.3, it does not work. The prediction was reasonable and it was wrong, which
-is the reason it was written down as a prediction rather than as a fact.
+It follows that this one plays on a stable build too, and it does. That took two
+measurements to establish, and the first was wrong in a way worth recording.
 
-Why is not established, and two candidates that would have explained it are ruled
-out by comparison rather than by argument. Both builds ship DXMT under
-`lib/dxmt/x86_64-windows/`, so the backend is not missing. And both expose
-`GetSharedHandle` seventeen times in that `d3d11.dll` — different builds, 4.77 MB
-against 4.55 MB, different hashes, but the same shared-handle surface. The thing
-this title actually needs is present in each.
+Tried on 26.3 it did nothing: `MFCreateSourceReaderFromByteStream` refused every
+archive with `MF_E_UNSUPPORTED_BYTESTREAM_TYPE`, 287 times a session across nine
+sessions. Read as a property of the title, that says it does not work on stable.
+It was a property of the configuration. The staged codec is built against one
+CrossOver and is not usable under another, and no staging for 26.3 existed yet --
+the one for it was written twelve seconds after the last failing run. With it in
+place the first reader succeeds and frames arrive.
 
-The backend requirement is unchanged either way: DXMT, for the shared handle.
+The error was honest about itself, too. `FromByteStream` identifies by content,
+and the content was never in doubt: the stream begins `30 26 b2 75 8e 66 cf 11`,
+the ASF header. Media Foundation could see the container perfectly well. What it
+had no way to do was decode what was inside it.
+
+The backend requirement is unchanged: DXMT, for the shared handle.
 
 ## Not VP9
 
