@@ -26,6 +26,9 @@ usage() { sed -n '3,17p' "$0" >&2; exit 1; }
 [ $# -ge 1 ] || usage
 
 REF="$1"
+# Which probe to build. mf-probe is the general one; ng4-observe is the
+# DirectStorage/D3D12 probe for Ninja Gaiden 4.
+SOURCE="${SOURCE:-mf-probe.c}"
 OUT="${2:-$HERE/build}"
 [ -f "$REF" ] || { echo "error: no such file: $REF" >&2; exit 1; }
 
@@ -59,7 +62,7 @@ DEF="$OUT/$STEM.def"
 count=$(($(wc -l < "$DEF") - 2))
 [ "$count" -gt 0 ] || { echo "error: $REF exports nothing to forward" >&2; exit 1; }
 
-"$CC" -shared -O2 -o "$OUT/$NAME" "$HERE/mf-probe.c" "$DEF" \
+"$CC" -shared -O2 -o "$OUT/$NAME" "$HERE/$SOURCE" "$DEF" \
   -lmfuuid -lole32 -luuid -lkernel32 -static-libgcc
 
 echo "built $OUT/$NAME"

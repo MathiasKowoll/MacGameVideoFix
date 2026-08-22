@@ -2405,14 +2405,220 @@ static void *hook_import_ordinal(const char *dll, WORD ordinal, void *replacemen
  * The forwarding itself is unchanged: each of these calls the real function and
  * returns its result.
  */
+/* ---------------------------------------------------------------- crash context
+
+   This executable is Denuvo-protected. On disk, the .text and .rdata around the
+   addresses this crash touches are encrypted -- dumping them reads high-entropy
+   noise, and the file carries two .text sections, which is what a packer looks
+   like. In memory they are plain, because the protection decrypts as it runs.
+
+   So the only place this crash can be read is from inside the process at the
+   moment it happens. A vectored handler gets first refusal on the exception,
+   before Wine prints its own dump, and can read what a disassembler cannot.
+
+   Denuvo also throws first-chance exceptions as part of its own obfuscation, so
+   this reports only the one we are chasing -- a read of address zero -- and only
+   the first few times. */
+
+static BOOL readable_(const void *p, SIZE_T n)
+{
+    MEMORY_BASIC_INFORMATION mbi;
+    const BYTE *a = (const BYTE *)p;
+
+    if (!p) return FALSE;
+    while (n)
+    {
+        SIZE_T left;
+        if (!VirtualQuery(a, &mbi, sizeof(mbi)))        return FALSE;
+        if (mbi.State != MEM_COMMIT)                    return FALSE;
+        if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return FALSE;
+        left = (SIZE_T)((const BYTE *)mbi.BaseAddress + mbi.RegionSize - a);
+        if (left >= n) return TRUE;
+        a += left; n -= left;
+    }
+    return TRUE;
+}
+
+/* Print 32 bytes and say what they look like: a C string, a UTF-16 string, or a
+   run of pointers into the image, which would make it a vtable. */
+static void dump_at_(const char *what, ULONG_PTR addr, ULONG_PTR base, ULONG_PTR end)
+{
+    BYTE b[32];
+    char hex[32 * 3 + 1], asc[33];
+    int i, printable = 0, wide = 1;
+
+    if (!readable_((const void *)addr, sizeof(b)))
+    {
+        logf_("  %-16s %p  <unreadable>", what, (void *)addr);
+        return;
+    }
+    memcpy(b, (const void *)addr, sizeof(b));
+    for (i = 0; i < 32; i++)
+    {
+        sprintf(hex + i * 3, "%02x ", b[i]);
+        asc[i] = (b[i] >= 32 && b[i] < 127) ? (char)b[i] : '.';
+        if (b[i] >= 32 && b[i] < 127) printable++;
+        if ((i & 1) && b[i]) wide = 0;
+    }
+    asc[32] = 0;
+    logf_("  %-16s %p", what, (void *)addr);
+    logf_("      %s|%s|", hex, asc);
+
+    if (b[0] && printable >= 8 && memchr(b, 0, sizeof(b)))
+        logf_("      -> C string: \"%s\"", (const char *)b);
+    else if (wide && b[0])
+    {
+        char narrow[17];
+        for (i = 0; i < 16; i++) narrow[i] = b[i * 2] ? (char)b[i * 2] : ' ';
+        narrow[16] = 0;
+        logf_("      -> UTF-16: \"%s\"", narrow);
+    }
+    else
+    {
+        ULONG_PTR p0, p1;
+        memcpy(&p0, b, 8); memcpy(&p1, b + 8, 8);
+        if (p0 >= base && p0 < end && p1 >= base && p1 < end)
+            logf_("      -> looks like a vtable: +0x%llx, +0x%llx",
+                  (unsigned long long)(p0 - base), (unsigned long long)(p1 - base));
+    }
+}
+
+static LONG CALLBACK crash_context_(EXCEPTION_POINTERS *ep)
+{
+    static LONG reported;
+    const EXCEPTION_RECORD *er = ep->ExceptionRecord;
+    const CONTEXT *c = ep->ContextRecord;
+    ULONG_PTR base, end, sp;
+    MEMORY_BASIC_INFORMATION mbi;
+    int shown;
+
+    if (er->ExceptionCode != EXCEPTION_ACCESS_VIOLATION) return EXCEPTION_CONTINUE_SEARCH;
+    if (er->NumberParameters < 2 || er->ExceptionInformation[1] != 0)
+        return EXCEPTION_CONTINUE_SEARCH;         /* not the null read we are after */
+    if (InterlockedIncrement(&reported) > 3)      return EXCEPTION_CONTINUE_SEARCH;
+
+    base = (ULONG_PTR)GetModuleHandleW(NULL);
+    end  = base + 0x3000000;
+
+    logf_("============ read of address 0 at +0x%llx ============",
+          (unsigned long long)((ULONG_PTR)er->ExceptionAddress - base));
+    logf_("  rax=%016llx rbx=%016llx rcx=%016llx rdx=%016llx",
+          (unsigned long long)c->Rax, (unsigned long long)c->Rbx,
+          (unsigned long long)c->Rcx, (unsigned long long)c->Rdx);
+    logf_("  rsi=%016llx rdi=%016llx r12=%016llx r13=%016llx",
+          (unsigned long long)c->Rsi, (unsigned long long)c->Rdi,
+          (unsigned long long)c->R12, (unsigned long long)c->R13);
+
+    /* The decrypted instruction stream -- what the on-disk binary hides. */
+    dump_at_("code at rip", (ULONG_PTR)er->ExceptionAddress, base, end);
+
+    /* The objects in play. One of these holds the null. */
+    dump_at_("*rbx", c->Rbx, base, end);
+    dump_at_("*rsi", c->Rsi, base, end);
+    dump_at_("*r13", c->R13, base, end);
+    dump_at_("*r12", c->R12, base, end);
+
+    /* Anything on the stack pointing into the image. The constant paired with 15
+       on every dump so far lives in .rdata, and in memory it should be legible. */
+    logf_("  -- stack pointers into the image --");
+    shown = 0;
+    for (sp = c->Rsp; sp < c->Rsp + 0x200 && shown < 12; sp += 8)
+    {
+        ULONG_PTR v;
+        if (!readable_((const void *)sp, sizeof(v))) break;
+        memcpy(&v, (const void *)sp, sizeof(v));
+        if (v <= base || v >= end) continue;
+        if (VirtualQuery((void *)v, &mbi, sizeof(mbi)) &&
+            !(mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE)))
+        {
+            char tag[40];
+            sprintf(tag, "data +0x%llx", (unsigned long long)(v - base));
+            dump_at_(tag, v, base, end);
+        }
+        else
+            logf_("  return address  +0x%llx", (unsigned long long)(v - base));
+        shown++;
+    }
+    logf_("======================================================");
+    return EXCEPTION_CONTINUE_SEARCH;             /* let Wine print its dump too */
+}
+
 static HRESULT (WINAPI *real_DStorageGetFactory)(const GUID *, void **);
 static HRESULT (WINAPI *real_DStorageSetConfiguration)(const void *);
 static HRESULT (WINAPI *real_DStorageSetConfiguration1)(const void *);
 static HRESULT (WINAPI *real_DStorageCreateCompressionCodec)(UINT, UINT, const GUID *, void **);
 
+/* DirectStorage's configuration, version 1. Laid out here rather than pulled
+ * from the SDK header so the probe keeps building without it; the raw dwords
+ * are logged alongside the named fields so a run confirms the layout instead
+ * of us trusting it.
+ *
+ * The last two fields are the whole point. GDeflate decompression on the GPU
+ * runs as a D3D12 compute pass, and that pass is the one thing here D3DMetal
+ * has never been able to survive -- which is presumably why someone disabled
+ * dstoragecore.dll outright by renaming it. Turning these two off moves the
+ * work to the CPU: slower loading, but loading that finishes. */
+struct dstorage_config1
+{
+    UINT32 NumSubmitThreads;
+    INT32  NumBuiltInCpuDecompressionThreads;
+    BOOL   ForceMappingLayer;
+    BOOL   DisableBypassIO;
+    BOOL   DisableTelemetry;
+    BOOL   DisableGpuDecompressionMetacommand;
+    BOOL   DisableGpuDecompression;
+};
+
+static LONG config1_seen;
+
+/* Hand DirectStorage a configuration with GPU decompression off. Used both for
+ * the game's own call and, if the game never makes one, ahead of the factory. */
+static HRESULT set_config1_cpu_only(const struct dstorage_config1 *from)
+{
+    struct dstorage_config1 cfg;
+    HRESULT hr;
+
+    if (!real_DStorageSetConfiguration1) return E_NOTIMPL;
+
+    if (from)
+    {
+        const UINT32 *raw = (const UINT32 *)from;
+        cfg = *from;
+        logf_("  config in : submit=%u cpuThreads=%d mapping=%u bypassIO=%u telemetry=%u "
+              "metacmd=%u gpuDecomp=%u",
+              raw[0], (INT32)raw[1], raw[2], raw[3], raw[4], raw[5], raw[6]);
+    }
+    else
+    {
+        memset(&cfg, 0, sizeof(cfg));
+        logf_("  config in : (none -- the game never set one, so these are defaults)");
+    }
+
+    /* Leave NumBuiltInCpuDecompressionThreads alone. If the game set it to -1 it
+     * means to decompress itself through the custom queue, and overriding that
+     * would break a path that may well be working. */
+    cfg.DisableGpuDecompressionMetacommand = TRUE;
+    cfg.DisableGpuDecompression            = TRUE;
+
+    hr = real_DStorageSetConfiguration1(&cfg);
+    logf_("  config out: GPU decompression forced OFF -> 0x%08lx", hr);
+    return hr;
+}
+
 static HRESULT WINAPI my_DStorageGetFactory(const GUID *iid, void **out)
 {
-    HRESULT hr = real_DStorageGetFactory ? real_DStorageGetFactory(iid, out) : E_NOTIMPL;
+    HRESULT hr;
+
+    /* Configuration is only accepted before the factory exists. If the game is
+     * about to create one without having configured anything, this is the last
+     * moment we get. */
+    if (!InterlockedCompareExchange(&config1_seen, 1, 0))
+    {
+        logf_("DStorageGetFactory: no configuration came first -- setting one now");
+        set_config1_cpu_only(NULL);
+    }
+
+    hr = real_DStorageGetFactory ? real_DStorageGetFactory(iid, out) : E_NOTIMPL;
     logf_("DStorageGetFactory -> 0x%08lx%s", hr,
           FAILED(hr) ? "   << no factory: the game cannot stream its assets" : "");
     return hr;
@@ -2427,7 +2633,10 @@ static HRESULT WINAPI my_DStorageSetConfiguration(const void *config)
 
 static HRESULT WINAPI my_DStorageSetConfiguration1(const void *config)
 {
-    HRESULT hr = real_DStorageSetConfiguration1 ? real_DStorageSetConfiguration1(config) : E_NOTIMPL;
+    HRESULT hr;
+
+    InterlockedExchange(&config1_seen, 1);
+    hr = set_config1_cpu_only((const struct dstorage_config1 *)config);
     logf_("DStorageSetConfiguration1 -> 0x%08lx", hr);
     return hr;
 }
@@ -2557,6 +2766,10 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
     if (reason == DLL_PROCESS_ATTACH)
     {
         DisableThreadLibraryCalls(inst);
+        /* Armed before anything else: the crash we are chasing happens on a
+         * worker thread during startup, and this is the only reader that can
+         * see through the anti-tamper encryption. */
+        AddVectoredExceptionHandler(1, crash_context_);
         /* GetProcAddress has to be in place before the game resolves anything,
          * so it goes in here rather than on the worker thread. */
         *(void **)&real_GetProcAddress =

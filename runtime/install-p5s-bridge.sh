@@ -101,4 +101,16 @@ cp "$PROXY" "$LIVE"
 echo
 echo "installed"
 echo "  the video bridge is in place"
-echo "  this game also needs the staged codecs -- runtime/stage-codecs.sh"
+
+# The codec is the other half of this fix, so say where it stands rather than
+# always naming the script. The app streams this output into its own log, and
+# there it sits next to a button that does the staging -- so pointing an app
+# user at a shell script is worse than saying nothing.
+CODECS="$HOME/Library/Application Support/MacGameVideoFix/gst-codecs/x86_64/gstreamer-1.0"
+if [ -d "$CODECS" ]; then
+  echo "  the VC-1 codec is already staged"
+elif [ -n "${MGVF_FRONTEND:-}" ]; then
+  echo "  this game also needs the VC-1 codec -- use the Stage codec button"
+else
+  echo "  this game also needs the staged codec -- runtime/stage-codecs.sh"
+fi

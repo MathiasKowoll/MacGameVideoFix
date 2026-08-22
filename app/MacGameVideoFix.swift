@@ -48,6 +48,11 @@ private func runStreaming(_ executable: String,
         // A GUI app does not inherit the shell's PATH, so Homebrew is invisible
         // unless we put it back.
         var env = ProcessInfo.processInfo.environment
+        // Lets the shell installers phrase their advice for someone looking at
+        // this window rather than a terminal: the app streams their output
+        // into its own log, so "run this script" is the wrong thing to read
+        // next to a button that does it.
+        env["MGVF_FRONTEND"] = "app"
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
         proc.environment = env
 
