@@ -802,15 +802,104 @@ final class Runner: ObservableObject {
     @Published var bulk = false
     @Published var scanning = false
     @Published var plan: [ScanHit] = []
-    @Published var scanNote = ""
-    /// What the last scan was pointed at, so it can be repeated.
-    @Published var lastRoot: URL?
+    /// The folder step 2 will scan, and what step 3 belongs to. nil is step 1,
+    /// which is a normal place to be and not an error.
+    @Published var libraryRoot: URL?
+    /// The chosen folder did not look like a Steam library. Not a refusal --
+    /// it is still scanned as it is, exactly as before; this is only what lets
+    /// the screen say so, and what makes an empty result explain itself.
+    @Published var libraryIsOdd = false
+    /// nil means no scan has run against the folder currently chosen.
+    ///
+    /// The empty string used to carry that meaning as well as "a scan is
+    /// running right now" and "a scan finished and found nothing", which is why
+    /// the screen could never say which of the three it was in.
+    @Published var scanOutcome: ScanOutcome?
+    /// nil means the bottles have not been asked yet.
+    @Published var survey: LibrarySurvey?
+    @Published var lookingForLibraries = false
     @Published var batchStep = ""
     /// Honoured between games, never inside one. Interrupting an installer
     /// mid-rename is what manufactures the state that destroys an original.
     @Published var stopping = false
 
     var selectedHits: [ScanHit] { plan.filter { $0.selected && $0.actionable } }
+
+    /// The scan in flight, and the number that says whether it still speaks for
+    /// the folder currently chosen.
+    ///
+    /// A scan takes seconds -- it asks each installer what it sees, which is a
+    /// process per hit -- and every way out of step 2 is a way to change the
+    /// folder its results would belong to. Without this the Task outlives the
+    /// folder and writes a plan into a flow that has been reset or repointed:
+    /// step 1 naming one library while step 3 tabulates another, which is the
+    /// exact contradiction the three steps exist to prevent. Disabling buttons
+    /// is not enough on its own, because a disabled state is decided at render
+    /// time and only covers the paths that exist today.
+    private var scanTask: Task<Void, Never>?
+    private var scanGeneration = 0
+
+    /// Does this scan still speak for the folder currently chosen? A method on
+    /// the Runner rather than a function nested in the Task, because a nested
+    /// func does not inherit the actor and cannot read the counter.
+    private func scanIsCurrent(_ generation: Int) -> Bool {
+        generation == scanGeneration
+    }
+
+    /// Abandons an in-flight scan. Called from every path that changes or
+    /// clears the folder, so results can never outlive what they describe.
+    private func cancelScan() {
+        scanTask?.cancel()
+        scanTask = nil
+        scanGeneration &+= 1
+        scanning = false
+        indeterminate = false
+    }
+
+    /// Derived, never stored. A stored step would be a fourth thing to keep in
+    /// sync with the folder, the outcome and the plan, and the first time it
+    /// disagreed with them the screen would be lying about where the user is.
+    var bulkStep: BulkStep {
+        if libraryRoot == nil { return .choose }
+        if scanOutcome == nil { return .scan }
+        return .patch
+    }
+
+    /// A scan ran against the current folder and produced no rows. Distinct
+    /// from not having scanned at all, which is the confusion this whole flow
+    /// exists to end.
+    var scanFoundNothing: Bool {
+        switch scanOutcome {
+        case .some(.nothing(_)):   return true
+        case .some(.games), .none: return false
+        }
+    }
+
+    /// Step 3's one-line headline, and the only reader of `scanOutcome`'s
+    /// wording. Every ending has its own sentence.
+    var scanHeadline: String {
+        if scanning { return "Scanning…" }
+        switch scanOutcome {
+        case .none:
+            return "Nothing scanned yet."
+        case .some(.games(let n)):
+            return "\(n) supported game\(n == 1 ? "" : "s") found"
+        case .some(.nothing(.noSupportedGames)):
+            // Calling the folder a library here, one line above the sentence
+            // saying it does not look like one, is the panel contradicting
+            // itself about the thing the user is trying to get right.
+            return libraryIsOdd ? "No supported game in that folder"
+                                : "No supported game in this library"
+        case .some(.nothing(.volumeNotMounted(let v))):
+            return "“\(v)” is not connected"
+        case .some(.nothing(.folderGone)):
+            return "That folder is not there any more"
+        case .some(.nothing(.unreadable)):
+            return "macOS did not allow reading that folder"
+        case .some(.nothing(.notAFolder)):
+            return "That is a file, not a folder"
+        }
+    }
 
     /// Stages the codec and points every bottle that runs a game at it.
     func stageCodecs() {
@@ -857,69 +946,192 @@ final class Runner: ObservableObject {
     }
 
     func enterBulk() {
+        cancelScan()
         bulk = true
         plan = []
-        scanNote = ""
+        libraryRoot = nil
+        libraryIsOdd = false
+        scanOutcome = nil
         log.removeAll()
         resetProgress()
-        status = "Scan a Steam library, or let the app find them."
+        status = "Step 1 of 3: choose your Steam library folder."
+        // A convenience inside step 1, not a step of its own: it fills the
+        // folder in, it does not act on it.
+        findLibraries()
     }
 
     func leaveBulk() {
+        // Deliberately reachable during a scan, and deliberately not a disabled
+        // button: a probe that hangs would otherwise leave step 2 with no way
+        // out at all. Cancelling here is what makes leaving safe.
+        cancelScan()
         bulk = false
         plan = []
         batchStep = ""
+        libraryRoot = nil
+        libraryIsOdd = false
+        scanOutcome = nil
+        survey = nil
         status = "Choose your game folder to begin."
     }
 
-    /// `url` nil means: ask the bottles where their libraries are.
-    func startScan(from url: URL?) {
-        lastRoot = url
+    /// Step 1, and only step 1.
+    ///
+    /// Choosing a folder used to start a scan in the same gesture, which is
+    /// what made "nothing was found" impossible to tell apart from "nothing was
+    /// ever looked at". The folder is recorded and the user presses Scan.
+    func chooseLibrary(_ url: URL) {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            // Only a drop reaches this: the panel is set to folders only. Saying
+            // it now beats accepting it, calling it chosen, and then reporting
+            // at scan time that a file the user can see is not there any more.
+            status = "That is a file, not a folder. Drop the folder it sits in."
+            return
+        }
+        cancelScan()
+        let (root, looksLikeLibrary) = SteamLibrary.normalise(url)
+        libraryRoot = root
+        libraryIsOdd = !looksLikeLibrary
+        plan = []
+        scanOutcome = nil
+        status = looksLikeLibrary
+            ? "Step 2 of 3: scan this folder for games."
+            : "That folder does not look like a Steam library. Scan it anyway, or change it."
+    }
+
+    /// A discovered library's `common` passes through `normalise` unchanged by
+    /// its first rule, so this is the same choice made from a row.
+    func chooseLibrary(_ lib: DiscoveredLibrary) {
+        // A second lock behind the disabled row. A disk that went away between
+        // the survey and the click must not become step 2's problem to explain.
+        guard lib.ready else { return }
+        chooseLibrary(lib.common)
+    }
+
+    /// Back to step 1 with all three ways in. The plan goes with it: a plan
+    /// belongs to the folder it came from, and keeping it beside a different
+    /// folder is how a table starts describing somewhere it never looked.
+    func clearLibrary() {
+        cancelScan()
+        libraryRoot = nil
+        libraryIsOdd = false
+        scanOutcome = nil
+        plan = []
+        status = "Step 1 of 3: choose your Steam library folder."
+        // The survey is a snapshot: whether each row was ready, and whether its
+        // volume was mounted, were decided when it ran. Someone who plugs in a
+        // drive because this app just told them to and presses Change would
+        // otherwise meet the same dimmed row saying it is not connected.
+        findLibraries()
+    }
+
+    /// Asks the bottles which libraries they know about.
+    ///
+    /// Off the main actor and never called from a view body: it lists every
+    /// bottle, reads a vdf out of each and stats one directory per library.
+    func findLibraries() {
+        guard !lookingForLibraries else { return }
+        lookingForLibraries = true
+        Task {
+            defer { lookingForLibraries = false }
+            survey = await Task.detached { SteamLibrary.survey() }.value
+        }
+    }
+
+    /// Step 2. Scans the one folder step 1 chose, and there is no other way in
+    /// -- the guard is the single place "no scan without a folder" is enforced.
+    func startScan() {
+        guard let root = libraryRoot else {
+            status = "Choose a Steam library folder first."
+            return
+        }
+        // The button is disabled while a scan runs, but a disabled state is
+        // decided at render time: two activations delivered before a re-render
+        // both arrive here. Two scans share one `statusAnswer`, so each would
+        // read the other's answer and label rows with it.
+        guard !scanning, !busy else { return }
+
+        scanGeneration &+= 1
+        let generation = scanGeneration
         scanning = true
         plan = []
+        scanOutcome = nil
         log.removeAll()
-        indeterminate = true
+        // Not just `indeterminate = true`: a finished install leaves the bar
+        // full, and "Scan again" would redraw that install's bar underneath a
+        // scan that has nothing to do with it.
+        resetProgress()
         status = "Scanning…"
-        Task {
-            defer { scanning = false; indeterminate = false }
-
-            var roots: [URL] = []
-            var describedRoot = ""
-            if let url {
-                let (root, looksLikeLibrary) = SteamLibrary.normalise(url)
-                roots = [root]
-                describedRoot = root.path
-                if !looksLikeLibrary {
-                    note("That folder does not look like a Steam library; scanning it as it is.")
+        scanTask = Task {
+            // Only the scan that still speaks for the chosen folder is allowed
+            // to touch shared state -- including on the way out.
+            defer {
+                if generation == scanGeneration {
+                    scanning = false; indeterminate = false; scanTask = nil
                 }
-            } else {
-                roots = await Task.detached { SteamLibrary.discover() }.value
-                describedRoot = roots.count == 1 ? roots[0].path
-                                                 : "\(roots.count) Steam libraries"
             }
+            // Checked before the first line of log, not only before the first
+            // published result: a Task is not guaranteed to have started before
+            // the folder changes underneath it.
+            guard scanIsCurrent(generation) else { return }
 
-            guard !roots.isEmpty else {
-                status = "No Steam library found. Drop one on the app instead."
+            if libraryIsOdd {
+                note("That folder does not look like a Steam library; scanning it as it is.")
+            }
+            note("Scanning \(root.path)")
+
+            // Asked before recognise() rather than inside it. To a function
+            // that reports only recognised games, a root it could not open and
+            // a root holding none of the six are the same empty list.
+            let bad = await Task.detached(operation: { SteamLibrary.readability(of: root) }).value
+            guard scanIsCurrent(generation) else { return }
+            if let bad {
+                scanOutcome = .nothing(bad)
+                status = "Nothing to do here."
+                note(bad.logLine)
                 return
             }
-            note("Scanning \(describedRoot)")
 
-            let found = await Task.detached { Self.recognise(in: roots) }.value
+            let found = await Task.detached { Self.recognise(in: [root]) }.value
+            guard scanIsCurrent(generation) else { return }
             guard !found.isEmpty else {
-                scanNote = "No supported game found."
+                scanOutcome = .nothing(.noSupportedGames)
                 status = "Nothing to do here."
                 note("No supported game found.")
                 return
             }
 
             var probed: [ScanHit] = []
-            for hit in found { probed.append(await probe(hit)) }
+            for hit in found {
+                // Checked between hits so an abandoned scan stops spawning
+                // processes rather than merely discarding what they said.
+                guard scanIsCurrent(generation) else { return }
+                probed.append(await probe(hit))
+            }
+            guard scanIsCurrent(generation) else { return }
             plan = probed
+            scanOutcome = .games(probed.count)
 
+            // Four endings, not two. A row carrying a blocker is in neither
+            // count -- it cannot be fixed and is not fixed -- so a library
+            // holding one applied game and one blocked one used to be announced
+            // as entirely fixed, directly above a row saying it was not.
             let ready = probed.filter { $0.actionable && $0.state != .applied }.count
-            scanNote = "\(probed.count) supported game\(probed.count == 1 ? "" : "s") found"
-            status = ready == 0 ? "Everything here is already fixed."
-                                : "\(ready) can be fixed now."
+            let done = probed.filter { $0.actionable && $0.state == .applied }.count
+            let blocked = probed.count - ready - done
+            let cannot = "\(blocked) cannot be fixed as \(blocked == 1 ? "it is" : "they are"). "
+                       + "Each row says why."
+            if ready > 0 {
+                status = "\(ready) can be fixed now." + (blocked > 0 ? " " + cannot : "")
+            } else if done > 0 && blocked > 0 {
+                status = "\(done) already fixed; " + cannot
+            } else if done > 0 {
+                status = "Everything here is already fixed."
+            } else {
+                status = "None of these can be fixed as they are. Each row says why."
+            }
         }
     }
 
@@ -990,6 +1202,10 @@ final class Runner: ObservableObject {
     }
 
     func applyPlan(install: Bool) {
+        // Same reason as `startScan`'s: the confirm button's disabled state is
+        // decided at render time, and two runs over one plan would fight over
+        // every row they share.
+        guard !busy else { return }
         let targets = selectedHits.filter { install ? $0.state != .applied : $0.state != .notApplied }
         guard !targets.isEmpty else { return }
         busy = true
@@ -1083,8 +1299,18 @@ final class Runner: ObservableObject {
 enum Codecs {
     static let framework = "/Library/Frameworks/GStreamer.framework"
 
+    /// Read once and remembered, for the same reason `version` is: this is
+    /// consulted from a SwiftUI body, and a body is re-evaluated on every
+    /// published change -- which during an install means once per line the
+    /// installer prints. `codecBanner` asks this and `staged` seven times
+    /// between them, so uncached it is seven stats per log line.
+    private static var cachedFramework: Bool?
+
     static var gstreamerInstalled: Bool {
-        FileManager.default.fileExists(atPath: framework)
+        if let c = cachedFramework { return c }
+        let found = FileManager.default.fileExists(atPath: framework)
+        cachedFramework = found
+        return found
     }
 
     /// The installed version, read from the library's compatibility number
@@ -1117,6 +1343,8 @@ enum Codecs {
     static func refresh() {
         cached = nil
         cachedBottles = nil
+        cachedFramework = nil
+        cachedStaged = nil
     }
 
     private static func readVersion() -> String? {
@@ -1150,9 +1378,16 @@ enum Codecs {
             .appendingPathComponent("Library/Application Support/MacGameVideoFix/gst-codecs/x86_64/gstreamer-1.0")
     }
 
+    private static var cachedStaged: Bool?
+
+    /// Cached like the rest of this enum. `stageCodecs` and "Check again" both
+    /// call `refresh()`, which are the only two moments the answer changes.
     static var staged: Bool {
-        FileManager.default.fileExists(
+        if let c = cachedStaged { return c }
+        let found = FileManager.default.fileExists(
             atPath: (stagedPath as NSString).appendingPathComponent("libgstlibav.dylib"))
+        cachedStaged = found
+        return found
     }
 
     /// Bottles that already point at the staged folder.
@@ -1355,6 +1590,147 @@ struct ScanHit: Identifiable {
     var actionable: Bool { blocker == nil }
 }
 
+/// One Steam library a bottle's Steam knows about, with everything the screen
+/// needs to describe it already worked out.
+///
+/// A bare `URL` was not enough, and the reason is the evening this change came
+/// out of. The old discovery returned only the roots whose steamapps/common
+/// existed right then, so an external drive that happened to be unplugged and
+/// "you own none of these games" arrived as the same empty list and produced
+/// the same wrong sentence. A library that cannot be scanned at this moment is
+/// still worth showing -- dimmed, named, with the reason beside it -- because
+/// the difference between those two is the difference between information and
+/// silence.
+///
+/// Every property below reads stored fields only. Rows are drawn from a
+/// SwiftUI body, and a body is re-evaluated on every published change; a
+/// `fileExists` in here would put a stat on a spun-down USB disk in that path,
+/// which is the mistake `Codecs.version` already made once with a cheaper call.
+struct DiscoveredLibrary: Identifiable, Hashable, Sendable {
+    /// The steamapps/common folder -- what a scan is actually pointed at.
+    let common: URL
+    /// The library root above steamapps, which is the path worth showing.
+    let root: URL
+    /// The /Volumes name this sits on, when it sits on one.
+    let volume: String?
+    /// The bottle whose Steam declared it.
+    let bottle: String
+    /// The library lives inside the bottle rather than on a disk the user
+    /// chose, so it ranks below the user's own libraries.
+    let insideBottle: Bool
+    /// steamapps/common was there when the survey ran.
+    let ready: Bool
+    /// The volume it names is not mounted. Decided at survey time, once.
+    let volumeMissing: Bool
+
+    var id: String { common.path }
+
+    var title: String {
+        // The bottle's name is deliberately not the heading. CrossOver names a
+        // bottle after whatever was installed into it, so a bottle holding a
+        // game this app does not support would put that game's name on screen
+        // as a row title -- and nothing here may name the user's other games.
+        // The storage path below is a different thing: it is a folder the user
+        // can point at again, which is what makes it fair to show.
+        if insideBottle { return "Steam inside a CrossOver bottle" }
+        if let volume { return "\(volume) — \(root.lastPathComponent)" }
+        return root.lastPathComponent
+    }
+
+    var shownPath: String { root.path }
+
+    /// Why this row cannot be used, in the user's terms. nil when it can.
+    var blocker: String? {
+        if volumeMissing {
+            return "“\(volume ?? root.lastPathComponent)” is not connected. "
+                 + "Plug it in, then press Look again."
+        }
+        if !ready {
+            return "Steam records this library, but there is no steamapps/common in it."
+        }
+        return nil
+    }
+
+    var actionWord: String {
+        if ready { return "Use" }
+        return volumeMissing ? "Not mounted" : "Unavailable"
+    }
+
+    var icon: String {
+        if volumeMissing { return "externaldrive.badge.xmark" }
+        if !ready { return "questionmark.folder" }
+        if insideBottle { return "shippingbox" }
+        return volume == nil ? "internaldrive" : "externaldrive"
+    }
+
+    /// Usable libraries on the user's own disks first, then the ones that need
+    /// a drive plugged in, then the copies of Steam inside the bottles -- which
+    /// are real, and are almost never where the games are.
+    var rank: Int {
+        switch (ready, insideBottle) {
+        case (true, false):  return 0
+        case (false, false): return 1
+        case (true, true):   return 2
+        case (false, true):  return 3
+        }
+    }
+}
+
+/// What the bottles had to say, including when that was nothing.
+struct LibrarySurvey: Sendable {
+    let libraries: [DiscoveredLibrary]
+    /// Set only when `libraries` is empty, and says which kind of empty.
+    let nothing: NoLibraries?
+}
+
+/// The three ways the bottles can come back with no libraries. They need
+/// different sentences because they need different actions from the user.
+enum NoLibraries: Sendable {
+    case noBottles
+    case noSteamConfig
+    case nothingDeclared
+}
+
+/// How a scan ended. `nil` -- no value at all -- means no scan has run against
+/// the folder currently chosen, which is a normal starting state and not one of
+/// these.
+enum ScanOutcome: Equatable, Sendable {
+    case games(Int)
+    case nothing(Empty)
+
+    /// Every way a scan can come back with no rows. They used to be one empty
+    /// list and one sentence about the user's games that was never checked.
+    enum Empty: Equatable, Sendable {
+        case noSupportedGames
+        case volumeNotMounted(String)
+        case folderGone
+        /// The chosen path exists and is not a directory. Its own case because
+        /// "that folder is not there any more" about a file the user is looking
+        /// at on their desktop is simply untrue.
+        case notAFolder
+        case unreadable
+
+        /// One line for the log, in the same words as the panel on screen.
+        var logLine: String {
+            switch self {
+            case .noSupportedGames:        return "No supported game found."
+            case .volumeNotMounted(let v): return "“\(v)” is not connected."
+            case .folderGone:              return "That folder is not there any more."
+            case .notAFolder:              return "That is a file, not a folder."
+            case .unreadable:              return "macOS did not allow reading that folder."
+            }
+        }
+    }
+}
+
+/// Where the bulk flow is. Derived from the state that already exists, never
+/// stored -- see `Runner.bulkStep`.
+enum BulkStep: Int {
+    case choose = 1
+    case scan = 2
+    case patch = 3
+}
+
 extension SupportedGame {
     /// Titles a scan can identify.
     ///
@@ -1420,33 +1796,143 @@ enum SteamLibrary {
     /// it would find nothing and report, wrongly, that the user owns none of
     /// the supported games.
     ///
-    /// These roots are read and never shown. They are the user's storage
-    /// layout, unmounted volumes included; only recognised games belong on
-    /// screen.
-    static func discover() -> [URL] {
+    /// These roots are offered as choices, so the paths themselves reach the
+    /// screen. They are folders the user picked as storage and can point at
+    /// again; what is installed inside one is a different thing entirely and
+    /// still never appears.
+    ///
+    /// Nothing here is dropped for being unreachable. The old version kept only
+    /// the libraries whose steamapps/common existed, which is why an unplugged
+    /// external drive and an empty library were the same answer.
+    static func survey() -> LibrarySurvey {
         let fm = FileManager.default
-        let bottles = (try? fm.contentsOfDirectory(
-            at: URL(fileURLWithPath: NSHomeDirectory())
-                .appendingPathComponent("Library/Application Support/CrossOver/Bottles"),
-            includingPropertiesForKeys: nil)) ?? []
+        let bottles = ((try? fm.contentsOfDirectory(
+            at: Bottle.root, includingPropertiesForKeys: nil)) ?? [])
+            .filter { fm.fileExists(atPath: $0.appendingPathComponent("cxbottle.conf").path) }
 
-        var roots: [URL] = []
+        guard !bottles.isEmpty else {
+            return LibrarySurvey(libraries: [], nothing: .noBottles)
+        }
+
+        // Told apart so the empty case can name itself: a bottle with no Steam
+        // config at all is a different problem from a Steam that records no
+        // library, and they need different advice.
+        var readAnyConfig = false
+        var found: [DiscoveredLibrary] = []
+        var seen = Set<String>()
+
         for bottle in bottles {
             let vdf = bottle.appendingPathComponent(
                 "drive_c/Program Files (x86)/Steam/config/libraryfolders.vdf")
             guard let text = try? String(contentsOf: vdf, encoding: .utf8) else { continue }
+            readAnyConfig = true
             for windowsPath in paths(in: text) {
                 guard let mac = translate(windowsPath, inBottle: bottle) else { continue }
                 let common = mac.appendingPathComponent("steamapps/common")
+                // Several bottles usually declare one library. Deduplicated
+                // before the existence test, never after: the whole point is
+                // that an absent folder still produces a row.
+                guard seen.insert(common.standardizedFileURL.path).inserted else { continue }
+
                 var d: ObjCBool = false
-                if fm.fileExists(atPath: common.path, isDirectory: &d), d.boolValue {
-                    roots.append(common)
-                }
+                let ready = fm.fileExists(atPath: common.path, isDirectory: &d) && d.boolValue
+                let volume = volumeName(of: mac)
+                let missing = !ready && (volume.map { !isMounted($0) } ?? false)
+
+                found.append(DiscoveredLibrary(
+                    common: common,
+                    root: mac,
+                    volume: volume,
+                    bottle: bottle.lastPathComponent,
+                    insideBottle: mac.path.hasPrefix(bottle.path + "/"),
+                    ready: ready,
+                    volumeMissing: missing))
             }
         }
-        // Several bottles usually share one library.
-        var seen = Set<String>()
-        return roots.filter { seen.insert($0.standardizedFileURL.path).inserted }
+
+        guard !found.isEmpty else {
+            return LibrarySurvey(libraries: [],
+                                 nothing: readAnyConfig ? .nothingDeclared : .noSteamConfig)
+        }
+
+        // Hand-sorted by rank rather than sorted(by:), which is not documented
+        // stable: two bottles' copies of the same library should keep the order
+        // the bottles were read in rather than shuffle between launches.
+        var ordered: [DiscoveredLibrary] = []
+        for r in 0...3 { ordered += found.filter { $0.rank == r } }
+        return LibrarySurvey(libraries: ordered, nothing: nil)
+    }
+
+    /// The /Volumes name a path sits on, read out of the path itself.
+    ///
+    /// Textual on purpose. Every filesystem call that could answer this
+    /// properly -- `volumeNameKey`, `mountedVolumeURLs` -- needs the volume to
+    /// be mounted, and the one case this exists to describe is exactly the one
+    /// where it is not. Limitation worth knowing: a volume mounted somewhere
+    /// other than /Volumes goes unnamed, and its row falls back to saying the
+    /// folder is not there. Weaker, still not silent.
+    private static func volumeName(of url: URL) -> String? {
+        let parts = url.standardizedFileURL.pathComponents
+        guard parts.count >= 3, parts[1] == "Volumes" else { return nil }
+        return parts[2]
+    }
+
+    /// Is /Volumes/<name> a volume that is mounted right now?
+    ///
+    /// `fileExists` is not enough to ask this. macOS routinely leaves an empty
+    /// /Volumes/<name> directory behind after an unclean eject, and a volume
+    /// that comes back can mount as "<name> 1" beside the leftover. Taking that
+    /// leftover for the drive puts an unplugged disk into the "there is no
+    /// steamapps/common in it" branch and sends the user looking for a folder
+    /// they never moved -- the original failure in a narrower form. statfs
+    /// reports what is actually mounted at a path, costs one syscall, and does
+    /// not need the volume to be there to answer.
+    private static func isMounted(_ volume: String) -> Bool {
+        let path = "/Volumes/\(volume)"
+        var info = statfs()
+        guard statfs(path, &info) == 0 else { return false }
+        let mountedHere = withUnsafeBytes(of: &info.f_mntonname) { raw -> Bool in
+            guard let base = raw.baseAddress else { return false }
+            return String(cString: base.assumingMemoryBound(to: CChar.self)) == path
+        }
+        if mountedHere { return true }
+        // Being a mount point is not the only way to be real: the boot volume
+        // appears under /Volumes as a firmlink, and statfs reports "/" for it.
+        // Measured here rather than assumed -- treating that as unmounted would
+        // trade one wrong sentence for another. What a leftover cannot be is
+        // non-empty, so that is the second question. The listing is counted and
+        // dropped; nothing about what is on the disk goes any further.
+        let contents = try? FileManager.default.contentsOfDirectory(atPath: path)
+        return !(contents?.isEmpty ?? true)
+    }
+
+    /// Why a chosen root cannot be scanned, or nil when it can be.
+    ///
+    /// A pre-flight rather than a change to `recognise`. That function's doc
+    /// comment is the privacy guarantee of this app -- it takes roots and
+    /// returns only recognised games -- and it swallows an unreadable root by
+    /// design, which is right for what it promises and useless for telling the
+    /// user why nothing came back. Every fact needed to separate the failures
+    /// is available before it runs, so it is asked here and `recognise` stays
+    /// exactly as it is. Cost is one extra directory listing, off the main
+    /// actor.
+    static func readability(of root: URL) -> ScanOutcome.Empty? {
+        let fm = FileManager.default
+        var d: ObjCBool = false
+        guard fm.fileExists(atPath: root.path, isDirectory: &d) else {
+            if let volume = volumeName(of: root), !isMounted(volume) {
+                return .volumeNotMounted(volume)
+            }
+            return .folderGone
+        }
+        // Split off from the guard above rather than folded into it. The drop
+        // zone takes any file URL and `normalise` hands a file back unchanged,
+        // so a dropped .exe or screenshot arrives here as a path that exists
+        // and is not a folder -- and reporting that as a folder that is gone is
+        // a false statement on a path the user can reach.
+        guard d.boolValue else { return .notAFolder }
+        guard (try? fm.contentsOfDirectory(atPath: root.path)) != nil else { return .unreadable }
+        return nil
     }
 
     /// The "path" values out of a libraryfolders.vdf. Backslashes arrive
@@ -1497,6 +1983,10 @@ struct ContentView: View {
     @State private var installAction = true
     @StateObject private var runner = Runner()
     @State private var dropping = false
+    /// Its own flag rather than sharing `dropping`. The two zones never appear
+    /// together today, and a shared highlight would be a quiet bug the first
+    /// time they did.
+    @State private var droppingLibrary = false
     @State private var follow = true
 
     var body: some View {
@@ -1504,7 +1994,10 @@ struct ContentView: View {
             header
             requirement
             if runner.bulk {
-                planTable
+                bulkHeader
+                stepChoose
+                stepScan
+                stepPatch
             } else {
                 allAtOnce
                 supported
@@ -1671,30 +2164,34 @@ struct ContentView: View {
                 .font(.title2).foregroundStyle(.tint)
             VStack(alignment: .leading, spacing: 2) {
                 Text("All your games at once").font(.body.weight(.medium))
-                Text("Point at your Steam library and every supported game in it "
-                   + "gets found, listed, and fixed in one pass.")
+                Text("Point at your Steam library, scan it, and fix everything "
+                   + "supported in one pass. Nothing is read until you say so.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
-            Button("Find my games") { runner.enterBulk(); runner.startScan(from: nil) }
-            Button("Choose folder…") { chooseLibrary() }
+            Button("Find my games") { runner.enterBulk() }
+            Button("Choose folder…") { chooseLibraryFolder() }
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.accentColor.opacity(0.07)))
     }
 
-    private func chooseLibrary() {
+    /// Completes step 1 through the panel. It no longer scans: going through
+    /// Finder is a way of naming the folder, not a decision to read it.
+    private func chooseLibraryFolder() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.prompt = "Scan"
+        panel.prompt = "Choose"
         panel.message = "Choose your Steam library — the folder holding steamapps, "
                       + "or the common folder inside it. One game's folder works too."
         if panel.runModal() == .OK, let url = panel.url {
-            runner.enterBulk()
-            runner.startScan(from: url)
+            // Re-entering bulk mode would clear the log and re-survey the
+            // bottles for nothing; this link also lives inside step 1.
+            if !runner.bulk { runner.enterBulk() }
+            runner.chooseLibrary(url)
         }
     }
 
@@ -1773,22 +2270,344 @@ struct ContentView: View {
              + "ahead and say what it finds."
     }
 
-    private var planTable: some View {
-        VStack(alignment: .leading, spacing: 10) {
+    /// The way out of bulk mode, and the only thing on screen that is not one
+    /// of the three steps. It used to live in the plan table's header, which
+    /// was safe while that table was always drawn and is not now that step 3
+    /// can be empty.
+    private var bulkHeader: some View {
+        VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(runner.scanNote.isEmpty ? "Scanning…" : runner.scanNote)
-                    .font(.headline)
+                Text("All your games at once").font(.headline)
                 Spacer()
-                Button("Scan again") { runner.startScan(from: runner.lastRoot) }
-                    .disabled(runner.busy || runner.scanning)
-                Button("Back") { runner.leaveBulk() }
+                // Not locked during a scan. `leaveBulk` cancels it, and a probe
+                // that hangs would otherwise leave this window with no way out.
+                Button("One game at a time") { runner.leaveBulk() }
                     .disabled(runner.busy)
             }
+            // Bulk mode's one always-drawn sentence. It used to live at the
+            // bottom of the plan table, which meant every line steps 1 and 2
+            // wrote -- including "Choose a Steam library folder first." -- was
+            // written and never shown, because the table is not drawn until
+            // there is a plan.
+            Text(runner.batchStep.isEmpty ? runner.status : runner.batchStep)
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
 
-            if runner.scanning {
-                ProgressView().progressViewStyle(.linear)
+    /// The number, the title, and where the user is relative to it. Every step
+    /// stays on screen and stays legible -- being able to see what is still
+    /// needed is the point of numbering them at all.
+    ///
+    /// Three appearances, not two. With only current and not-current, a step
+    /// already behind the user and a step not yet reached drew the same grey
+    /// circle, so the badges alone could not say which way round they were.
+    private func stepBadge(_ number: Int, _ title: String) -> some View {
+        let here = runner.bulkStep.rawValue
+        let active = number == here
+        let done = number < here
+        return HStack(spacing: 8) {
+            Group {
+                if done {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Color.white)
+                } else {
+                    Text("\(number)")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(active ? Color.white : Color.secondary)
+                }
+            }
+            .frame(width: 18, height: 18)
+            .background(Circle().fill(active ? Color.accentColor
+                                             : done ? Color.secondary
+                                                    : Color.secondary.opacity(0.18)))
+            Text(title)
+                .font(.callout.weight(.medium))
+                .foregroundStyle(active ? Color.primary : Color.secondary)
+            Spacer()
+        }
+    }
+
+    /// Step 1. Open until a folder is chosen, then one line -- which is exactly
+    /// when step 3 needs the height.
+    private var stepChoose: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            stepBadge(1, "Choose your Steam library folder")
+            Text(chooseStepNote)
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let root = runner.libraryRoot {
+                chosenLibraryLine(root)
+                if runner.libraryIsOdd {
+                    Text("This does not look like a Steam library. Scanning it "
+                       + "will look only inside this one folder.")
+                        .font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                libraryDropZone
+                Text("The folder holding steamapps works too, and so does one "
+                   + "game's folder — it is traced back to the library it sits in.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                discoveredLibraries
+            }
+        }
+    }
+
+    private var chooseStepNote: String {
+        runner.libraryRoot == nil
+            ? "Nothing is read until you choose a folder and press Scan."
+            : "Chosen. Step 2 scans this folder."
+    }
+
+    private func chosenLibraryLine(_ root: URL) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(root.path)
+                    .font(.system(size: 12, design: .monospaced))
+                    .lineLimit(1).truncationMode(.head)
+                Text("Will scan").font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            // No ellipsis and no dialog: this puts all three ways in back,
+            // and the discovered list is the one a panel cannot offer.
+            Button("Change") { runner.clearLibrary() }
+                .disabled(runner.busy || runner.scanning)
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.04)))
+    }
+
+    /// The same dashed zone the single-game mode uses, pointed at a library.
+    private var libraryDropZone: some View {
+        RoundedRectangle(cornerRadius: 10)
+            .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
+            .foregroundStyle(droppingLibrary ? Color.accentColor : Color.secondary.opacity(0.5))
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(droppingLibrary ? Color.accentColor.opacity(0.08) : Color.clear)
+            )
+            .frame(height: 88)
+            .overlay(
+                VStack(spacing: 6) {
+                    Text("Drop your Steam library folder here")
+                        .font(.system(size: 13))
+                        .multilineTextAlignment(.center)
+                    Text("…/steamapps/common")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Button("Choose…") { chooseLibraryFolder() }
+                        .buttonStyle(.link)
+                        .disabled(runner.busy || runner.scanning)
+                }
+                .padding(.horizontal, 16)
+            )
+            .onDrop(of: [.fileURL], isTargeted: $droppingLibrary) { providers in
+                guard !runner.busy, !runner.scanning, let p = providers.first else { return false }
+                _ = p.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url else { return }
+                    Task { @MainActor in runner.chooseLibrary(url) }
+                }
+                return true
+            }
+    }
+
+    /// Auto-discovery, kept and demoted: it offers libraries that fill step 1
+    /// in. Picking one completes the choice and nothing more.
+    private var discoveredLibraries: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Libraries your CrossOver bottles know about")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Look again") { runner.findLibraries() }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                    .disabled(runner.lookingForLibraries)
+                    .help("After connecting a drive, check without relaunching.")
             }
 
+            if runner.survey == nil {
+                Text("Looking in your CrossOver bottles…")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if let found = runner.survey?.libraries, !found.isEmpty {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(found) { lib in
+                            libraryRow(lib)
+                            Divider()
+                        }
+                    }
+                }
+                .frame(maxHeight: 132)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.03)))
+            } else {
+                Text(discoveryEmptyNote)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var discoveryEmptyNote: String {
+        switch runner.survey?.nothing {
+        case .some(.noBottles):
+            return "CrossOver has no bottles, so there is nothing to ask about "
+                 + "Steam libraries. Drop the folder above instead."
+        case .some(.noSteamConfig):
+            // Hedged to what was measured. The survey reads one path per bottle,
+            // so a Steam installed anywhere else produces this same silence, and
+            // stating it as a fact about the user's history is the shape of
+            // over-claim this whole flow exists to remove.
+            return "No Steam library configuration was found in any of your "
+                 + "CrossOver bottles — Steam may never have run in one, or it "
+                 + "may be installed somewhere this app does not look. Drop the "
+                 + "folder above instead."
+        case .some(.nothingDeclared), .none:
+            return "The Steam inside your bottles records no library folder this "
+                 + "app can reach. Drop the folder above instead."
+        }
+    }
+
+    /// A library that cannot be used stays here, dimmed, saying why. Removing
+    /// it is what made an unplugged drive indistinguishable from an empty
+    /// account, and cost the user an evening.
+    private func libraryRow(_ lib: DiscoveredLibrary) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: lib.icon)
+                .foregroundStyle(lib.ready ? Color.secondary : Color.orange)
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(lib.title).font(.callout.weight(.medium))
+                Text(lib.shownPath)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.head)
+                if let why = lib.blocker {
+                    Text(why).font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer()
+            Button(lib.actionWord) { runner.chooseLibrary(lib) }
+                .disabled(!lib.ready || runner.busy || runner.scanning)
+        }
+        .padding(.vertical, 8).padding(.horizontal, 10)
+        .opacity(lib.ready ? 1 : 0.75)
+    }
+
+    /// Step 2. Deliberate, separate, and impossible without step 1.
+    private var stepScan: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            stepBadge(2, "Scan that folder for supported games")
+            HStack(spacing: 12) {
+                Button(scanButtonTitle) { runner.startScan() }
+                    .keyboardShortcut(runner.bulkStep == .scan
+                                      ? KeyboardShortcut.defaultAction : nil)
+                    .disabled(runner.libraryRoot == nil || runner.busy || runner.scanning)
+                if runner.scanning {
+                    ProgressView().progressViewStyle(.linear).frame(maxWidth: 200)
+                }
+                Spacer()
+            }
+            Text(scanStepNote)
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var scanButtonTitle: String {
+        runner.scanOutcome == nil ? "Scan games" : "Scan again"
+    }
+
+    private var scanStepNote: String {
+        if runner.libraryRoot == nil {
+            return "Waiting for step 1. Nothing is read until you choose a folder "
+                 + "and press Scan."
+        }
+        switch runner.scanOutcome {
+        case .none:
+            return "Only the six supported games are ever named. Everything else "
+                 + "in the folder is walked and forgotten."
+        case .some(.games):
+            return "Scan again after installing a game or moving one to another drive."
+        case .some(.nothing):
+            // The generic advice belongs to a scan that worked. Offering it over
+            // an ejected drive is step 2 talking about something else while step
+            // 3 says what actually happened.
+            return "Step 3 says what happened."
+        }
+    }
+
+    /// Step 3. The plan table, unchanged in behaviour, plus a named ending for
+    /// every way it can be empty.
+    private var stepPatch: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            stepBadge(3, "Fix the games that were found")
+            Text(runner.scanHeadline).font(.headline)
+            if !runner.plan.isEmpty {
+                planTable
+            } else if runner.scanFoundNothing {
+                nothingFound
+            }
+        }
+    }
+
+    private var nothingFound: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.orange)
+            Text(nothingFoundWhy)
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+        }
+        .padding(11)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.orange.opacity(0.08)))
+    }
+
+    private var nothingFoundWhy: String {
+        switch runner.scanOutcome {
+        case .some(.nothing(.noSupportedGames)):
+            let odd = runner.libraryIsOdd
+                ? "This folder does not look like a Steam library either, so it "
+                + "may not be the one you meant. "
+                : ""
+            return odd
+                 + "The folder was read and none of the six games is installed in "
+                 + "it. If your games are on another drive, choose that library in step 1."
+        case .some(.nothing(.volumeNotMounted)):
+            return "That folder was there when you chose it and is not now. "
+                 + "Connect the drive and scan again."
+        case .some(.nothing(.folderGone)):
+            // Names the control that is on screen. With a folder chosen, step 1
+            // has collapsed to one line and a Change button; the Choose… link
+            // lives in the drop zone, which is not drawn in that state.
+            return "It may have been renamed or moved. Press Change in step 1, "
+                 + "then choose the library folder again."
+        case .some(.nothing(.notAFolder)):
+            return "Step 1 takes a folder: the Steam library, the folder holding "
+                 + "steamapps, or one game's folder inside it. Press Change in "
+                 + "step 1, then choose the folder this file sits in."
+        case .some(.nothing(.unreadable)):
+            // Not "choose it again": this app is not sandboxed, so going through
+            // the panel grants nothing, and saying it does sends the user round
+            // a loop that cannot resolve. The grant is a system one.
+            return "macOS blocked reading it, and choosing it again will not "
+                 + "change that. Allow access in System Settings → Privacy & "
+                 + "Security → Files and Folders — or Removable Volumes for an "
+                 + "external drive — then scan again."
+        case .some(.games), .none:
+            return ""
+        }
+    }
+
+    private var planTable: some View {
+        VStack(alignment: .leading, spacing: 10) {
             if runner.plan.contains(where: { $0.game.extraRequirement != nil }) {
                 codecBanner
             }
@@ -1836,8 +2655,6 @@ struct ContentView: View {
                         .help("Finishes the game it is on, then stops.")
                 }
                 Spacer()
-                Text(runner.batchStep.isEmpty ? runner.status : runner.batchStep)
-                    .font(.callout).foregroundStyle(.secondary)
             }
         }
         .alert("Ready to change \(runner.selectedHits.count) game(s)?",

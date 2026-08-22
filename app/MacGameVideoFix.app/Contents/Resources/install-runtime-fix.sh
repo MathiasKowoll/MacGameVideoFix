@@ -49,6 +49,11 @@ usage() { sed -n '3,25p' "$0" >&2; exit 1; }
 
 CONTENT="$1"
 MODE="${2:---install}"
+# A read-only caller (scripts/support-bundle.sh) sets MGVF_STATUS_ONLY=1. The
+# default above is the DESTRUCTIVE branch, so without this the read-only
+# property of a whole support bundle rests on the literal --status never being
+# lost from one line of one other script. Structural beats positional.
+if [ "${MGVF_STATUS_ONLY:-0}" = 1 ]; then MODE=--status; fi
 
 # Accepts either the game folder or something below it, usually Content. Walk
 # up rather than assume a depth, because not every title nests the same way --

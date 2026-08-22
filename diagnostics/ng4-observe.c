@@ -144,6 +144,9 @@ typedef struct { GUID guidMajorType; GUID guidSubtype; } REG_TYPE_INFO;
 static LONG in_create_queue_;
 static void *hooked_device_;
 
+/* Defined with the crash reporter below; needed up here by the D3D12 hooks. */
+static BOOL readable_(const void *p, SIZE_T n);
+
 static BOOL patch_slot(const char *what, void *obj, int slot,
                        void *replacement, void **saved)
 {
@@ -2310,11 +2313,39 @@ static HRESULT WINAPI my_CheckFeature(void *self, UINT feature, void *data, UINT
     static LONG outside;
     HRESULT hr = real_CheckFeature(self, feature, data, size);
 
+    /* Answer yes to D3D12_OPTIONS17, but only while DirectStorage is asking.
+     *
+     * Everything else it wants is granted -- Shader Model 6.5, WaveOps, Int64,
+     * Native16Bit, ExpandedComputeResourceStates -- and it builds no pipeline and
+     * makes no further call before refusing, so the refusal is decided from these
+     * numbers alone. OPTIONS17 is the one structure that comes back all zeros,
+     * the first thing asked, and the newest of the set, which fits the "requires
+     * Agility SDK >= 707" string this component carries.
+     *
+     * Saying yes does not make the capability exist. If it turns the refusal into
+     * a queue, it names the requirement, which is what this run is for; whether
+     * that queue then works is the next question, not this one. */
+    if (in_create_queue_ && feature == 46 && SUCCEEDED(hr) &&
+        data && size >= 8 && readable_(data, 8))
+    {
+        ((UINT32 *)data)[0] = 1;
+        ((UINT32 *)data)[1] = 1;
+        logf_("  [in CreateQueue] answering yes to OPTIONS17 (was all zeros)");
+    }
+
     if (in_create_queue_ || InterlockedIncrement(&outside) <= 8)
-        logf_("  %sCheckFeatureSupport(feature=%u, %u bytes) -> 0x%08lx  data[0]=0x%08x",
+    {
+        char vals[16 * 9 + 1];
+        UINT n = size / 4, i;
+        vals[0] = 0;
+        if (n > 16) n = 16;
+        if (data && readable_(data, n * 4))
+            for (i = 0; i < n; i++)
+                sprintf(vals + i * 9, "%08x ", ((const UINT32 *)data)[i]);
+        logf_("  %sCheckFeatureSupport(feature=%u, %u bytes) -> 0x%08lx  [ %s]",
               in_create_queue_ ? "[in CreateQueue] " : "",
-              feature, size, hr,
-              (data && size >= 4) ? *(const UINT32 *)data : 0);
+              feature, size, hr, vals);
+    }
     return hr;
 }
 
@@ -2323,6 +2354,25 @@ static HRESULT WINAPI my_CreateCommitted(void *self, const void *heap, UINT hfla
                                          const void *clear, const GUID *iid, void **out)
 {
     HRESULT hr = real_CreateCommitted(self, heap, hflags, desc, state, clear, iid, out);
+
+    /* Every allocation DirectStorage makes while standing up its device path. Its
+     * staging buffers are created here, and a refusal at this size is the most
+     * ordinary explanation for a queue that will not be built. */
+    if (in_create_queue_)
+    {
+        UINT64 width = 0;
+        UINT32 dim = 0;
+        if (desc && readable_(desc, 16))
+        {
+            memcpy(&dim, desc, 4);
+            /* D3D12_RESOURCE_DESC: Dimension at 0, Alignment at 8, Width at 16. */
+            if (readable_(desc, 24)) memcpy(&width, (const BYTE *)desc + 16, 8);
+        }
+        logf_("  [in CreateQueue] CreateCommittedResource(dim=%u, %llu bytes = %llu MB) -> 0x%08lx%s",
+              dim, (unsigned long long)width, (unsigned long long)(width / (1024 * 1024)), hr,
+              FAILED(hr) ? "   << refused" : "");
+    }
+
     if (SUCCEEDED(hr) && out && *out && !real_res12_QI)
     {
         static void *saved;
@@ -2335,10 +2385,70 @@ static HRESULT WINAPI my_CreateCommitted(void *self, const void *heap, UINT hfla
     return hr;
 }
 
+/* ID3D12Device::CreateCommandQueue is slot 8. DirectStorage stands up its own
+   queue to serve the device it was handed; a refusal there would surface as the
+   UNSUPPORTED we get and leave no other trace. */
+#define SLOT_D3D12_CREATECMDQUEUE 8
+
+static HRESULT (WINAPI *real_CreateCmdQueue)(void *, const void *, const GUID *, void **);
+
+static HRESULT WINAPI my_CreateCmdQueue(void *self, const void *desc,
+                                        const GUID *iid, void **out)
+{
+    HRESULT hr = real_CreateCmdQueue(self, desc, iid, out);
+    const UINT32 *d = (const UINT32 *)desc;
+
+    if (in_create_queue_)
+        logf_("  [in CreateQueue] CreateCommandQueue(type=%u priority=%d flags=0x%x) -> 0x%08lx",
+              (d && readable_(d, 16)) ? d[0] : 0xffffffff,
+              (d && readable_(d, 16)) ? (int)d[1] : 0,
+              (d && readable_(d, 16)) ? d[2] : 0, hr);
+    return hr;
+}
+
+/* The GDeflate decompression pipeline. dstoragecore asks about Shader Model,
+   WaveOps and Native16Bit and then, satisfied, builds a compute pipeline -- and
+   it carries the string "pCreateComputeRootSignature failed" as a hard failure,
+   with no fallback beside it. These are the last two things it can do before
+   giving up, and the only ones still unwatched. */
+#define SLOT_D3D12_CREATECOMPUTEPSO 11
+#define SLOT_D3D12_CREATEROOTSIG    16
+
+static HRESULT (WINAPI *real_CreateComputePSO)(void *, const void *, const GUID *, void **);
+static HRESULT (WINAPI *real_CreateRootSig)(void *, UINT, const void *, SIZE_T, const GUID *, void **);
+
+static HRESULT WINAPI my_CreateComputePSO(void *self, const void *desc,
+                                          const GUID *iid, void **out)
+{
+    HRESULT hr = real_CreateComputePSO(self, desc, iid, out);
+    if (in_create_queue_)
+        logf_("  [in CreateQueue] CreateComputePipelineState -> 0x%08lx%s", hr,
+              FAILED(hr) ? "   << refused" : "");
+    return hr;
+}
+
+static HRESULT WINAPI my_CreateRootSig(void *self, UINT node, const void *blob,
+                                       SIZE_T len, const GUID *iid, void **out)
+{
+    HRESULT hr = real_CreateRootSig(self, node, blob, len, iid, out);
+    if (in_create_queue_)
+        logf_("  [in CreateQueue] CreateRootSignature(%llu bytes) -> 0x%08lx%s",
+              (unsigned long long)len, hr, FAILED(hr) ? "   << refused" : "");
+    return hr;
+}
+
 static HRESULT WINAPI my_dev12_QI(void *self, const GUID *iid, void **out)
 {
     HRESULT hr = real_dev12_QI ? real_dev12_QI(self, iid, out) : E_NOINTERFACE;
-    note_query("the D3D12 device", iid, hr);
+
+    if (in_create_queue_ && iid)
+        logf_("  [in CreateQueue] QueryInterface {%08lx-%04x-%04x-%02x%02x%02x%02x%02x%02x%02x%02x} -> 0x%08lx%s",
+              iid->Data1, iid->Data2, iid->Data3,
+              iid->Data4[0], iid->Data4[1], iid->Data4[2], iid->Data4[3],
+              iid->Data4[4], iid->Data4[5], iid->Data4[6], iid->Data4[7],
+              hr, FAILED(hr) ? "   << refused" : "");
+    else
+        note_query("the D3D12 device", iid, hr);
     return hr;
 }
 
@@ -2369,6 +2479,28 @@ static HRESULT WINAPI my_D3D12CreateDevice(void *adapter, UINT level,
             if (!patch_slot("d3d12 CheckFeatureSupport", *device,
                             SLOT_D3D12_CHECKFEATURE, (void *)my_CheckFeature, &cf))
                 real_CheckFeature = NULL;
+        }
+        {
+            static void *cq;
+            real_CreateCmdQueue = (HRESULT (WINAPI *)(void *, const void *, const GUID *, void **))
+                                  vt[SLOT_D3D12_CREATECMDQUEUE];
+            if (!patch_slot("d3d12 CreateCommandQueue", *device,
+                            SLOT_D3D12_CREATECMDQUEUE, (void *)my_CreateCmdQueue, &cq))
+                real_CreateCmdQueue = NULL;
+        }
+        {
+            static void *pso, *rs;
+            real_CreateComputePSO = (HRESULT (WINAPI *)(void *, const void *, const GUID *, void **))
+                                    vt[SLOT_D3D12_CREATECOMPUTEPSO];
+            real_CreateRootSig = (HRESULT (WINAPI *)(void *, UINT, const void *, SIZE_T,
+                                                     const GUID *, void **))
+                                 vt[SLOT_D3D12_CREATEROOTSIG];
+            if (!patch_slot("d3d12 CreateComputePipelineState", *device,
+                            SLOT_D3D12_CREATECOMPUTEPSO, (void *)my_CreateComputePSO, &pso))
+                real_CreateComputePSO = NULL;
+            if (!patch_slot("d3d12 CreateRootSignature", *device,
+                            SLOT_D3D12_CREATEROOTSIG, (void *)my_CreateRootSig, &rs))
+                real_CreateRootSig = NULL;
         }
     }
     return hr;
@@ -2598,6 +2730,33 @@ static LONG CALLBACK crash_context_(EXCEPTION_POINTERS *ep)
     static LONG reported;
     const EXCEPTION_RECORD *er = ep->ExceptionRecord;
 
+    /* OutputDebugString arrives as an exception under Wine. DirectStorage explains
+     * its own refusals through it once debug flags are on, so this is where the
+     * answer should appear -- in Microsoft's own words rather than our inference. */
+    if (er->ExceptionCode == DBG_PRINTEXCEPTION_C && er->NumberParameters >= 2)
+    {
+        const char *msg = (const char *)er->ExceptionInformation[1];
+        if (readable_(msg, 1)) logf_("[debug] %.300s", msg);
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    /* And the wide variant, which is a different exception code entirely. Every
+     * diagnostic string inside dstoragecore is UTF-16, so this is the one that
+     * matters here -- the narrow handler above only ever caught Steam. */
+    if (er->ExceptionCode == 0x4001000A && er->NumberParameters >= 2)
+    {
+        const WCHAR *w = (const WCHAR *)er->ExceptionInformation[1];
+        if (readable_(w, 2))
+        {
+            char narrow[301];
+            int i;
+            for (i = 0; i < 300 && readable_(w + i, 2) && w[i]; i++)
+                narrow[i] = (w[i] < 128) ? (char)w[i] : '?';
+            narrow[i] = 0;
+            logf_("[debug] %s", narrow);
+        }
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
     if (er->ExceptionCode != EXCEPTION_ACCESS_VIOLATION) return EXCEPTION_CONTINUE_SEARCH;
     if (er->NumberParameters < 2 || er->ExceptionInformation[1] != 0)
         return EXCEPTION_CONTINUE_SEARCH;
@@ -2666,11 +2825,11 @@ static HRESULT set_config1_cpu_only(const struct dstorage_config1 *from)
         logf_("  config in : (none -- the game never set one, so these are defaults)");
     }
 
-    /* Leave NumBuiltInCpuDecompressionThreads alone. If the game set it to -1 it
-     * means to decompress itself through the custom queue, and overriding that
-     * would break a path that may well be working. */
-    cfg.DisableGpuDecompressionMetacommand = TRUE;
-    cfg.DisableGpuDecompression            = TRUE;
+    /* Nothing is forced any more. These fields are named Disable*, so the zeros
+     * the game passes mean the features are ON, not off -- the opposite of how
+     * they were read at first. Forcing them changed nothing about the crash, but
+     * it did mean every run since was measuring a configuration the game never
+     * asked for, immediately before the call that fails. Pass it through. */
 
     /* ForceMappingLayer was tried here and made things worse: the game died
      * earlier, before CreateQueue, and with a different kind of fault. The
@@ -2678,7 +2837,7 @@ static HRESULT set_config1_cpu_only(const struct dstorage_config1 *from)
      * so it stays off and the native path stays the thing to explain. */
 
     hr = real_DStorageSetConfiguration1(&cfg);
-    logf_("  config out: GPU decompression forced OFF -> 0x%08lx", hr);
+    logf_("  config out: passed through unchanged -> 0x%08lx", hr);
     return hr;
 }
 
@@ -2699,6 +2858,35 @@ struct dstorage_queue_desc
 
 static HRESULT (WINAPI *real_CreateQueue)(void *, const struct dstorage_queue_desc *,
                                           const GUID *, void **);
+
+/* IDStorageFactory::SetStagingBufferSize is slot 7. The game asks for 256 MB,
+   and dstoragecore turns that into three staging buffers -- upload, decompression
+   input, decompression output -- allocated as D3D12 heaps the first time a device
+   is attached, which is inside CreateQueue. Roughly three quarters of a gigabyte,
+   requested from a translation layer on unified memory, at the exact moment the
+   call starts failing.
+
+   DirectStorage's own default is 32 MB, so this is a return to normal rather than
+   an unusual value. If the refusal is an allocation, this is the whole fix; if it
+   is not, the CreateCommittedResource logging below says so instead. */
+#define SLOT_DS_SET_STAGING 7
+#define STAGING_DEFAULT     (32u * 1024 * 1024)
+
+static HRESULT (WINAPI *real_SetStaging)(void *, UINT32);
+
+static HRESULT WINAPI my_SetStaging(void *self, UINT32 size)
+{
+    HRESULT hr;
+    if (size > STAGING_DEFAULT)
+    {
+        logf_("IDStorageFactory::SetStagingBufferSize(%u MB) -> asking for %u MB instead",
+              size / (1024 * 1024), STAGING_DEFAULT / (1024 * 1024));
+        size = STAGING_DEFAULT;
+    }
+    hr = real_SetStaging(self, size);
+    logf_("  staging buffer now %u MB -> 0x%08lx", size / (1024 * 1024), hr);
+    return hr;
+}
 
 static HRESULT WINAPI my_CreateQueue(void *self, const struct dstorage_queue_desc *desc,
                                      const GUID *iid, void **out)
@@ -2769,13 +2957,49 @@ static HRESULT WINAPI my_DStorageGetFactory(const GUID *iid, void **out)
     logf_("DStorageGetFactory -> 0x%08lx%s", hr,
           FAILED(hr) ? "   << no factory: the game cannot stream its assets" : "");
 
+    /* Refuse the factory, and let the game choose its other I/O backend.
+     *
+     * The queue cannot be had: every capability DirectStorage asks about is
+     * granted, no pipeline is ever built, and it still refuses -- and the reason
+     * is not reachable from here, because the Agility SDK this game ships is
+     * never loaded under Wine at all. There is nothing left to concede.
+     *
+     * So aim at the game instead of at the queue. Its backend dispatcher picks
+     * DirectStorage on nothing more than a null test of this pointer, which is
+     * exactly why disabling dstoragecore.dll changed behaviour. Refusing here is
+     * the same lever, but without disturbing the install and with every other
+     * probe still reporting -- so this run says how far the other path gets. */
+    if (SUCCEEDED(hr) && out && *out)
+    {
+        void **factory = (void **)*out;
+        ((HRESULT (WINAPI *)(void *))((void **)*factory)[2])(factory);   /* Release */
+        *out = NULL;
+        logf_("  refused, so the game falls back to its other I/O backend");
+        return E_NOINTERFACE;
+    }
+
     /* Armed. The two runs that appeared to die from this patch were in fact
      * dying inside its own log call, which the crash dump named outright:
      * vsnprintf, formatting a name pointer that was never valid. The patch
      * itself was innocent. */
     if (SUCCEEDED(hr) && out && *out)
+    {
         patch_slot("IDStorageFactory::CreateQueue", *out, SLOT_DS_CREATE_QUEUE,
                    (void *)my_CreateQueue, (void **)&real_CreateQueue);
+        patch_slot("IDStorageFactory::SetStagingBufferSize", *out, SLOT_DS_SET_STAGING,
+                   (void *)my_SetStaging, (void **)&real_SetStaging);
+
+        /* SetDebugFlags is slot 6, and DSTORAGE_DEBUG_SHOW_ERRORS is 1. Every
+         * capability DirectStorage asks about here is granted and it still
+         * refuses the queue, so rather than instrument more of the device, ask
+         * the component that is refusing to say why. */
+        {
+            void (WINAPI *set_flags)(void *, UINT32) =
+                (void (WINAPI *)(void *, UINT32))(*(void ***)*out)[6];
+            set_flags(*out, 1);
+            logf_("  DirectStorage error reporting: on");
+        }
+    }
     return hr;
 }
 

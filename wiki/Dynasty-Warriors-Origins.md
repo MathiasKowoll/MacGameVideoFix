@@ -9,7 +9,7 @@ Koei Tecmo, in-house engine. Cutscenes played with sound and no picture.
 | Played by | `IMFSourceReader` on a **separate D3D11 device**, presented by a **D3D12** renderer |
 | Was | Cutscene ran with sound and subtitles, picture black |
 | Now | Plays |
-| Needs | winevideo **and** an injected DLL. Neither alone is enough |
+| Needs | VP9 decoding in the engine **and** an injected DLL. Neither alone is enough: a current CrossOver Preview decodes VP9 itself, an older or stable build needs winevideo for it |
 
 ### Who does what
 

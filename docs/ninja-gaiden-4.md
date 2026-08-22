@@ -171,3 +171,82 @@ game files* would silently undo it.
 **One rule if a bridge is ever built here:** do not name it anything
 Steam-related and do not re-export any Steamworks entry point. That is the only
 way it could plausibly trip the check above.
+
+## Measured again, 22 August 2026
+
+An evening of instrumentation, most of it spent on a problem that was not there.
+Written down in full because the wrong turn is as instructive as the finding.
+
+### The blocker, now confirmed in the binary
+
+Gate 1 was described above from the registry's side: no VP9 decoder is
+registered. The stronger version is that there is nothing to register.
+`MFVideoFormat_VP90` — the GUID `30395056-0000-0010-8000-00AA00389B71` — does
+not appear anywhere inside CrossOver Preview's `winegstreamer.so`. The `VP90`
+that turns up in its strings is one entry in a table of fourcc names, beside
+`qVP10`, `qY210` and the rest.
+
+So this is not a missing registration. The decoder does not exist in the
+build, and no amount of registry work conjures one. Host GStreamer decodes VP9
+perfectly well — seven elements offer it — but nothing bridges that to Media
+Foundation. That bridge is precisely what winevideo adds, and it is why this
+title works there and not here.
+
+Confirmed live: the game asks `MFTEnumEx` for VP90, is told zero, asks again for
+H264 and is told one, and then exits. Every other title in this repository is
+served by a decoder Preview already has.
+
+### The DirectStorage detour, and a rename that was right
+
+The game folder contained `DirectStorage/dstoragecoreeeee.dll` — four letters
+added to a filename, which is how a person disables a DLL. It was read here as
+damage and restored to `dstoragecore.dll`. That was wrong; it was the working
+configuration, and restoring it introduced a hard crash that had never been part
+of this title's problem.
+
+With DirectStorage live, the game builds its `"Graphics DSQueue"` and dies:
+
+    141021b9f:  call [rax+0x18]      ; IDStorageFactory::CreateQueue
+    141021ba7:  test eax,eax
+    141021ba9:  cmovs rcx,rbx        ; a failed HRESULT becomes NULL
+    ...
+    14102f729:  mov [rbx],rax        ; stored without a check
+    14102f72f:  mov rdx,[rax]        ; faults, rax = 0
+    14102f732:  call [rdx+0x48]      ; queue->GetErrorEvent()
+
+`CreateQueue` returns `DXGI_ERROR_UNSUPPORTED` for the one queue that carries an
+`ID3D12Device`; the sibling `"Asset DSQueue"` passes `Device = NULL` through the
+same code and is fine. The game never checks, so the refusal lands as a null
+dereference on the main thread during renderer bring-up.
+
+Why it refuses is not reachable from a proxy DLL. Everything DirectStorage asks
+the device is granted — `ID3D12Device5`, Shader Model 6.5, `WaveOps`, `Int64`,
+`Native16Bit`, `ExpandedComputeResourceStates`, a COPY command queue, a 32 MB
+buffer — and it builds no pipeline and makes no further call before giving up.
+Ruled out by measurement, each costing a launch: GPU decompression, the
+compatibility mapping layer, the 256 MB staging size, `D3D12_OPTIONS17` (answered
+yes to it and nothing changed), and our own instrumentation. The likeliest
+remaining explanation is off the device entirely: this game ships an Agility SDK
+in `D3D12/D3D12Core.dll` and Wine never loads it, so DirectStorage is talking to
+a device that is not backed by the runtime it expects.
+
+**So `dstoragecore.dll` stays disabled.** Refusing the factory from a proxy has
+the same effect and is reversible — the game's backend dispatcher chooses
+DirectStorage on nothing more than a null test of the factory pointer — but the
+rename is what was already there and it needs no DLL to keep working.
+
+### What would actually fix this title
+
+A VP9 decoder reachable from Media Foundation. Three ways, none small:
+
+1. **winevideo**, which is where this works today.
+2. **Ship a VP9 decoder MFT of our own**, registered under
+   `MFT_CATEGORY_VIDEO_DECODER` and backed by something that can decode — host
+   GStreamer, libvpx, or VideoToolbox. Our proxy already hooks `MFTEnumEx`, so
+   handing back an activate object for VP90 is the small end of this; a correct
+   `IMFTransform` is not.
+3. **Re-encode the 400 files.** Deliberately removed from this project, and it
+   would still have to handle the one `.msd` that is H.264/AAC in MP4.
+
+Until one of those exists, the honest status is unchanged: not fixed, and the
+reason is a codec, not anti-tamper.

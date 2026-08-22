@@ -25,11 +25,14 @@ D3DMetal with the D3D12 renderer, which is also what keeps PSO precompilation
 -- `-dx11` dodges some of these faults and costs permanent shader-compilation
 stutter.
 
-**None of these games needs CrossOver patched.** That was not true when this
-project started, and it is the single biggest thing that changed: CrossOver
-Preview decodes VP9 profile 0 and 2, H.264 and AAC on its own. Persona 5
-Strikers needs a VC-1 decoder CrossOver does not ship, and that is staged
-beside it rather than patched into it.
+**None of these games needs CrossOver patched, on a build that already decodes
+VP9.** That was not true when this project started, and it is the single biggest
+thing that changed: CrossOver Preview decodes VP9 profile 0 and 2, H.264 and AAC
+on its own. The one thing that still depends on the engine is DYNASTY WARRIORS:
+ORIGINS, which decodes VP9 through Media Foundation and has nothing to present
+without it -- so on an older or stable build it still needs winevideo, and on a
+current Preview it does not. Persona 5 Strikers needs a VC-1 decoder no CrossOver
+ships, and that is staged beside it rather than patched into it.
 
 None of these fixes decodes anything. The frames existed all along; they were
 being crashed on, mislabelled, or thrown away.
@@ -50,19 +53,22 @@ own costs no disk and no re-download. Switching the backend by hand also works
 and means remembering to switch it — and a forgotten backend looks exactly like
 a fix that stopped working.
 
-## Reading the winevideo column
+## Does a fix need winevideo?
 
-It answers one question: **does the game need CrossOver patched with winevideo
-for the fix to get it working?**
+One question, and the table above no longer carries a column for it: **does the
+fix need the engine to decode video before it can work?**
 
-- **Yes** means the fix is not enough on its own. DYNASTY WARRIORS: ORIGINS
-  decodes VP9 through Media Foundation, and without winevideo there is nothing
-  to decode it with — no frame ever exists for the bridge to present.
-- **No** means the fault has nothing to do with video decoding. Both Life is
-  Strange titles freeze inside DXGI; the cutscenes were never the problem.
+- **DYNASTY WARRIORS: ORIGINS — yes.** It decodes VP9 through Media Foundation,
+  and the bridge only presents frames. Without a decoder there is no frame to
+  present. A current CrossOver Preview supplies it; an older or stable build
+  needs winevideo.
+- **Everything else — no.** The fault has nothing to do with video decoding.
+  Both Life is Strange titles freeze inside DXGI; the cutscenes were never the
+  problem. Persona 5 Strikers is the separate case: it needs VC-1, which no
+  CrossOver ships, staged beside it rather than patched into it.
 
-winevideo is worth having regardless. The column is about what each fix
-depends on, not about whether to install it.
+winevideo is worth having regardless. This is about what each fix depends on,
+not about whether to install it.
 
 ## Adding a row
 

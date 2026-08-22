@@ -8,12 +8,21 @@ body:
     attributes:
       value: |
         Two things make a report answerable: which title, and the output of
-        `diagnostics/support-bundle.sh`. Everything else below is a menu.
+        `scripts/support-bundle.sh`. Everything else below is a menu.
+
+        **The bundle asks the rest.** It runs a short form of its own — what you
+        already tried, whether Steam was fully quit, the crash dialog — and
+        prints your answers back inside the report. This form keeps only the
+        questions no command can answer, so nothing worth asking is asked twice.
+        **Where this form and the bundle disagree, the bundle wins:** it measured,
+        the form remembered.
 
         The bundle redacts your macOS user name from every path, numbers bottles
-        instead of naming them, and never lists your installed games. It ends
-        with one fenced appendix mapping bottle numbers to names — read that
-        before you paste, and delete it if you would rather not share it.
+        instead of naming them, never prints the game folder, and never lists,
+        globs or counts your installed games. Run with `--names` it appends one
+        fenced key mapping numbers to names, for the bottles the report already
+        refers to — read that before you paste, and delete it if you would
+        rather not share it.
 
         Please do not paste directory listings, Steam library paths, or the
         contents of `libraryfolders.vdf`. Nothing here needs them.
@@ -62,14 +71,24 @@ body:
         Only you can answer this, and it separates three cases that look
         identical in every log: the fix never took effect, the fix took effect
         and what is left is a different fault, or the fix itself broke
-        something. If you pick "Different", you will be asked for the one line
-        in a reply.
+        something.
       options:
         - "Same as before"
         - "Different — one line saying how"
         - "I never ran it without the fix"
     validations:
       required: true
+
+  - type: input
+    id: before-note
+    attributes:
+      label: If you picked "Different", one line saying how
+      description: >-
+        The bundle asks for this too and prints it back; either place is fine,
+        and one of them saves a round trip.
+      placeholder: "e.g. it used to crash instantly, now it plays audio for ten seconds first"
+    validations:
+      required: false
 
   - type: dropdown
     id: engine
@@ -87,23 +106,6 @@ body:
     validations:
       required: true
 
-  - type: dropdown
-    id: steam-restart
-    attributes:
-      label: >-
-        After the last change to the bottle's settings, did you quit Steam
-        completely — not just the game — and then relaunch?
-      description: >-
-        Both bottle settings are read when the bottle starts and a live
-        wineserver keeps the old copy, so a setting that has not taken looks
-        exactly like a setting that did not work.
-      options:
-        - "Yes"
-        - "No"
-        - "I changed nothing"
-    validations:
-      required: true
-
   - type: checkboxes
     id: anti-cheat
     attributes:
@@ -112,7 +114,9 @@ body:
         Everything here patches a running process, which is exactly the
         behaviour anti-cheat exists to stop. Reports about a protected title
         are refused rather than debugged. This is already true of the six named
-        games; tick it yourself if you chose "Another Unreal Engine 5 title".
+        games, and the bundle probes the folder you give it for anti-cheat
+        files and refuses to collect anything if it finds any — so tick this
+        for yourself mainly if you chose "Another Unreal Engine 5 title".
       options:
         - label: I confirm this title has no anti-cheat or anti-tamper.
           required: true
@@ -122,28 +126,26 @@ body:
     attributes:
       label: What have you already tried?
       description: >-
-        Two of these change the reading of everything else. Verifying game files
-        puts the game's own carrier DLL back and removes the proxy, and `-dx11`
-        sidesteps both the Mortal Shell 2 crash and the Life is Strange freeze,
-        so a crash or freeze reported under it is a different fault.
+        Only the two the bundle cannot see for itself. It reads the install
+        state, the bottle's backend, which bottles hold which log, the staged
+        codec and the GStreamer version off disk, so there is nothing to
+        self-certify about any of those. `-dx11` sidesteps both the Mortal
+        Shell 2 crash and the Life is Strange freeze, so a crash or freeze
+        reported under it is a different fault.
       options:
         - label: Reverted and re-applied the fix
-        - label: Used Steam's "verify integrity of game files"
-        - label: Changed CX_GRAPHICS_BACKEND by hand
-        - label: Gave Persona 5 Strikers a bottle of its own
-        - label: Installed GStreamer 1.24.x
         - label: Launched the game with -dx11
-        - label: Nothing yet
 
   - type: textarea
     id: crash-dialog
     attributes:
       label: The first three lines of the crash dialog, verbatim
       description: >-
-        Only if you chose the Unreal crash dialog above; leave it empty
-        otherwise. The runtime patch aims at one crash, and a crash naming a
-        different function is one this tool will not help with. Three lines
-        settle that before anyone opens a log.
+        Only if you chose the Unreal crash dialog above, and only if the bundle
+        did not already capture them (it asks when you pick that symptom). The
+        runtime patch aims at one crash, and a crash naming a different function
+        is one this tool will not help with. Three lines settle that before
+        anyone opens a log.
       placeholder: |
         Three lines, nothing more. It looks like this:
 
@@ -160,14 +162,16 @@ body:
       description: >-
         Run this in Terminal, from the repository folder, with the game folder
         you dropped on the app:
-        `diagnostics/support-bundle.sh "/path/to/steamapps/common/<Game>"`.
-        Paste everything it prints, inside a code fence — three backticks on a
-        line of their own before and after it, so nothing is eaten as Markdown.
-        Read the fenced bottle-name appendix at the end before you send, and
-        delete it if you would rather not share it.
+        `scripts/support-bundle.sh "/path/to/steamapps/common/<Game>"`.
+        It asks a few questions, then prints the report and writes it to your
+        Desktop. Paste everything it prints, inside a code fence — three
+        backticks on a line of their own before and after it, so nothing is
+        eaten as Markdown. If you ran it with `--names`, read the fenced
+        bottle-name key at the end before you send, and delete it if you would
+        rather not share it.
       placeholder: |
         ```
-        the whole output of diagnostics/support-bundle.sh
+        the whole output of scripts/support-bundle.sh
         ```
     validations:
       required: true

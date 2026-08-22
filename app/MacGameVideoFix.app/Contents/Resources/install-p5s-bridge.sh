@@ -21,6 +21,11 @@ usage() { sed -n '3,16p' "$0" >&2; exit 1; }
 
 GAME="$1"
 MODE="${2:---install}"
+# A read-only caller (scripts/support-bundle.sh) sets MGVF_STATUS_ONLY=1. The
+# default above is the DESTRUCTIVE branch, so without this the read-only
+# property of a whole support bundle rests on the literal --status never being
+# lost from one line of one other script. Structural beats positional.
+if [ "${MGVF_STATUS_ONLY:-0}" = 1 ]; then MODE=--status; fi
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 LIVE="$GAME/amd_ags_x64.dll"

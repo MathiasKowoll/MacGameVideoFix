@@ -95,17 +95,28 @@ first launch. Right click it and choose **Open**, then confirm.
 ## Requirements
 
 - Apple Silicon Mac, macOS 14 or later
-- CrossOver 26.2 / 26.3
+- CrossOver 26.2 / 26.3, or CrossOver Preview
 
-For **DYNASTY WARRIORS: ORIGINS**, additionally:
+For **DYNASTY WARRIORS: ORIGINS**, additionally: a build whose Media Foundation
+can decode VP9 in a WebM container. Recent CrossOver Preview does that on its
+own; an older or stable build needs
+[winevideo](https://github.com/Jfishin/winevideo) for it.
 
+Not optional there. The bridge presents frames and decodes nothing, so without
+one of the two, `MFCreateSourceReaderFromByteStream` on a `.webm` fails outright
+and no frame is ever decoded for the bridge to carry. This is what the two
+statements in the wiki are each half of: "none of these games needs CrossOver
+patched" is true of a Preview that already decodes VP9, and "winevideo, not
+optional" was true of a build that does not.
 
-Not optional there. Without it `MFCreateSourceReaderFromByteStream` on a
-`.webm` fails outright and no frame is ever decoded for the bridge to carry.
+For **Persona 5 Strikers**, additionally: GStreamer.framework, the 1.24 series,
+installed at `/Library/Frameworks`. 1.24.14 is the verified build. It is the
+only title here that needs a codec CrossOver does not ship (VC-1), and the
+decoder is staged out of that framework rather than patched into CrossOver.
 
-than assumed. Mortal Shell 2 and Life is Strange: Reunion were both played on
-same version, differing only in the GStreamer plugins — and the fix worked
-either way.
+The engine matters more than it looks. Mortal Shell 2 and Life is Strange:
+Reunion were both played on the same version, differing only in the GStreamer
+plugins — and the fix worked either way.
 
 The mechanism agrees: VP9 never goes through Media Foundation in Mortal Shell
 (Electra decodes it with its own bundled libvpx, and only the *output*
@@ -425,8 +436,10 @@ own `libogg_64.dll` back and the proxy is gone. Same after a game patch. Just
 run the fix again.
 
 **Still crashing in `AllocateBuffer`** — the proxy is not being loaded. Check
-what the app reports, and look for `C:\ue5-runtime-fix.log` in the bottle's
-`drive_c`: if it does not exist, the DLL never ran.
+what the app reports, and look for `C:\ue5-media-fix.log` in the bottle's
+`drive_c`: if it does not exist, the DLL never ran. (Releases before the three
+halves were merged wrote `C:\ue5-runtime-fix.log`; the support bundle collects
+both names.)
 
 **Still freezing after a while** — check the same log. The node guard writes
 one line the first time it refuses a node that does not exist, and that line
@@ -446,7 +459,7 @@ list of questions — all but one of them a menu — and for the output of one
 command:
 
 ```bash
-diagnostics/support-bundle.sh "/path/to/steamapps/common/<Game>"
+scripts/support-bundle.sh "/path/to/steamapps/common/<Game>"
 ```
 
 Run it in Terminal with the game folder you dropped on the app, and paste
@@ -456,10 +469,15 @@ and which CrossOver builds are installed. Between them they answer most reports
 without a second round of questions.
 
 It prints only what it needs to. Your user name is redacted from every path,
-bottles are numbered rather than named, and nothing enumerates your installed
-games. The one exception is a fenced list at the end mapping bottle numbers to
-names, so a conversation can refer to a bottle at all — read that before you
-paste, and delete it if you would rather not send it.
+bottles are numbered rather than named, the game folder never appears, and
+nothing enumerates, lists or counts your installed games. The one exception is
+a fenced list at the end mapping numbers to names **for the bottles the report
+already refers to** — added only with `--names`, so a conversation can refer to
+a bottle at all. Read it before you paste, and delete it if you would rather
+not send it.
+
+It also refuses to run on a game folder containing anti-cheat or anti-tamper
+files, and collects nothing in that case.
 
 ## Things that do not work
 
