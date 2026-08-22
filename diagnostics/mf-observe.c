@@ -1223,6 +1223,8 @@ static HRESULT WINAPI my_SurfUnlock(void *self);
  * to build forward from rather than guess away from. */
 static BOOL watch_write_path = FALSE;
 
+static void build_clamp_table(void);
+
 static void *sidecar_device, *sidecar_context, *sidecar_texture;
 static void *sidecar_staging, *shared_surface;
 static UINT  sidecar_w, sidecar_h;
@@ -1609,6 +1611,12 @@ static HRESULT WINAPI my_OpenSharedResource(void *self, HANDLE handle,
         HRESULT hr;
 
         if (game_texture) return hand_back(iid, out);
+
+        /* The saturation table the converter indexes has to be built before
+         * anything is converted. It was copied across with the converter and
+         * its call was not, so every pixel resolved to clamp8[...] = 0 and the
+         * picture came out black from perfectly good input. */
+        build_clamp_table();
 
         ZeroMemory(&desc, sizeof(desc));
         desc.w = sidecar_w; desc.h = sidecar_h; desc.mips = 1; desc.arr = 1;
