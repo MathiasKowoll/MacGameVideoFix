@@ -103,6 +103,10 @@ private func runStreaming(_ executable: String,
 /// that is said on its own row rather than as a blanket requirement.
 enum Requirements {
     static var note: String {
+        // Most, not all: five of these were validated on Preview, which decodes
+        // their formats itself. Persona 5 Strikers stages its own decoder and
+        // so depends on no engine in particular -- it is the one measured on a
+        // stable build too.
         "CrossOver 26.2 or later on Apple Silicon. Nothing else, for most games."
     }
 }
