@@ -69,40 +69,42 @@ Strikers. Neither has been measured with this title, and the staging has not
 been written. It is recorded here as a plugin to stage rather than an engine to
 patch, not as something that works.
 
-## The open defect on 26.3
+## The freeze on 26.3, and what a control run settled
 
-Both Life is Strange titles crash on stable CrossOver 26.3 and run on
-`crossover-preview-arm64-20260821`. The crash is ours, not the engine's, and it
-is **open and unexplained**. This is the canonical account: both title pages
-state the observation and point here rather than each carrying the mechanism.
+Both Life is Strange titles freeze on stable CrossOver 26.3 and run on
+`crossover-preview-arm64-20260821`. This is the canonical account; both title
+pages state the observation and point here.
 
-What is known is what those two actually run. The policy table
-[below](#one-dll-three-repairs) arms the node guard for `Iris` and `Chronos` and
-nothing else, so the H.264 half — the NV12 restore described on
-[Beast of Reincarnation](Beast-of-Reincarnation.md) — sits in the DLL they
-install and is switched off in their process. It cannot crash them by putting a
-format back on a menu, because for them it puts nothing back.
+**It is not the fix.** That was written here twice as ours, open and unexplained,
+and the second time with a mechanism attached that turned out to be about a
+different title's half of the DLL. Both were withdrawn by the same experiment:
+the fix removed entirely, the game restored to what Steam delivers, relaunched on
+26.3 — and it freezes exactly as before. Nothing this project installs is
+involved in it.
 
-Beast of Reincarnation is the title whose whole fix is that H.264 half, armed,
-and it is measured working on 26.3. So the observation is firm and the cause is
-open.
+**The guard never runs.** The policy table [below](#one-dll-three-repairs) arms
+the DXGI node guard for `Iris` and `Chronos` and nothing else. On Preview it arms
+and, in three sessions out of nine, reports refusing a node that does not exist.
+On 26.3 it arms and then reports nothing at all: five lines of log against
+twenty-nine, and no adapter node is ever walked. Whatever stops the game arrives
+before the code written for it can act, which is also why the guard's own
+evidence cannot explain this.
 
-What is not switched off is the instrumentation. `GetProcAddress` is interposed
-from `DllMain`, the Media Foundation entry points are replaced through it,
-`MFTEnumEx` patches the activate object it hands back, and the decoder's vtable
-slots are patched the moment one is created. That happens for these two titles
-on both builds, gates or no gates. **That is a suspicion and not a finding:**
-nothing measured yet names it, and it is recorded here so the next person does
-not have to rediscover which parts of the DLL are live.
+**What differs is D3DMetal.** CrossOver 26.3 carries 3.0; that Preview carries
+4.0b2 and ships 3.0 beside it, unused and unreferenced. The two copies of 3.0 are
+byte-identical, so "stable" and "GPTK 3" are interchangeable in any account of
+this. Nothing else about the two installs distinguishes these titles: the proxy
+DLL is the same file, the bottle the same bottle, the backend `d3dmetal` in both.
 
-The cheap test nobody has run is the obvious one: those two on 26.3 with the
-Media Foundation hooks compiled out and the node guard left in.
+**Still unknown** is why GPTK 3 freezes here at all. That is a question for the
+engine rather than for this project, and it is the shape a report upstream would
+take: a title that runs on 4.0b2 and freezes on 3.0, with nothing of ours in the
+process.
 
-Until it is settled, use Preview for those two.
-
-**A withdrawn account.** An earlier version of this reasoning blamed the H.264
-half for the crash. It is withdrawn: the policy table arms that half for Beast
-of Reincarnation alone, and Beast of Reincarnation works on 26.3.
+One thing this leaves worth asking. The guard fires in a minority of sessions
+even where it works, and not at all where the freeze happens. How much of the
+improvement on Preview is actually its doing has never been controlled, and the
+same experiment would answer it.
 
 ## One DLL, three repairs
 
@@ -145,7 +147,7 @@ The Media Foundation hooks are the exception to the gating. They are installed
 for every title, armed or not, because they are how a new one is surveyed: what
 the gates decide is whether those hooks change anything, not whether they are
 there. That unconditional instrumentation is the standing suspicion in
-[the open defect](#the-open-defect-on-263) above.
+[the freeze on 26.3](#the-freeze-on-263-and-what-a-control-run-settled) above.
 
 ## Why only VP9, and only D3D12
 
@@ -593,7 +595,7 @@ parallel on separate pages.
 
 - **That the H.264 half explains the Life is Strange crash on 26.3.** Withdrawn:
   the policy table arms that half for Beast of Reincarnation alone, and Beast of
-  Reincarnation works on 26.3. See [the open defect](#the-open-defect-on-263).
+  Reincarnation works on 26.3. See [the freeze on 26.3](#the-freeze-on-263-and-what-a-control-run-settled).
 - **That DYNASTY WARRIORS needs a VP9 decoder, or needs winevideo.** Withdrawn:
   both builds decode VP9 identically. What stable lacks is a WebM demuxer. See
   [the container, not the codec](#the-container-not-the-codec).

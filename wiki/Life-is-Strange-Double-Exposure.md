@@ -36,10 +36,18 @@ recorded. The static match and the armed guard are what there is.
 ## On stable CrossOver
 
 `crossover-preview-arm64-20260821` is where the confirmation above was made. On
-26.3 this title crashes, as Reunion does, and the two share a DLL and a policy
-row. The defect is ours and it is open and unexplained; the account of it, and
-of what is still only suspected, is in [Findings](Findings.md), under *The open
-defect on 26.3*. Use Preview until it is closed.
+26.3 this title freezes, as Reunion does, and the two share a DLL and a policy
+row.
+
+It is not ours. The control was run on Reunion, which is the sibling this page
+defers to throughout: the fix removed entirely, the game restored to stock, and
+it freezes the same way on the same build. What differs between the engines is
+D3DMetal -- 3.0 on 26.3 against 4.0b2 on that Preview. Reunion's page carries the
+measurements; [Findings](Findings.md) carries the cross-cutting account.
+
+This title was not separately controlled, and the claim here is inherited rather
+than measured, which is the same footing as everything else on this page. Use
+Preview until GPTK 3 is understood.
 
 ## Caveats
 
