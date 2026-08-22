@@ -502,6 +502,51 @@ signed, targeting arm64 macOS 14+.
 DXMT are free software that can be read and modified — copyleft keeps any
 derivative of this work equally available.
 
+## What goes in the bottle
+
+Two settings live in the bottle rather than beside the game, and one of them
+divides these titles into two groups that cannot share a bottle.
+
+### The graphics backend, and the one conflict
+
+`CX_GRAPHICS_BACKEND` in `cxbottle.conf`:
+
+| Backend | Games |
+| --- | --- |
+| `d3dmetal` | Mortal Shell 2, both Life is Strange, Beast of Reincarnation, DYNASTY WARRIORS: ORIGINS |
+| `dxmt` | **Persona 5 Strikers**, and only it |
+
+This is not a preference. Persona 5 Strikers needs a shared D3D9 surface
+handle, and DXMT implements sharing where D3DMetal has nothing to build on —
+`GetSharedHandle` appears seventeen times in DXMT's `d3d11.dll` and not once in
+Wine's.
+
+**So Persona 5 Strikers wants a bottle of its own.** Steam libraries are shared
+between bottles, so a second bottle sees the same installed games without
+re-downloading anything. Switching the backend back and forth in one bottle
+works, but means remembering to switch it, and forgetting looks exactly like
+the fix having stopped working.
+
+### The codec path
+
+`GST_PLUGIN_PATH`, also in `cxbottle.conf`, points at the staged VC-1 decoder.
+**The app writes this for you** when it stages the codec; it is only here so
+that the file's contents are not a mystery:
+
+```
+"GST_PLUGIN_PATH" = "…/Library/Application Support/MacGameVideoFix/gst-codecs/x86_64/gstreamer-1.0"
+```
+
+Only Persona 5 Strikers needs it. The other five ignore it entirely, so leaving
+it in a shared bottle costs nothing.
+
+### Changing either one
+
+Both are read when the bottle starts, and a live `wineserver` keeps the old
+copy — so **close Steam completely**, not just the game. A setting that has not
+taken looks identical to a setting that did not work, which is worth knowing
+before spending an evening on it.
+
 ## The staged codecs, and where they come from
 
 Persona 5 Strikers needs a VC-1 decoder CrossOver does not ship. **We do not

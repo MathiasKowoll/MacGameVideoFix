@@ -2390,6 +2390,86 @@ static void *hook_import_ordinal(const char *dll, WORD ordinal, void *replacemen
     return NULL;
 }
 
+
+/* Watch DirectStorage, which we already are.
+ *
+ * The game ships its own dstorage.dll and DirectStorage/dstoragecore*.dll and
+ * streams 35 GB of assets through them. It is a Windows 11 API for NVMe
+ * streaming, and if it does not work here the game would sit loading forever:
+ * black screen, live process, no error anywhere -- which is exactly the
+ * symptom, and which nothing measured so far explains.
+ *
+ * We are the proxy for that DLL, so the four exports pass through us already.
+ * This says whether they are called and what they answer.
+ *
+ * The forwarding itself is unchanged: each of these calls the real function and
+ * returns its result.
+ */
+static HRESULT (WINAPI *real_DStorageGetFactory)(const GUID *, void **);
+static HRESULT (WINAPI *real_DStorageSetConfiguration)(const void *);
+static HRESULT (WINAPI *real_DStorageSetConfiguration1)(const void *);
+static HRESULT (WINAPI *real_DStorageCreateCompressionCodec)(UINT, UINT, const GUID *, void **);
+
+static HRESULT WINAPI my_DStorageGetFactory(const GUID *iid, void **out)
+{
+    HRESULT hr = real_DStorageGetFactory ? real_DStorageGetFactory(iid, out) : E_NOTIMPL;
+    logf_("DStorageGetFactory -> 0x%08lx%s", hr,
+          FAILED(hr) ? "   << no factory: the game cannot stream its assets" : "");
+    return hr;
+}
+
+static HRESULT WINAPI my_DStorageSetConfiguration(const void *config)
+{
+    HRESULT hr = real_DStorageSetConfiguration ? real_DStorageSetConfiguration(config) : E_NOTIMPL;
+    logf_("DStorageSetConfiguration -> 0x%08lx", hr);
+    return hr;
+}
+
+static HRESULT WINAPI my_DStorageSetConfiguration1(const void *config)
+{
+    HRESULT hr = real_DStorageSetConfiguration1 ? real_DStorageSetConfiguration1(config) : E_NOTIMPL;
+    logf_("DStorageSetConfiguration1 -> 0x%08lx", hr);
+    return hr;
+}
+
+static HRESULT WINAPI my_DStorageCreateCompressionCodec(UINT format, UINT threads,
+                                                        const GUID *iid, void **out)
+{
+    static LONG said;
+    HRESULT hr = real_DStorageCreateCompressionCodec
+               ? real_DStorageCreateCompressionCodec(format, threads, iid, out) : E_NOTIMPL;
+    if (InterlockedIncrement(&said) <= 2)
+        logf_("DStorageCreateCompressionCodec(format=%u) -> 0x%08lx", format, hr);
+    return hr;
+}
+
+static void watch_directstorage(void)
+{
+    HMODULE real = GetModuleHandleA("dstorage_real.dll");
+    if (!real) real = LoadLibraryA("dstorage_real.dll");
+    if (!real) { logf_("DirectStorage: cannot reach dstorage_real.dll"); return; }
+#define GRAB(fn) *(FARPROC *)&real_##fn = GetProcAddress(real, #fn)
+    GRAB(DStorageGetFactory);
+    GRAB(DStorageSetConfiguration);
+    GRAB(DStorageSetConfiguration1);
+    GRAB(DStorageCreateCompressionCodec);
+#undef GRAB
+    {
+        void *was;
+        int n = 0;
+        if ((was = hook_import("dstorage.dll", "DStorageGetFactory",
+                               (void *)my_DStorageGetFactory))) n++;
+        if ((was = hook_import("dstorage.dll", "DStorageSetConfiguration",
+                               (void *)my_DStorageSetConfiguration)))  n++;
+        if ((was = hook_import("dstorage.dll", "DStorageSetConfiguration1",
+                               (void *)my_DStorageSetConfiguration1))) n++;
+        if ((was = hook_import("dstorage.dll", "DStorageCreateCompressionCodec",
+                               (void *)my_DStorageCreateCompressionCodec))) n++;
+        (void)was;
+        logf_("DirectStorage: %d of 4 entry points watched", n);
+    }
+}
+
 static DWORD WINAPI worker(LPVOID unused)
 {
     (void)unused;
@@ -2459,6 +2539,7 @@ static DWORD WINAPI worker(LPVOID unused)
               got, (int)(sizeof(hooks) / sizeof(hooks[0])) + 2);
     }
 
+    watch_directstorage();
     logf_("---- write-path hooks %s | painting %s ----",
           watch_write_path ? "ON" : "off",
           paint_magenta ? "SOLID MAGENTA" : "the real frames");

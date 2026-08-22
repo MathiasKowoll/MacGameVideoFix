@@ -39,6 +39,17 @@ page comes from a measurement on an installed copy.
 
 <!-- games:end -->
 
+## One bottle cannot hold all of these
+
+`CX_GRAPHICS_BACKEND` divides them. Five run on `d3dmetal`; Persona 5 Strikers
+runs only on `dxmt`, because it needs a shared D3D9 surface handle and
+D3DMetal has none to give.
+
+Steam libraries are shared between bottles, so giving that one a bottle of its
+own costs no disk and no re-download. Switching the backend by hand also works
+and means remembering to switch it — and a forgotten backend looks exactly like
+a fix that stopped working.
+
 ## Reading the winevideo column
 
 It answers one question: **does the game need CrossOver patched with winevideo
