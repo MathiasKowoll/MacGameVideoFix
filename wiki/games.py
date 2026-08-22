@@ -54,14 +54,21 @@ D3DMetal with the D3D12 renderer, which is also what keeps PSO precompilation
 -- `-dx11` dodges some of these faults and costs permanent shader-compilation
 stutter.
 
-**None of these games needs CrossOver patched, on a build that already decodes
-VP9.** That was not true when this project started, and it is the single biggest
-thing that changed: CrossOver Preview decodes VP9 profile 0 and 2, H.264 and AAC
-on its own. The one thing that still depends on the engine is DYNASTY WARRIORS:
-ORIGINS, which decodes VP9 through Media Foundation and has nothing to present
-without it -- so on an older or stable build it still needs winevideo, and on a
-current Preview it does not. Persona 5 Strikers needs a VC-1 decoder no CrossOver
-ships, and that is staged beside it rather than patched into it.
+**None of these games needs CrossOver patched.** That was not true when this
+project started, and it is the single biggest thing that changed.
+
+What each build gives them is narrower than "decodes VP9", and the distinction
+took a while to arrive at. Both CrossOver 26.3 and Preview decode VP9 the same
+way, through `applemedia` and VideoToolbox; neither ships `libgstvpx` or
+`libgstlibav`. Comparing the two installs plugin by plugin, stable carries 17
+GStreamer plugins and Preview 19, and the two Preview has to itself are
+`matroska` and `osxaudio`. So the engine dependency that remains is a
+*container* one: only Preview can open a WebM. DYNASTY WARRIORS ships 355
+`.webm` cutscenes and cannot get as far as decoding on stable, while Mortal
+Shell 2 ships the same codec in `.mp4`, which `isomp4` handles on both.
+
+Persona 5 Strikers is the one title needing a codec no CrossOver ships -- VC-1 --
+and that is staged beside it rather than patched into it.
 
 None of these fixes decodes anything. The frames existed all along; they were
 being crashed on, mislabelled, or thrown away.

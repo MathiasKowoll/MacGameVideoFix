@@ -8,6 +8,7 @@ Unreal Engine 5.6.1. Crashes on the first cutscene.
 | Played by | Electra, decoding VP9 with its own bundled libvpx |
 | Symptom | `EXCEPTION_ACCESS_VIOLATION` reading `0x0` in `FElectraMediaDecoderOutputBufferPoolBlock_DX12::AllocateBuffer` |
 | Fix | Runtime patch, **4 sites**, all four confirmed at runtime |
+| CrossOver | 26.3 and Preview build 20260821, played through on both |
 | winevideo | Not required — see below |
 
 ## The fault
@@ -41,7 +42,10 @@ Nothing on disk changes. The original VP9 files are left exactly as they are.
 
 **Not required — measured.** The game was played through on CrossOver 26.3
 carrying no winevideo, and again on CrossOver-winevideo 26.3: the same version,
-differing only in the GStreamer plugins. The fix worked either way.
+differing only in the GStreamer plugins. The fix worked either way. That
+paired run is the controlled comparison the rest of these pages lean on, and it
+was made on this title and no other. Preview build 20260821 was measured
+separately, and also plays.
 
 That matches the mechanism. VP9 never goes through Media Foundation here —
 Electra decodes it in-process with its own libvpx, and only the *output*
@@ -50,17 +54,27 @@ import `MFPlat`, `MFReadWrite` and `MF`, but all three are **delay-loaded**, so
 the import table only ever said the code *could* reach Media Foundation, never
 that it did.
 
-Install winevideo anyway — it fixes a great deal elsewhere. This fix simply
-does not depend on it.
+Install winevideo if something else needs it. This fix does not depend on it.
+
+This title has been offered as the control for a finding that belongs to
+another one, and it is not one. Its 61 cutscenes are VP9 in `.mp4` and it plays
+on stable 26.3, while
+[DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) ships the same codec in
+`.webm` and does not — but as above, this title's VP9 never reaches CrossOver's
+media stack at all, so nothing it does tests what stable can open. What it is
+evidence for is that VP9 is not the obstacle. The container finding rests on the
+plugin-set comparison instead: stable 26.3 ships no `matroska`, and nothing else
+it ships opens a WebM.
 
 ## Caveats
 
 - **Do not use this on a game with anti-cheat.** It patches a running process.
-- Steam's *verify integrity of game files* does not undo this one, since no
-  game file is modified — but it will restore the proxy DLL's neighbours if
-  they were touched.
+- Steam's *verify integrity of game files* undoes the install. No game file's
+  contents are edited, but the game's own `libogg_64.dll` is moved aside and
+  the proxy put in its place, and a verification puts the stock DLL back over
+  it. Running `install-runtime-fix.sh` again restores the fix.
 
 
 ---
 
-Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md)
+Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md) · [How the fixes work](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/how-it-works.md), the shared mechanism behind all six

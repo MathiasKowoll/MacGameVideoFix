@@ -32,8 +32,9 @@ is the same toolkit, not because it is the same problem.
 
 ## Is my game affected?
 
-The thing that matters is what the cutscenes are encoded as and which API plays
-them. `survey-games.sh` reports both for a game folder:
+The thing that matters is what the cutscenes are encoded as, what box they are
+in, and which API plays them. `survey-games.sh` reports all three for a game
+folder:
 
 ```
 diagnostics/survey-games.sh "/path/to/steamapps/common/<Game>"
@@ -41,12 +42,24 @@ diagnostics/survey-games.sh "/path/to/steamapps/common/<Game>"
 
 Reading the output:
 
-- **VP9 + Unreal** — the crash. Run the fix.
+- **VP9 + Unreal** — likely the crash, but confirm it before patching. Scan the
+  executable for Electra's `12000` version check as described in
+  [Diagnosing a new game](Diagnosing-a-new-game.md); a count of zero means this
+  bug is not present in that build, whatever else may be wrong.
 - **VP9 + anything else** — possible, but a different mechanism each time.
 - **Bink (`.bik` / `.bk2`)** — Bink ships its own decoder and never touches
   Media Foundation or D3D video. Not affected by any of this.
-- **H.264** — normally fine, provided CrossOver is patched with
-  [winevideo](https://github.com/Jfishin/winevideo).
+- **H.264** — decoded by CrossOver on its own, on stable and on Preview, with
+  nothing patched. A working decoder is not the whole story: Beast of
+  Reincarnation decodes H.264 and still showed nothing, because CrossOver
+  withholds NV12 from the format list on macOS and Electra accepts nothing
+  else. If the sound plays and the picture does not, start at
+  [Beast of Reincarnation](Beast-of-Reincarnation.md).
+
+The container is worth as much as the codec. The codec says whether anything
+can decode the file; the container says whether anything can open it, and on
+stable CrossOver that is where WebM stops — see
+[Games](Games.md).
 
 Two caveats on the survey. It reads Unreal `.pak` indexes but only version 11
 unencrypted ones, so a title using anything else reports zero videos when it
@@ -77,10 +90,10 @@ stutter.
 **None of these games needs CrossOver patched, on a build that already decodes
 VP9.** That was not true when this project started, and it is the single biggest
 thing that changed: CrossOver Preview decodes VP9 profile 0 and 2, H.264 and AAC
-on its own. The one thing that still depends on the engine is DYNASTY WARRIORS:
-ORIGINS, which decodes VP9 through Media Foundation and has nothing to present
-without it -- so on an older or stable build it still needs winevideo, and on a
-current Preview it does not. Persona 5 Strikers needs a VC-1 decoder no CrossOver
+on its own. The engine dependency that remains is a container one: only
+Preview ships the `matroska` plugin, so DYNASTY WARRIORS' 355 `.webm` cutscenes
+cannot be opened on stable 26.3 -- not for want of a VP9 decoder, which both
+builds have through VideoToolbox, but for want of anything that can demux WebM. Persona 5 Strikers needs a VC-1 decoder no CrossOver
 ships, and that is staged beside it rather than patched into it.
 
 None of these fixes decodes anything. The frames existed all along; they were
@@ -95,5 +108,10 @@ Each row links to a page with the findings and the fix for that title.
 
 ## Pages
 
-- [Games](Games.md) — the table above, plus how a row gets added
+- [Games](Games.md) — the table above, what each fix needs from CrossOver, and
+  how a row gets added
 - [Diagnosing a new game](Diagnosing-a-new-game.md) — the tools, and what each one answers
+- [How the fixes work](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/how-it-works.md) —
+  the technical companion in the repository: root causes, the vtable slots each
+  hook takes, the carrier DLLs, and what was tried and did not work. These
+  pages hold the per-title findings; that one holds the shared mechanism.

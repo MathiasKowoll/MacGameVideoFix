@@ -8,27 +8,66 @@ Koei Tecmo, in-house engine. Cutscenes played with sound and no picture.
 | Cutscenes | 355 `.webm`, VP9 Profile 0. 42 of them 2560x1440 and up to four minutes; the rest 960x540 interface clips |
 | Played by | `IMFSourceReader` on a **separate D3D11 device**, presented by a **D3D12** renderer |
 | Was | Cutscene ran with sound and subtitles, picture black |
-| Now | Plays |
-| Needs | VP9 decoding in the engine **and** an injected DLL. Neither alone is enough: a current CrossOver Preview decodes VP9 itself, an older or stable build needs winevideo for it |
+| Now | Plays on CrossOver Preview build 20260821. Not measured on 26.3, which has no way to demux WebM — see below |
+| Needs | A build whose Media Foundation can **open a WebM**, and an injected DLL. Neither alone is enough: Preview demuxes WebM and decodes the VP9 inside it; stable 26.3 decodes the same VP9 and ships no `matroska` plugin, so nothing opens the container. The measured run also had the `.webm` byte-stream handler registered — see below for whether that is needed |
 
 ### Who does what
 
 The two halves are not interchangeable, and it is worth being exact about the
 line between them.
 
-**winevideo decodes.** `libgstvpx` and `libgstmatroska` for VP9 in a WebM
-container, a patched `winegstreamer` to advertise it and back the decoder MFT,
-a patched `mfplat`, the `.webm` byte-stream handler registered in the bottle,
-and the VP9 decoder MFT registered so the game can see one exists. Without
-that, `MFCreateSourceReaderFromByteStream` on a `.webm` fails and there is no
+**Something upstream opens the container and decodes.** On a build with no
+WebM demuxer that is winevideo: `libgstvpx` and `libgstmatroska` for VP9 in a
+WebM container, a patched `winegstreamer` to advertise it and back the decoder
+MFT, a patched `mfplat`, the `.webm` byte-stream handler registered in the
+bottle, and the VP9 decoder MFT registered so the game can see one exists. On
+Preview it is CrossOver's own `matroska` plugin, with `applemedia` and
+VideoToolbox decoding the VP9. Which decoder actually runs on a winevideo build
+was not determined here — that build installs `libgstvpx` and registers a
+decoder MFT of its own, so it is a ranking question and the plugin comparison
+below covers the two stock builds, not that one. Either way the open has to
+succeed first: without a demuxer,
+`MFCreateSourceReaderFromByteStream` on a `.webm` fails and there is never a
 frame to present.
 
 **The DLL presents.** It starts work at the moment Media Foundation hands over
 a decoded NV12 sample, and it decodes nothing itself.
 
+**The byte-stream handler, and an honest gap.** The one successful run was made
+on Preview with `diagnostics/registry/apply-webm-handler.sh` applied, so that
+mapping was present in the measured configuration. It is believed unnecessary
+there: this title opens its cutscenes with `MFCreateSourceReaderFromByteStream`,
+which resolves by content rather than by extension. No run without the mapping
+has been made, so believed is as far as that goes.
+
 The bridge has to live inside the game's process rather than in Wine, and not
 for convenience: the call that has to be intercepted is
 `ID3D12Device::OpenSharedHandle`, and that D3D12 is D3DMetal's, not Wine's.
+
+### On stable CrossOver: one missing demuxer
+
+Measured by comparing the two installs plugin by plugin rather than by running
+anything. Stable 26.3 carries 17 GStreamer plugins, Preview 19, and the two
+Preview has to itself are `matroska` and `osxaudio`.
+
+`matroska` is the one that matters, and it is a demuxer, not a decoder. Both
+builds decode VP9 through `applemedia` and VideoToolbox — neither ships
+`libgstvpx` or `libgstlibav`. What stable cannot do is open the container. This
+title's 355 cutscenes are `.webm`, so on stable nothing gets as far as decoding.
+
+[Mortal Shell 2](Mortal-Shell-2.md) is not the control it is sometimes taken
+for. Its cutscenes are the same codec in a different box — 61 VP9 files in
+`.mp4` — and it plays on stable, but Electra opens and decodes those files
+in-process with its own libvpx and never asks CrossOver to open anything. So it
+shows VP9 is not the obstacle and says nothing about the demuxers. This title
+was not launched on stable at all: everything claimed about stable here is read
+from the plugin sets, not from a run.
+
+So the honest requirement is narrower than "needs winevideo": it needs something
+that can demux WebM. `libgstmatroska.dylib` is 756 KB, ships in the official
+GStreamer.framework, and re-homing a plugin into CrossOver's GStreamer is
+already solved here — it is what `runtime/stage-codecs.sh` does for Persona 5
+Strikers' VC-1. Not built, but a plugin to stage rather than an engine to patch.
 
 ### Five things were wrong, in sequence
 
@@ -140,7 +179,9 @@ the two NV12 planes and doing the colour conversion in a compute shader.
   cutscene — the player running on half-built state — goes with them.
 - Steam's *verify integrity of game files* undoes the install.
 - DXMT implements `GetSharedHandle` and D3DMetal does not, so a game in this
-  position may simply work under a different backend. Untested here.
+  position may work under a different backend instead. Untested here — though
+  [Persona 5 Strikers](Persona-5-Strikers.md) is the case where that backend
+  difference decided the whole fix.
 
 ### How it was found, since most of it was wrong turns
 
@@ -170,25 +211,4 @@ that the bridge carried what was put in it.
 
 ---
 
-Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md)
-
-## On stable CrossOver: one missing demuxer
-
-Measured by comparing the two installs plugin by plugin rather than by running
-anything. Stable 26.3 carries 17 GStreamer plugins, Preview 19, and the two
-Preview has to itself are `matroska` and `osxaudio`.
-
-`matroska` is the one that matters, and it is a demuxer, not a decoder. Both
-builds decode VP9 through `applemedia` and VideoToolbox — neither ships
-`libgstvpx` or `libgstlibav`. What stable cannot do is open the container. This
-title's 355 cutscenes are `.webm`, so on stable nothing gets as far as decoding.
-
-The comparison that settles it is Mortal Shell 2, whose cutscenes are the same
-codec in a different box: 61 VP9 files in `.mp4`, handled by `isomp4`, which both
-builds have. It plays on stable. This one does not.
-
-So the honest requirement is narrower than "needs winevideo": it needs something
-that can demux WebM. `libgstmatroska.dylib` is 756 KB, ships in the official
-GStreamer.framework, and re-homing a plugin into CrossOver's GStreamer is
-already solved here — it is what `runtime/stage-codecs.sh` does for Persona 5
-Strikers' VC-1. Not built, but a plugin to stage rather than an engine to patch.
+Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md) · [How the fixes work](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/how-it-works.md), the shared mechanism behind all six

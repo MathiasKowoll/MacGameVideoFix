@@ -12,15 +12,15 @@ and no error anywhere.
 | Backend | **DXMT only.** D3DMetal cannot produce a shared handle at all |
 | CrossOver | Measured on Preview. 26.3 expected but not yet tried |
 
-## The one that does not need Preview
+## The one that should not need Preview
 
-Every other title here leans on what CrossOver decodes for itself, which is why
-they were validated on Preview. This one leans on nothing: the VC-1 decoder is
-staged beside it out of the official GStreamer framework, so what CrossOver does
-or does not ship stops mattering.
+Every other title here that goes through Media Foundation depends on what
+CrossOver's own media stack can open and decode. This one depends on none of
+it: the VC-1 decoder is staged beside the game out of the official GStreamer
+framework, so what CrossOver ships stops mattering.
 
 So it ought to play on a stable build as well as on Preview. That is a
-prediction from how it was fixed, not a measurement -- it has only been tried on
+prediction from how it was fixed, not a measurement — it has only been tried on
 Preview so far, and this page will say so until it has been. The backend
 requirement is unchanged either way: DXMT, for the shared handle.
 
@@ -38,10 +38,11 @@ needs a codec CrossOver does not ship.
 
 The official GStreamer.framework has VC-1 in `libgstlibav` (ffmpeg). Install
 the macOS **runtime** package from
-[gstreamer.freedesktop.org](https://gstreamer.freedesktop.org/data/pkg/osx/1.24.14/) — **1.24.14**, which is the version measured
-working here. winevideo names 1.24.13 for the same titles; what actually has to
-hold is the 1.24 series, since the plugin only has to be ABI-compatible with the
-CrossOver core it is re-homed onto. Nothing is redistributed: the decoder is borrowed
+[gstreamer.freedesktop.org](https://gstreamer.freedesktop.org/data/pkg/osx/1.24.14/) — **1.24.14**, which is the only version
+measured here. winevideo names 1.24.13 for the same titles, and the requirement
+is likely to be the 1.24 series rather than that exact release, since the plugin
+only has to be ABI-compatible with the CrossOver core it is re-homed onto — but
+no other release has been tried. Nothing is redistributed: the decoder is borrowed
 from an install you already have, which is also how winevideo does it. Loading
 that plugin in place crashes: dyld ends up with two copies of libgstreamer and
 two GObject type registries, and Preview ships no `gst-plugin-scanner`, so
@@ -138,4 +139,4 @@ the converter.
 
 ---
 
-Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md)
+Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md) · [How the fixes work](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/how-it-works.md), the shared mechanism behind all six

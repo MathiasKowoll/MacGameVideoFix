@@ -1,5 +1,7 @@
-Four tools, each answering a different question. Run them in this order — every
-one narrows what the next has to look at.
+The tools in `diagnostics/`, each answering a different question. The numbered
+ones below run in this order — every one narrows what the next has to look at.
+A few more are listed at the end; they did decisive work on titles here without
+belonging to a fixed step in the sequence.
 
 ## 1. What does this game ship, and what plays it?
 
@@ -12,6 +14,14 @@ which media DLLs the main executable is linked against. Usually enough to say
 which failure mode you are looking at, or that the game is not in this category
 at all.
 
+Read the codec and the container as two separate answers. The codec says
+whether anything can decode the file; the container says whether anything can
+open it, and those come apart. On stable CrossOver 26.3 the same VP9 plays in
+an `.mp4` and does not in a `.webm`, because that build ships no `matroska`
+plugin — 355 `.webm` files and 61 VP9 `.mp4` files are the same codec and
+different outcomes. Which build opens what is set out in
+[Games](Games.md).
+
 Given a whole library instead of one game it surveys everything under it, which
 helps when hunting for a title worth working on. The wiki still only covers
 games we deliberately took on.
@@ -22,15 +32,24 @@ games we deliberately took on.
 runtime/pe.py imports "/path/to/Game-Win64-Shipping.exe" --dlls
 ```
 
-For an Unreal title, a scan for Electra's D3D12 version check settles it
-without launching anything. The pattern is
+That answers the cheaper half: whether the game reaches Media Foundation at
+all. `pe.py` has four modes — `exports`, `exports --ordinals`, `imports`,
+`imports --dlls` — and prints nothing else.
+
+The half that settles the crash is a scan for Electra's D3D12 version check.
+The pattern is
 
 ```
 cmp dword [rbp+disp], 12000     ; 81 7D ?? E0 2E 00 00
 jl  <cpu path>                  ; 7C ??   or   0F 8C ?? ?? ?? ??
 ```
 
-Mortal Shell 2 has four. Returnal, on UE4, has none — the buffer pool that
+**No static scanner for it ships here yet.** The code that knows the pattern is
+the runtime patch itself, which finds and rewrites the sites inside the running
+process and reports how many it found, so the count arrives once the fix is
+installed rather than before.
+
+Mortal Shell 2 has four. A UE4 title has none, because the buffer pool that
 crashes does not exist in that engine version. A count of zero means this
 particular bug is not present, whatever else may be wrong.
 
@@ -54,18 +73,37 @@ things moving between updates.
 
 **Picking a carrier.** The game has no plugin hook, so the probe rides in on a
 DLL the game already loads. It must be imported directly, load early, and have
-nothing to do with rendering. A shipped third-party library is ideal —
-`libxess.dll` for DYNASTY WARRIORS: ORIGINS, `libogg_64.dll` for any Unreal
-title. **Never `steam_api64.dll`.**
+nothing to do with rendering. A shipped third-party library is ideal. The
+three in use here:
+
+- `libogg_64.dll` — any Unreal title.
+- `libxess.dll` — DYNASTY WARRIORS: ORIGINS.
+- `amd_ags_x64.dll` — Persona 5 Strikers. A vendor library the game imports
+  and barely calls under CrossOver, which is the shape to look for when a game
+  ships neither of the other two.
+
+**Never `steam_api64.dll`.**
 
 `build-probe.sh` reads the carrier's export table and generates PE forwarders
 for every symbol, so the real library still answers every call. Install by
 renaming the game's copy to `<stem>_real.dll` and dropping the probe in its
 place. The log goes to the bottle's `C:\mf-probe.log`.
 
-Read an empty log carefully. It means "the game did not ask" only if the probe
-also hooked `GetProcAddress` — otherwise it may mean the calls went somewhere
-you were not watching.
+Read an empty log carefully. Two things produce one that has nothing to do with
+what the game asked for.
+
+**Imports by name only.** If the probe hooked the import table and not
+`GetProcAddress`, a call resolved at runtime went somewhere nobody was
+watching.
+
+**Imports by ordinal.** An import with no name is skipped outright by a
+name-walking hook, so the hook installs, reports itself installed, and never
+fires. DYNASTY WARRIORS brings in `D3D12CreateDevice` from `d3d12.dll` as
+ordinal 101 with no name, which is not unusual, and this has cost a wasted run
+more than once here. `hook_import_ordinal` in `diagnostics/mf-probe.c` exists
+for exactly that.
+
+An empty log means "the game did not ask" only once both are ruled out.
 
 ## 4. Everything, if the game has no usable carrier
 
@@ -78,8 +116,41 @@ trace to the media types and handlers that were refused. Slower, far noisier,
 and needs the game launched by hand — but it needs nothing installed into the
 game folder.
 
+## The rest, outside the sequence
+
+```
+diagnostics/find-callsites.py <file.exe> <symbol> [symbol...]
+```
+
+Finds where a PE calls an imported function without running it, by resolving
+every `call qword ptr [rip+disp32]` against the import table. On DYNASTY
+WARRIORS it found in one second what four launches of guesswork had not — two
+`MFStartup` call sites, only one of them the video player.
+
+```
+diagnostics/launch-and-capture.sh <bottle> [engine]
+```
+
+Keeps the stderr a Steam or CrossOver-interface launch throws away. Wine,
+D3DMetal and DXMT write their diagnostics there, and for a game that hangs on a
+black screen with no crash report that is often the only statement of what is
+wrong. One trap worth knowing before trusting a quiet capture: launching Steam
+captures nothing, because Steam forks and returns, so the command finishes
+before the game starts and the game's output belongs to another process.
+
+There is also `diagnostics/registry/apply-webm-handler.sh`, which adds or
+removes the `.webm` byte-stream handler mapping in a bottle. It was written to
+test one question — whether that single mapping is the whole of what winevideo
+provides for a WebM/VP9 game on a build that already carries the demuxer.
+
 ## A warning
 
 Hooking and patching a running process is what anti-cheat exists to stop. **Do
 not point any of this at a game with anti-cheat.** Everything here is for
 single-player titles whose cutscenes do not play.
+
+---
+
+Back to [the games table](Games.md) ·
+[How the fixes work](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/how-it-works.md),
+the shared mechanism behind all six

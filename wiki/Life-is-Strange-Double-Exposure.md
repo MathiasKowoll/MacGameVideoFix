@@ -8,8 +8,9 @@ the same fix.
 | Symptom | Runs fine, then freezes after a while, anywhere in the game |
 | Cause | `IDXGIAdapter3::QueryVideoMemoryInfo` succeeds for node indices the adapter does not have |
 | Fix | Refuse them — the same DLL Reunion uses |
-| winevideo | Not required — the fault is in DXGI, not in video |
-| Status | **Fixed** — confirmed in play |
+| winevideo | Not required — the fault is in DXGI, not in video. Not separately measured here; the DLL and the finding are shared with [Reunion](Life-is-Strange-Reunion.md) |
+| CrossOver | Preview build 20260821. **Crashes on 26.3** — our defect, open, shared with Reunion |
+| Status | Fixed — the guard was confirmed to arm in play. The freeze itself was never reproduced on this title, so what is confirmed is that the fix takes hold, not that a freeze was cured |
 
 ## What was actually checked
 
@@ -23,9 +24,38 @@ The fix is the same file, installed the same way, and it is one DLL for both
 titles rather than a per-game build.
 
 It has since been confirmed in play, on the merged DLL: the guard armed and
-refused node 1 exactly once, which is the signature of the fix taking hold --
+refused node 1 exactly once, which is the signature of the fix taking hold —
 Unreal takes the node count from that answer and stops asking.
+
+What that does not establish is that a freeze was cured. This title was never
+played to a freeze before the fix, so there is no before-state to compare
+against, and a session that never froze is indistinguishable from one that
+could not have frozen yet without a duration to put beside it. None was
+recorded. The static match and the armed guard are what there is.
+
+## On stable CrossOver
+
+Preview build 20260821 is where the confirmation above was made. On 26.3 this
+title crashes, as Reunion does, and the two share a DLL and a policy row: the
+table arms the node guard for `Chronos-Win64-Shipping.exe` and nothing else, so
+the H.264 half that DLL also carries is present in the file and inert here. The
+suspicion is the same one Reunion's page sets out — the Media Foundation hooks
+are installed for every title whether or not the half that uses them is armed.
+It is a suspicion and not a finding. The defect is ours and it is open; the
+account of it is on [Reunion's page](Life-is-Strange-Reunion.md). Use Preview
+until it is closed.
+
+## Caveats
+
+- **Do not use this on a game with anti-cheat.** It patches a running process.
+- Steam's *verify integrity of game files* restores the game's own
+  `libogg_64.dll`, which undoes the install. Running the installer again puts
+  it back.
+- The same guard can be installed once into a CrossOver build instead of once
+  per game, with `crossover/install-node-guard.sh`. That reaches every title in
+  every bottle using that build, and it invalidates the bundle's code
+  signature, as any CrossOver patch does.
 
 ---
 
-Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md)
+Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md) · [How the fixes work](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/how-it-works.md), the shared mechanism behind all six
