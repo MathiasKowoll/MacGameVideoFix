@@ -53,12 +53,12 @@ while IFS= read -r app; do
   [ -n "$ver" ] || continue
   ENGINES="$ENGINES$ver|$app"$'\n'
 done <<EOF
-$(ls -d /Applications/*.app 2>/dev/null)
+$(ls -d /Applications/*.app "$HOME/Applications"/*.app 2>/dev/null)
 EOF
 
-# /Applications only, deliberately. A CrossOver in ~/Applications is as likely
-# to be a copy kept for an experiment as one someone actually runs games with,
-# and staging against an engine nobody uses is work that can only mislead.
+# Both /Applications and ~/Applications. Staging every engine found is cheap
+# and reversible; the choice of which one a bottle uses is made in the app,
+# against this list, so a missing entry is a CrossOver the user cannot select.
 ENGINES="$(printf '%s' "$ENGINES" | sort -u -t'|' -k1,1 | grep -v '^$' || true)"
 [ -n "$ENGINES" ] || { echo "error: no CrossOver installation found" >&2; exit 1; }
 

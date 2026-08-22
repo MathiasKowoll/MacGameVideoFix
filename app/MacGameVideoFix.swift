@@ -1922,7 +1922,15 @@ enum Codecs {
         // a copy kept for an experiment as one someone actually runs games
         // with, and staging against an engine the user does not use is work
         // that can only mislead.
-        for dir in ["/Applications"] {
+        // Both locations. This was /Applications only for a while, on the
+        // reasoning that a CrossOver in ~/Applications is as likely to be a
+        // copy kept for an experiment. That reasoning belonged to a version
+        // with no way to choose: listing an engine then meant staging against
+        // it. Now that a bottle's engine is picked explicitly, showing one more
+        // install costs a row in a sheet, and hiding one costs somebody the
+        // ability to use the CrossOver they actually run.
+        for dir in ["/Applications",
+                    (NSHomeDirectory() as NSString).appendingPathComponent("Applications")] {
             for app in (try? fm.contentsOfDirectory(
                             at: URL(fileURLWithPath: dir),
                             includingPropertiesForKeys: nil)) ?? [] {
