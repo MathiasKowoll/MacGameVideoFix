@@ -438,6 +438,29 @@ covers how to look.
 **A game with no `libogg`** — the fix has no way in. Nothing in this repository
 helps that title yet.
 
+## Reporting a problem
+
+If none of that helped, open an issue with the
+[bug report form](../../issues/new?template=bug_report.yml). It asks a short
+list of questions — all but one of them a menu — and for the output of one
+command:
+
+```bash
+diagnostics/support-bundle.sh "/path/to/steamapps/common/<Game>"
+```
+
+Run it in Terminal with the game folder you dropped on the app, and paste
+everything it prints into the form's last field, inside a code fence. That
+output is the report: the install state, the bottle's settings, the runtime log
+and which CrossOver builds are installed. Between them they answer most reports
+without a second round of questions.
+
+It prints only what it needs to. Your user name is redacted from every path,
+bottles are numbered rather than named, and nothing enumerates your installed
+games. The one exception is a fenced list at the end mapping bottle numbers to
+names, so a conversation can refer to a bottle at all — read that before you
+paste, and delete it if you would rather not send it.
+
 ## Things that do not work
 
 Documented so nobody spends an evening rediscovering them.

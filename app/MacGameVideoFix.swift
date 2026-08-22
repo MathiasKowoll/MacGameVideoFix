@@ -848,6 +848,7 @@ final class Runner: ObservableObject {
                 }
             }
             note("")
+            Codecs.refresh()
             note("Codec staged, and \(touched.count) bottle(s) pointed at it.")
             note("Close Steam completely before relaunching: this is bottle")
             note("configuration, and a live wineserver keeps the old copy.")
@@ -1094,7 +1095,31 @@ enum Codecs {
     /// series rather than the exact patch: the plugin must be ABI-compatible
     /// with the CrossOver core it is re-homed onto, which GStreamer guarantees
     /// across 1.x. Anything else is reported, not refused.
+    /// Read once and remembered. This is a computed property consulted from a
+    /// SwiftUI body, and a body is re-evaluated on every published change --
+    /// which during a scan means continuously. Spawning otool at that rate made
+    /// scanning visibly slow, and only when the codec was NOT staged, because
+    /// that is the only branch of codecMessage that asks for the version.
+    private static var cached: String??
+
     static var version: String? {
+        if let c = cached { return c }
+        let v = readVersion()
+        cached = v
+        return v
+    }
+
+    private static var cachedBottles: [String]?
+
+    /// Drops everything remembered here, so "Check again" genuinely checks
+    /// again after the user installs GStreamer, and so the bottle list is
+    /// re-read once staging has pointed new bottles at the codec.
+    static func refresh() {
+        cached = nil
+        cachedBottles = nil
+    }
+
+    private static func readVersion() -> String? {
         let lib = (framework as NSString)
             .appendingPathComponent("Versions/1.0/lib/libgstreamer-1.0.0.dylib")
         guard FileManager.default.fileExists(atPath: lib) else { return nil }
@@ -1115,6 +1140,7 @@ enum Codecs {
         return "1.\(compat / 100).\(compat % 100)"
     }
 
+    /// Uses the cached read; asking twice in one body evaluation is free.
     static var versionIsTested: Bool { version?.hasPrefix("1.24") ?? false }
 
     static let downloadPage = "https://gstreamer.freedesktop.org/data/pkg/osx/1.24.14/"
@@ -1130,7 +1156,17 @@ enum Codecs {
     }
 
     /// Bottles that already point at the staged folder.
+    /// Cached for the same reason the version is: a SwiftUI body asks for this
+    /// on every published change, and answering means reading every bottle's
+    /// cxbottle.conf off disk.
     static func bottlesConfigured() -> [String] {
+        if let c = cachedBottles { return c }
+        let found = readBottlesConfigured()
+        cachedBottles = found
+        return found
+    }
+
+    private static func readBottlesConfigured() -> [String] {
         (try? FileManager.default.contentsOfDirectory(at: Bottle.root, includingPropertiesForKeys: nil))?
             .filter { bottle in
                 guard let conf = try? String(contentsOf: bottle.appendingPathComponent("cxbottle.conf"),
@@ -1691,7 +1727,10 @@ struct ContentView: View {
                         }
                     }
                     .keyboardShortcut(.defaultAction)
-                    Button("Check again") { codecCheck &+= 1 }
+                    Button("Check again") {
+                        Codecs.refresh()
+                        codecCheck &+= 1
+                    }
                         .help("After installing it, check without restarting.")
                 }
             }

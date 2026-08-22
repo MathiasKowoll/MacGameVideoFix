@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Your game's page in the wiki
+    url: https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Games
+    about: Every supported title has its own page — the symptom, the fix, and what was measured on it. Start there; most questions are answered by the game's own page.
+  - name: A game that is not on the list
+    url: https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Diagnosing-a-new-game
+    about: How to find out what a title's cutscenes are encoded as and which API plays them, before opening an issue.
+  - name: Requirements, and what goes in the bottle
+    url: https://github.com/MathiasKowoll/MacGameVideoFix#requirements
+    about: The CrossOver build, CX_GRAPHICS_BACKEND and GST_PLUGIN_PATH. A setting that has not taken looks exactly like a fix that stopped working.

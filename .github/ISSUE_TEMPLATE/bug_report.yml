@@ -1,0 +1,173 @@
+name: Bug report
+description: A supported game still does not play its cutscenes, or stopped working after the fix
+title: "[game] what happens"
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Two things make a report answerable: which title, and the output of
+        `diagnostics/support-bundle.sh`. Everything else below is a menu.
+
+        The bundle redacts your macOS user name from every path, numbers bottles
+        instead of naming them, and never lists your installed games. It ends
+        with one fenced appendix mapping bottle numbers to names — read that
+        before you paste, and delete it if you would rather not share it.
+
+        Please do not paste directory listings, Steam library paths, or the
+        contents of `libraryfolders.vdf`. Nothing here needs them.
+
+  - type: dropdown
+    id: game
+    attributes:
+      label: Which game?
+      description: >-
+        This routes everything else: which carrier DLL, which installer, which
+        log to read, and which graphics backend the bottle needs. A title
+        outside this list is not supported yet.
+      options:
+        - "Mortal Shell 2"
+        - "Beast of Reincarnation"
+        - "Life is Strange: Reunion"
+        - "Life is Strange: Double Exposure"
+        - "Another Unreal Engine 5 title"
+        - "DYNASTY WARRIORS: ORIGINS"
+        - "Persona 5 Strikers"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: symptom
+    attributes:
+      label: What actually happens?
+      description: >-
+        Pick what you see from the sofa, not what you think is wrong. Each of
+        these selects a different mechanism and rules the others out.
+      options:
+        - "Crashes to desktop with an Unreal crash dialog"
+        - "Runs fine, then freezes — picture stuck, no crash, force quit needed"
+        - "Cutscene: sound plays, picture stays black, the game carries on afterwards"
+        - "Cutscene: no picture and no sound"
+        - "Black screen at launch, never reaches the menu"
+        - "The game does not start at all since applying the fix"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: before
+    attributes:
+      label: Compared with before you applied the fix?
+      description: >-
+        Only you can answer this, and it separates three cases that look
+        identical in every log: the fix never took effect, the fix took effect
+        and what is left is a different fault, or the fix itself broke
+        something. If you pick "Different", you will be asked for the one line
+        in a reply.
+      options:
+        - "Same as before"
+        - "Different — one line saying how"
+        - "I never ran it without the fix"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Which CrossOver did you launch the bottle with?
+      description: >-
+        No command can answer this. The bundle can list every build installed
+        and read which one last touched the bottle, but bottles are shared
+        between installs, so what touched the prefix is not what ran it.
+      options:
+        - "CrossOver"
+        - "CrossOver Preview"
+        - "A patched or third-party build (e.g. winevideo)"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: steam-restart
+    attributes:
+      label: >-
+        After the last change to the bottle's settings, did you quit Steam
+        completely — not just the game — and then relaunch?
+      description: >-
+        Both bottle settings are read when the bottle starts and a live
+        wineserver keeps the old copy, so a setting that has not taken looks
+        exactly like a setting that did not work.
+      options:
+        - "Yes"
+        - "No"
+        - "I changed nothing"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: anti-cheat
+    attributes:
+      label: Anti-cheat
+      description: >-
+        Everything here patches a running process, which is exactly the
+        behaviour anti-cheat exists to stop. Reports about a protected title
+        are refused rather than debugged. This is already true of the six named
+        games; tick it yourself if you chose "Another Unreal Engine 5 title".
+      options:
+        - label: I confirm this title has no anti-cheat or anti-tamper.
+          required: true
+
+  - type: checkboxes
+    id: already-tried
+    attributes:
+      label: What have you already tried?
+      description: >-
+        Two of these change the reading of everything else. Verifying game files
+        puts the game's own carrier DLL back and removes the proxy, and `-dx11`
+        sidesteps both the Mortal Shell 2 crash and the Life is Strange freeze,
+        so a crash or freeze reported under it is a different fault.
+      options:
+        - label: Reverted and re-applied the fix
+        - label: Used Steam's "verify integrity of game files"
+        - label: Changed CX_GRAPHICS_BACKEND by hand
+        - label: Gave Persona 5 Strikers a bottle of its own
+        - label: Installed GStreamer 1.24.x
+        - label: Launched the game with -dx11
+        - label: Nothing yet
+
+  - type: textarea
+    id: crash-dialog
+    attributes:
+      label: The first three lines of the crash dialog, verbatim
+      description: >-
+        Only if you chose the Unreal crash dialog above; leave it empty
+        otherwise. The runtime patch aims at one crash, and a crash naming a
+        different function is one this tool will not help with. Three lines
+        settle that before anyone opens a log.
+      placeholder: |
+        Three lines, nothing more. It looks like this:
+
+        Unhandled Exception: EXCEPTION_ACCESS_VIOLATION reading address 0x0000000000000000
+        ...!FElectraMediaDecoderOutputBufferPoolBlock_DX12::AllocateBuffer()
+        ...!FVideoDecoderVPxElectra::ConvertDecodedImageToNV12orP010()
+    validations:
+      required: false
+
+  - type: textarea
+    id: support-bundle
+    attributes:
+      label: Support bundle
+      description: >-
+        Run this in Terminal, from the repository folder, with the game folder
+        you dropped on the app:
+        `diagnostics/support-bundle.sh "/path/to/steamapps/common/<Game>"`.
+        Paste everything it prints, inside a code fence — three backticks on a
+        line of their own before and after it, so nothing is eaten as Markdown.
+        Read the fenced bottle-name appendix at the end before you send, and
+        delete it if you would rather not share it.
+      placeholder: |
+        ```
+        the whole output of diagnostics/support-bundle.sh
+        ```
+    validations:
+      required: true

@@ -138,6 +138,12 @@ typedef struct { GUID guidMajorType; GUID guidSubtype; } REG_TYPE_INFO;
  * exactly like "the game never calls the decoder" -- a far more interesting
  * conclusion than "VirtualProtect refused", and the wrong one. An instrument
  * that can fail silently is worse than no instrument. */
+/* Set while DirectStorage is inside CreateQueue, so the capability questions it
+   asks can be told apart from the game's own. CheckFeatureSupport is called
+   constantly by everything; only this window is interesting. */
+static LONG in_create_queue_;
+static void *hooked_device_;
+
 static BOOL patch_slot(const char *what, void *obj, int slot,
                        void *replacement, void **saved)
 {
@@ -2291,6 +2297,27 @@ static HRESULT WINAPI my_res12_QI(void *self, const GUID *iid, void **out)
     return hr;
 }
 
+/* ID3D12Device::CheckFeatureSupport is slot 13. DXGI_ERROR_UNSUPPORTED out of
+   CreateQueue means DirectStorage asked this device what it could do and did not
+   like an answer. Logging every question and answer inside that window makes the
+   missing capability name itself. */
+#define SLOT_D3D12_CHECKFEATURE 13
+
+static HRESULT (WINAPI *real_CheckFeature)(void *, UINT, void *, UINT);
+
+static HRESULT WINAPI my_CheckFeature(void *self, UINT feature, void *data, UINT size)
+{
+    static LONG outside;
+    HRESULT hr = real_CheckFeature(self, feature, data, size);
+
+    if (in_create_queue_ || InterlockedIncrement(&outside) <= 8)
+        logf_("  %sCheckFeatureSupport(feature=%u, %u bytes) -> 0x%08lx  data[0]=0x%08x",
+              in_create_queue_ ? "[in CreateQueue] " : "",
+              feature, size, hr,
+              (data && size >= 4) ? *(const UINT32 *)data : 0);
+    return hr;
+}
+
 static HRESULT WINAPI my_CreateCommitted(void *self, const void *heap, UINT hflags,
                                          const void *desc, UINT state,
                                          const void *clear, const GUID *iid, void **out)
@@ -2333,6 +2360,16 @@ static HRESULT WINAPI my_D3D12CreateDevice(void *adapter, UINT level,
         if (!patch_slot("d3d12 CreateCommittedResource", *device,
                         SLOT_D3D12_CREATECOMMITTED, (void *)my_CreateCommitted, &cc))
             real_CreateCommitted = NULL;
+
+        hooked_device_ = *device;
+        {
+            static void *cf;
+            real_CheckFeature = (HRESULT (WINAPI *)(void *, UINT, void *, UINT))
+                                vt[SLOT_D3D12_CHECKFEATURE];
+            if (!patch_slot("d3d12 CheckFeatureSupport", *device,
+                            SLOT_D3D12_CHECKFEATURE, (void *)my_CheckFeature, &cf))
+                real_CheckFeature = NULL;
+        }
     }
     return hr;
 }
@@ -2483,25 +2520,24 @@ static void dump_at_(const char *what, ULONG_PTR addr, ULONG_PTR base, ULONG_PTR
     }
 }
 
-static LONG CALLBACK crash_context_(EXCEPTION_POINTERS *ep)
+static void report_crash_(EXCEPTION_POINTERS *ep, const char *how)
 {
-    static LONG reported;
     const EXCEPTION_RECORD *er = ep->ExceptionRecord;
     const CONTEXT *c = ep->ContextRecord;
     ULONG_PTR base, end, sp;
     MEMORY_BASIC_INFORMATION mbi;
     int shown;
 
-    if (er->ExceptionCode != EXCEPTION_ACCESS_VIOLATION) return EXCEPTION_CONTINUE_SEARCH;
-    if (er->NumberParameters < 2 || er->ExceptionInformation[1] != 0)
-        return EXCEPTION_CONTINUE_SEARCH;         /* not the null read we are after */
-    if (InterlockedIncrement(&reported) > 3)      return EXCEPTION_CONTINUE_SEARCH;
-
     base = (ULONG_PTR)GetModuleHandleW(NULL);
     end  = base + 0x3000000;
 
-    logf_("============ read of address 0 at +0x%llx ============",
+    logf_("============ %s: code 0x%08lx at +0x%llx ============",
+          how, er->ExceptionCode,
           (unsigned long long)((ULONG_PTR)er->ExceptionAddress - base));
+    if (er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && er->NumberParameters >= 2)
+        logf_("  %s address %p",
+              er->ExceptionInformation[0] ? "writing" : "reading",
+              (void *)er->ExceptionInformation[1]);
     logf_("  rax=%016llx rbx=%016llx rcx=%016llx rdx=%016llx",
           (unsigned long long)c->Rax, (unsigned long long)c->Rbx,
           (unsigned long long)c->Rcx, (unsigned long long)c->Rdx);
@@ -2536,11 +2572,47 @@ static LONG CALLBACK crash_context_(EXCEPTION_POINTERS *ep)
             dump_at_(tag, v, base, end);
         }
         else
-            logf_("  return address  +0x%llx", (unsigned long long)(v - base));
+        {
+            /* Print what runs immediately before the return: that is the call
+             * itself, and the instructions that loaded its arguments. */
+            char tag[48];
+            sprintf(tag, "call site  +0x%llx", (unsigned long long)(v - base - 32));
+            dump_at_(tag, v - 32, base, end);
+        }
         shown++;
     }
     logf_("======================================================");
+}
+
+/* Two ways in, because they see different things.
+
+   The vectored handler gets first refusal on every exception, which is how we
+   caught the read of address zero -- but Denuvo throws first-chance exceptions
+   as part of its own obfuscation, so this one stays narrowed to that fault.
+
+   The unhandled filter runs only when nothing else claimed the exception: it is
+   the last thing before Wine puts up its dialog. That makes it the honest report
+   of whatever actually kills the process, whatever kind of fault it is. */
+static LONG CALLBACK crash_context_(EXCEPTION_POINTERS *ep)
+{
+    static LONG reported;
+    const EXCEPTION_RECORD *er = ep->ExceptionRecord;
+
+    if (er->ExceptionCode != EXCEPTION_ACCESS_VIOLATION) return EXCEPTION_CONTINUE_SEARCH;
+    if (er->NumberParameters < 2 || er->ExceptionInformation[1] != 0)
+        return EXCEPTION_CONTINUE_SEARCH;
+    if (InterlockedIncrement(&reported) > 3)      return EXCEPTION_CONTINUE_SEARCH;
+
+    report_crash_(ep, "read of address 0");
     return EXCEPTION_CONTINUE_SEARCH;             /* let Wine print its dump too */
+}
+
+static LONG (WINAPI *prev_filter_)(EXCEPTION_POINTERS *);
+
+static LONG WINAPI fatal_filter_(EXCEPTION_POINTERS *ep)
+{
+    report_crash_(ep, "FATAL, nothing handled it");
+    return prev_filter_ ? prev_filter_(ep) : EXCEPTION_CONTINUE_SEARCH;
 }
 
 static HRESULT (WINAPI *real_DStorageGetFactory)(const GUID *, void **);
@@ -2600,8 +2672,83 @@ static HRESULT set_config1_cpu_only(const struct dstorage_config1 *from)
     cfg.DisableGpuDecompressionMetacommand = TRUE;
     cfg.DisableGpuDecompression            = TRUE;
 
+    /* ForceMappingLayer was tried here and made things worse: the game died
+     * earlier, before CreateQueue, and with a different kind of fault. The
+     * compatibility layer is evidently not a drop-in for what this engine does,
+     * so it stays off and the native path stays the thing to explain. */
+
     hr = real_DStorageSetConfiguration1(&cfg);
     logf_("  config out: GPU decompression forced OFF -> 0x%08lx", hr);
+    return hr;
+}
+
+/* IDStorageFactory::CreateQueue is slot 3. The crash dump shows the game calling
+   slot 9 -- IDStorageQueue::GetErrorEvent -- on a null object and storing the
+   result, which is exactly what an unchecked CreateQueue failure looks like. So
+   this reports the descriptor it asked for and what it got back. */
+#define SLOT_DS_CREATE_QUEUE 3
+
+struct dstorage_queue_desc
+{
+    UINT32       SourceType;
+    UINT16       Capacity;
+    INT16        Priority;
+    const char  *Name;
+    void        *Device;
+};
+
+static HRESULT (WINAPI *real_CreateQueue)(void *, const struct dstorage_queue_desc *,
+                                          const GUID *, void **);
+
+static HRESULT WINAPI my_CreateQueue(void *self, const struct dstorage_queue_desc *desc,
+                                     const GUID *iid, void **out)
+{
+    HRESULT hr;
+
+    /* Print the descriptor as raw dwords rather than trusting a layout. A first
+     * attempt here dereferenced what it took to be the name and crashed inside
+     * vsnprintf, which cost two runs and looked exactly like the game dying. The
+     * config struct was read this way and the raw values confirmed its shape, so
+     * the same discipline applies to anything else handed in by the game. */
+    if (desc)
+    {
+        const UINT32 *raw = (const UINT32 *)desc;
+        if (readable_(desc, 32))
+            logf_("IDStorageFactory::CreateQueue desc: %08x %08x %08x %08x %08x %08x %08x %08x",
+                  raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7]);
+        else
+            logf_("IDStorageFactory::CreateQueue desc: %p <unreadable>", (const void *)desc);
+
+        /* Only follow a name pointer once it is known to be mapped, and cap it. */
+        {
+            int off;
+            for (off = 8; off <= 16; off += 8)
+            {
+                const char *name;
+                memcpy(&name, (const BYTE *)desc + off, sizeof(name));
+                if (readable_(name, 1))
+                    logf_("  a name at +%d: \"%.31s\"", off, name);
+            }
+        }
+    }
+
+    if (desc && readable_(desc, 32))
+    {
+        void *dev;
+        memcpy(&dev, (const BYTE *)desc + 24, sizeof(dev));
+        logf_("  device=%p  (%s)", dev,
+              dev == hooked_device_ ? "the one we hooked"
+                                    : "NOT the device we hooked -- something wraps it");
+    }
+
+    InterlockedExchange(&in_create_queue_, 1);
+    hr = real_CreateQueue(self, desc, iid, out);
+    InterlockedExchange(&in_create_queue_, 0);
+
+    logf_("  -> 0x%08lx, queue=%p%s", hr, out ? *out : NULL,
+          (FAILED(hr) || !out || !*out)
+              ? "   << no queue -- and the game stores this without checking it"
+              : "");
     return hr;
 }
 
@@ -2621,6 +2768,14 @@ static HRESULT WINAPI my_DStorageGetFactory(const GUID *iid, void **out)
     hr = real_DStorageGetFactory ? real_DStorageGetFactory(iid, out) : E_NOTIMPL;
     logf_("DStorageGetFactory -> 0x%08lx%s", hr,
           FAILED(hr) ? "   << no factory: the game cannot stream its assets" : "");
+
+    /* Armed. The two runs that appeared to die from this patch were in fact
+     * dying inside its own log call, which the crash dump named outright:
+     * vsnprintf, formatting a name pointer that was never valid. The patch
+     * itself was innocent. */
+    if (SUCCEEDED(hr) && out && *out)
+        patch_slot("IDStorageFactory::CreateQueue", *out, SLOT_DS_CREATE_QUEUE,
+                   (void *)my_CreateQueue, (void **)&real_CreateQueue);
     return hr;
 }
 
@@ -2770,6 +2925,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
          * worker thread during startup, and this is the only reader that can
          * see through the anti-tamper encryption. */
         AddVectoredExceptionHandler(1, crash_context_);
+        prev_filter_ = SetUnhandledExceptionFilter(fatal_filter_);
         /* GetProcAddress has to be in place before the game resolves anything,
          * so it goes in here rather than on the worker thread. */
         *(void **)&real_GetProcAddress =
