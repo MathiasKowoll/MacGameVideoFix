@@ -85,13 +85,15 @@ videos".
 | [Mortal Shell 2](Mortal-Shell-2.md) | Unreal Engine 5.6.1 | Crash on the first cutscene | Runtime patch, 4 sites | D3DMetal | 12 | 26.3 · Preview | Fixed |
 | [Life is Strange: Reunion](Life-is-Strange-Reunion.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard | D3DMetal | 12 | Preview -- 26.3 crashes | Fixed |
 | [Life is Strange: Double Exposure](Life-is-Strange-Double-Exposure.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard, same DLL | D3DMetal | 12 | Preview -- 26.3 crashes | Fixed |
-| [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | Video bridge, D3D11 to D3D12 | D3DMetal | 12 | Preview -- no video on 26.3 | Fixed |
+| [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | Video bridge, D3D11 to D3D12 | D3DMetal | 12 | Preview -- crashes on 26.3 | Fixed |
 | [Beast of Reincarnation](Beast-of-Reincarnation.md) | Unreal Engine 5 | Startup video plays with sound, no picture | NV12 restored, Electra forced to software | D3DMetal | 12 | 26.3 · Preview | Fixed |
 | [Persona 5 Strikers](Persona-5-Strikers.md) | Koei Tecmo, in-house | Video never starts; sound only | Staged VC-1 codec, and a D3D9 to D3D11 bridge | **DXMT** | 11 | 26.3 and Preview | Fixed |
+| [Nioh](Nioh.md) | Koei Tecmo, in-house | Cutscene refuses to play, then crashes | Staged WMV3 codec, and the same D3D9 to D3D11 bridge | **DXMT** | 11 | Preview -- not tried on 26.3 | Fixed |
 
 **Backend and DX are not preferences, they are requirements.** Persona 5
-Strikers only works on DXMT: it needs a shared D3D9 surface handle, and DXMT
-implements sharing where D3DMetal has none to build on. The other five run on
+Strikers and Nioh only work on DXMT: both need a shared D3D9 surface handle,
+and DXMT implements sharing where D3DMetal has none to build on. The other five
+run on
 D3DMetal with the D3D12 renderer, which is also what keeps PSO precompilation
 -- `-dx11` dodges some of these faults and costs permanent shader-compilation
 stutter.
@@ -99,7 +101,7 @@ stutter.
 **Which CrossOver, and what "Preview" means.** Every measurement here was taken
 against CrossOver 26.3 and `crossover-preview-arm64-20260821`, and the CrossOver
 column says which of the two a title was measured on rather than which it might
-work on. Everything runs on that Preview. Two are confirmed on 26.3 as well.
+work on. Everything runs on that Preview. Three are confirmed on 26.3 as well.
 This project targets that Preview build, and it is what every title is measured
 and supported on. Three also run on stable 26.3 and the column says so, but as a
 bonus rather than a promise -- stable is not what gets tested before a release.
@@ -116,6 +118,12 @@ not usable under another, and none had been built for 26.3 yet.
 DYNASTY WARRIORS crashes there too; that much was run, while the reason given for
 it is read from the two installs' plugin sets rather than from watching it fail.
 
+Nioh is the one row whose CrossOver cell records an absence rather than a
+result: it was fixed on Preview and never launched on 26.3, so nothing is
+claimed either way. Its codec is staged the same way Strikers' is, which is the
+half that made Strikers portable, but the bridge half has only ever run against
+the Preview build's DXMT.
+
 **None of these games needs CrossOver patched, wherever the container can be
 opened.** That was not true when this project started, and it is the single
 biggest thing that changed. The qualifier is the whole of what remains, and it
@@ -128,8 +136,8 @@ ships the same codec in `.mp4`, which both builds handle. The plugin-by-plugin
 comparison the conclusion rests on is in [Findings](Findings.md), under *The
 container, not the codec*.
 
-Persona 5 Strikers is the one title needing a codec no CrossOver ships -- VC-1 --
-and that is staged beside it rather than patched into it.
+Two titles need a codec no CrossOver ships -- VC-1 for Persona 5 Strikers, WMV3
+for Nioh -- and both are staged beside the game rather than patched into it.
 
 None of these fixes decodes anything. The frames existed all along; they were
 being crashed on, mislabelled, or thrown away.

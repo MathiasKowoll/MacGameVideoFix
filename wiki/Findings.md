@@ -292,6 +292,91 @@ D3DMetal has none to build on: `GetSharedHandle` appears 17 times in DXMT's
 DXMT and on nothing else, and why a game in DYNASTY WARRIORS' position may work
 under a different backend instead — untested here.
 
+## The same bridge, a second game
+
+Nioh was fixed by the Persona 5 Strikers bridge with no change to what the
+bridge does. That is the strongest evidence so far that these repairs are
+general and only the carrier is not.
+
+**The gap, stated exactly.** The game asks D3D9 for a shared render target.
+Wine's `d3d9` creates it, returns `S_OK`, and hands back a share handle of zero.
+Nothing obliges a caller to survive that, and Nioh does not: it carries the null
+through to `mov rdx, [rdx+0x10]` on a worker thread and dies there. The repair
+is not to make video work. It is to hand back a handle that exists.
+
+    CreateRenderTarget(1920x1080 fmt=21, SHARED requested) -> S_OK, handle 0
+    sidecar: 1920x1080 texture, GetSharedHandle -> S_OK, handle 40000082
+    OpenSharedResource: our handle -- made a texture on the game's own device
+    StretchRect INTO it
+    source luma [420]: average 11, range 0..166   << has picture
+
+The luma line is why this is recorded as working rather than as reported
+working: a bridge that hands over a valid but empty surface produces a game that
+runs and a screen that is black, and the two are indistinguishable without
+reading the pixels.
+
+**What had to change was one slot number.** The bridge watched
+`IDirect3D9::CreateDevice`, slot 16. Nioh reaches its device through
+`Direct3DCreate9Ex` and `CreateDeviceEx`, slot 20, so the bridge armed a vtable
+the game never called and sat there logging two lines while the cutscene failed.
+Hooking an interface is not enough. A game can reach the same object through a
+different door, and on every D3D9 interface that has an Ex variant, that variant
+is a second door.
+
+Slot 20 is written only when the object came from `Direct3DCreate9Ex`. On a
+plain `IDirect3D9` that index is past the end of the vtable.
+
+**A crash that was not ours, and how that was settled.** The first Nioh run with
+the bridge installed crashed. What settled the attribution was not a comparison
+of addresses against an earlier dump -- none had been kept -- but the log: two
+lines, both of them patches, and no call ever reaching our code, so none of it
+could have taken part. One line in it reads like a failure and is not.
+`Direct3DCreate9Ex -> 0x00000000` looks like a null return; that function
+returns an `HRESULT`, so the value is `S_OK`.
+
+**What is not measured.** Nioh has run only on Preview and only on DXMT. Whether
+the bridge works under D3DMetal is not open in the same way -- the sidecar needs
+`GetSharedHandle`, which is `E_NOTIMPL` there -- but it has not been tried, and
+26.3 has not been tried at all.
+
+## Living outside CrossOver
+
+winevideo repairs several of these titles by replacing binaries inside the
+CrossOver installation: its payload carries a patched Wine `d3d9.dll`,
+`mfplat.dll` and `winegstreamer`, and its two D3D9 patches add the bridge handle
+and the sidecar upload to `d3d9` itself. This project reaches several of the
+same places from inside the game process. That is a trade, not an improvement,
+and anyone who finds both will ask about it.
+
+**What being outside buys.**
+
+*The fixes survive a CrossOver update.* A patched binary has to be rebuilt for
+every build it is applied to. winevideo declares stable 26.2 or 26.3 and states
+that Preview is not supported; that follows from what it ships rather than from
+a preference. The patches here survived a CrossOver version change without
+recompiling, which is the property that makes targeting a Preview build possible
+at all.
+
+*Nothing is redistributed.* No modified Wine binaries leave this repository, and
+a fix is removed by deleting one file from the game folder.
+
+*The findings stay reportable.* Every conclusion here is stated at the level of
+an interface or an instruction -- D3DMetal's per-title override table, the
+`Disable*` fields in `DSTORAGE_CONFIGURATION1`, the share handle of zero. That
+form is directly actionable for whoever maintains the runtime. A diff against a
+Wine tree is not the same offer.
+
+*Old games hold still.* These titles will not ship another patch, so teaching the
+bridge which entry point one of them uses is a cost paid once rather than
+maintenance.
+
+**What being outside costs.** A hook in the game process reaches only what the
+game calls. A repair living in `d3d9` sees every surface presented no matter
+which entry point created it; this one saw nothing at all until it was told
+about slot 20, and that is the general shape of the weakness rather than a
+single oversight. The tamper-protection limit noted under *The staged codecs*
+applies here too.
+
 ## Getting a fix into the process
 
 How a repair reaches the code it has to change: the patch itself, the DLL it
@@ -415,7 +500,7 @@ own official GStreamer install. The staging, the dyld crash that made re-homing
 necessary, and the layout trap that cost a first attempt are on
 [that title's page](Persona-5-Strikers.md).
 
-Three things about the staging are not title-specific.
+Four things about the staging are not title-specific.
 
 **What else is in that plugin.** `libgstlibav` carries ffmpeg. VC-1 is what this
 title needs and what was measured, by the game playing. WMV3 and WMA are in the
@@ -431,6 +516,22 @@ ABI policy and not a measurement. `stage-codecs.sh` prints the version it finds
 and says so when it is outside 1.24, reporting rather than refusing: turning
 away something that might work is as unhelpful as staying quiet about something
 that might not.
+
+**A plugin that never loaded.** Staging re-homes the plugin's `@rpath`
+dependencies beside it, and the first version followed exactly one level: link
+what the plugin itself names, stop there. That held until a library CrossOver
+ships turned out to want a sibling -- `libgstpbutils` wants `libgsttag` -- and
+dyld resolves that `@rpath` against the staging directory rather than against
+CrossOver's. The plugin then fails to load outright, silently, leaving no trace
+but a GStreamer warning nobody reads. `libgstlibav` had never loaded, for any
+title, for as long as the staging existed. It now follows the whole chain.
+
+That fix is what took Nioh's DMO `Init` from `0xD0000001` to `S_OK` and let the
+DirectShow graph build. It also means any earlier conclusion drawn from a run
+where the staged codec appeared to do nothing was drawn from a run where it was
+not loaded at all, and one such conclusion is still open: Persona 5 Strikers
+played while the plugin was never loading, so whatever decodes its VC-1 is not
+the staged ffmpeg. That has not been chased down.
 
 **Per-engine staging.** Every installed CrossOver gets its own staging
 directory, keyed by the engine's `CFBundleVersion` — the same string a bottle
