@@ -9,7 +9,7 @@ the same fix.
 | Cause | `IDXGIAdapter3::QueryVideoMemoryInfo` succeeds for node indices the adapter does not have |
 | Fix | Refuse them — the same DLL Reunion uses |
 | winevideo | Not required — the fault is in DXGI, not in video |
-| Status | **Fix installed, not yet confirmed in play** |
+| Status | **Fixed** — confirmed in play |
 
 ## What was actually checked
 
@@ -22,9 +22,9 @@ Reunion. That is the loop described in full on
 The fix is the same file, installed the same way, and it is one DLL for both
 titles rather than a per-game build.
 
-**This row will say "fixed" once it has survived a session that would
-previously have frozen, and not before.** A static match says the loop is
-there; it does not say nothing else is also wrong.
+It has since been confirmed in play, on the merged DLL: the guard armed and
+refused node 1 exactly once, which is the signature of the fix taking hold --
+Unreal takes the node count from that answer and stops asking.
 
 ---
 
