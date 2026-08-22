@@ -2,16 +2,17 @@
 
 Makes Windows games show their cutscenes under CrossOver on Apple Silicon.
 
-Five games so far, failing for reasons that have almost nothing in common.
+Six games so far, failing for reasons that have almost nothing in common.
 They install the same way: open the app, pick the game from the list, drop its
 folder on it, press Apply.
-
-| --- | --- | --- | --- |
-| [**Mortal Shell 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Mortal-Shell-2) | Crash on the first cutscene | Runtime patch |
-| [**Life is Strange: Reunion**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Reunion) | Runs, then freezes after a while | Runtime patch |
-| [**Life is Strange: Double Exposure**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Double-Exposure) | Runs, then freezes after a while | Runtime patch |
-| [**Beast of Reincarnation**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Beast-of-Reincarnation) | Startup video plays with sound, no picture | NV12 restored, Electra forced to software |
-| [**DYNASTY WARRIORS: ORIGINS**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Dynasty-Warriors-Origins) | Cutscene plays with sound, picture black | Video bridge |
+| Game | Symptom | Fix | Backend | DX |
+| --- | --- | --- | --- | --- |
+| [**Mortal Shell 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Mortal-Shell-2) | Crash on the first cutscene | Runtime patch | D3DMetal | 12 |
+| [**Life is Strange: Reunion**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Reunion) | Runs, then freezes after a while | Runtime patch | D3DMetal | 12 |
+| [**Life is Strange: Double Exposure**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Double-Exposure) | Runs, then freezes after a while | Runtime patch | D3DMetal | 12 |
+| [**Beast of Reincarnation**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Beast-of-Reincarnation) | Startup video plays with sound, no picture | NV12 restored, Electra forced to software | D3DMetal | 12 |
+| [**Persona 5 Strikers**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Persona-5-Strikers) | Video never starts; sound only | Staged VC-1 codec, D3D9 → D3D11 bridge | **DXMT** | 11 |
+| [**DYNASTY WARRIORS: ORIGINS**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Dynasty-Warriors-Origins) | Cutscene plays with sound, picture black | Video bridge | D3DMetal | 12 |
 
 Each row links to a page in the [wiki](https://github.com/MathiasKowoll/MacGameVideoFix/wiki) with that game's findings and fix.
 
@@ -501,10 +502,36 @@ signed, targeting arm64 macOS 14+.
 DXMT are free software that can be read and modified — copyleft keeps any
 derivative of this work equally available.
 
+## The staged codecs, and where they come from
+
+Persona 5 Strikers needs a VC-1 decoder CrossOver does not ship. **We do not
+distribute one.** `runtime/stage-codecs.sh` borrows it from the official
+GStreamer you already have installed:
+
+- **[GStreamer](https://gstreamer.freedesktop.org)** — install the *runtime*
+  package for macOS. `libgstlibav` in it carries ffmpeg, which decodes VC-1,
+  WMV3 and WMA.
+
+The script copies that one plugin and ffmpeg into a directory of its own,
+symlinks the GStreamer core to **CrossOver's** copy, and points the bottle at
+it with `GST_PLUGIN_PATH`. Nothing is patched and nothing is redistributed.
+
+**The idea is not ours.** [winevideo](https://github.com/Jfishin/winevideo)
+does this too — its README describes importing WMV/VC-1 codecs from the user's
+official GStreamer install, and it requires GStreamer 1.24.13 for exactly the
+titles that need them. What differs is only the mechanism: winevideo patches
+the CrossOver installation to make those plugins loadable, and this reaches the
+same end with one staged folder and one line of bottle configuration, because
+CrossOver's launcher never sets `GST_PLUGIN_PATH` and the bottle's environment
+is applied first.
+
 ## Credits
 
 - [CrossOver](https://www.codeweavers.com/crossover) by CodeWeavers, and
   [Wine](https://www.winehq.org/) underneath it.
+- **[GStreamer](https://gstreamer.freedesktop.org)**, whose official macOS
+  build supplies the VC-1 decoder Persona 5 Strikers needs. It is borrowed from
+  an installation you already have, never redistributed here.
 - **[winevideo](https://github.com/Jfishin/winevideo) by Jfishin.** None of
   this would exist without it. Its patches are where every one of these faults
   was first identified: that Electra will accept NV12 and nothing else, that

@@ -805,6 +805,43 @@ final class Runner: ObservableObject {
 
     var selectedHits: [ScanHit] { plan.filter { $0.selected && $0.actionable } }
 
+    /// Stages the codec and points every bottle that runs a game at it.
+    func stageCodecs() {
+        guard Codecs.gstreamerInstalled else {
+            note("")
+            note("GStreamer is not installed. Get the runtime package from")
+            note("https://gstreamer.freedesktop.org and run this again.")
+            note("Nothing is redistributed here -- the decoder is borrowed from")
+            note("your own install, which is how winevideo does it too.")
+            status = "GStreamer missing."
+            return
+        }
+        busy = true
+        Task {
+            defer { busy = false; indeterminate = false; phaseLabel = "" }
+            status = "Staging the codec…"
+            let script = resources.appendingPathComponent("stage-codecs.sh").path
+            let ok = await run(.installingBridge, "/bin/bash", [script, "x86_64"])
+            guard ok else { status = "Staging failed."; return }
+
+            var touched: [String] = []
+            for bottle in Bottle.candidates(forProject: "P5S").map(\.url)
+                        + ((try? FileManager.default.contentsOfDirectory(
+                              at: Bottle.root, includingPropertiesForKeys: nil)) ?? []) {
+                if FileManager.default.fileExists(
+                    atPath: bottle.appendingPathComponent("cxbottle.conf").path),
+                   Codecs.configure(bottle: bottle) == nil {
+                    touched.append(bottle.lastPathComponent)
+                }
+            }
+            note("")
+            note("Codec staged, and \(touched.count) bottle(s) pointed at it.")
+            note("Close Steam completely before relaunching: this is bottle")
+            note("configuration, and a live wineserver keeps the old copy.")
+            status = "Codec ready."
+        }
+    }
+
     func enterBulk() {
         bulk = true
         plan = []
@@ -1018,6 +1055,71 @@ final class Runner: ObservableObject {
     }
 
 }
+
+// MARK: - The codec Persona 5 Strikers needs
+
+/// Staging a decoder CrossOver does not ship, and telling the bottle about it.
+///
+/// Only one game here needs this, and it needs it absolutely: without a VC-1
+/// decoder there is nothing for its bridge to carry. Nothing is redistributed
+/// -- the plugin is borrowed from the official GStreamer install the user
+/// already has, which is also how winevideo does it. What differs is only that
+/// this stages a folder and writes one line of bottle configuration instead of
+/// patching the CrossOver installation.
+enum Codecs {
+    static let framework = "/Library/Frameworks/GStreamer.framework"
+
+    static var gstreamerInstalled: Bool {
+        FileManager.default.fileExists(atPath: framework)
+    }
+
+    static var stagedPath: String {
+        (NSHomeDirectory() as NSString)
+            .appendingPathComponent("Library/Application Support/MacGameVideoFix/gst-codecs/x86_64/gstreamer-1.0")
+    }
+
+    static var staged: Bool {
+        FileManager.default.fileExists(
+            atPath: (stagedPath as NSString).appendingPathComponent("libgstlibav.dylib"))
+    }
+
+    /// Bottles that already point at the staged folder.
+    static func bottlesConfigured() -> [String] {
+        (try? FileManager.default.contentsOfDirectory(at: Bottle.root, includingPropertiesForKeys: nil))?
+            .filter { bottle in
+                guard let conf = try? String(contentsOf: bottle.appendingPathComponent("cxbottle.conf"),
+                                             encoding: .utf8) else { return false }
+                return conf.contains("GST_PLUGIN_PATH")
+            }
+            .map(\.lastPathComponent) ?? []
+    }
+
+    /// Adds GST_PLUGIN_PATH to a bottle, once.
+    ///
+    /// The bottle's environment is applied before CrossOver's launcher runs,
+    /// and the launcher never sets this variable, so the entry survives. A
+    /// live wineserver caches the old configuration, which is why the caller
+    /// is told to close the game entirely rather than just relaunch it.
+    static func configure(bottle: URL) -> String? {
+        let conf = bottle.appendingPathComponent("cxbottle.conf")
+        guard var text = try? String(contentsOf: conf, encoding: .utf8) else {
+            return "Cannot read \(bottle.lastPathComponent)'s configuration."
+        }
+        if text.contains("GST_PLUGIN_PATH") { return nil }
+        guard let range = text.range(of: "[EnvironmentVariables]") else {
+            return "\(bottle.lastPathComponent) has no [EnvironmentVariables] section."
+        }
+        text.replaceSubrange(range,
+            with: "[EnvironmentVariables]\n\"GST_PLUGIN_PATH\" = \"\(stagedPath)\"")
+        do {
+            try text.write(to: conf, atomically: true, encoding: .utf8)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+}
+
 
 // MARK: - Bottles, and the per-game Engine.ini
 
@@ -1504,6 +1606,37 @@ struct ContentView: View {
         }
     }
 
+    /// Only shown when a scanned game needs it, so it is not a permanent
+    /// button for a thing five of the six games have nothing to do with.
+    private var codecBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: Codecs.staged ? "checkmark.seal" : "shippingbox")
+                .foregroundStyle(Codecs.staged ? .green : .orange)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(Codecs.staged ? "VC-1 codec staged" : "Persona 5 Strikers needs a VC-1 codec")
+                    .font(.callout.weight(.medium))
+                Text(Codecs.staged
+                     ? "Borrowed from your GStreamer install and pointed at from "
+                     + "\(Codecs.bottlesConfigured().count) bottle(s)."
+                     : Codecs.gstreamerInstalled
+                       ? "CrossOver does not ship one. It can be borrowed from the "
+                       + "GStreamer you already have — nothing is redistributed."
+                       : "Install GStreamer's macOS runtime package first, from "
+                       + "gstreamer.freedesktop.org.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            if !Codecs.staged {
+                Button("Stage codec") { runner.stageCodecs() }
+                    .disabled(runner.busy || !Codecs.gstreamerInstalled)
+            }
+        }
+        .padding(11)
+        .background(RoundedRectangle(cornerRadius: 10)
+            .fill((Codecs.staged ? Color.green : Color.orange).opacity(0.08)))
+    }
+
     private var planTable: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -1518,6 +1651,10 @@ struct ContentView: View {
 
             if runner.scanning {
                 ProgressView().progressViewStyle(.linear)
+            }
+
+            if runner.plan.contains(where: { $0.game.extraRequirement != nil }) {
+                codecBanner
             }
 
             ScrollView {
