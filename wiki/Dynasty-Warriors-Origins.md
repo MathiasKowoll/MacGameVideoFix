@@ -53,7 +53,8 @@ the claim rests on, and why [Mortal Shell 2](Mortal-Shell-2.md) is not the
 control it looks like, are in [Findings](Findings.md), under *The container, not
 the codec*.
 
-**This title was never launched on stable at all**: everything claimed about
+**The reason is inferred, not instrumented.** The title was launched on stable
+and crashed; what was not done is watch it fail. Everything claimed about
 stable here is read from the plugin sets, not from a run.
 
 So the honest requirement is narrower than "needs winevideo": it needs something

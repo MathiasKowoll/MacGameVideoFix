@@ -35,7 +35,7 @@ GAMES = [
      "Fixed", "Life-is-Strange-Double-Exposure"),
     ("DYNASTY WARRIORS: ORIGINS", "Koei Tecmo, in-house",
      "Cutscene runs with sound, picture black", "Video bridge, D3D11 to D3D12",
-     "D3DMetal", "12", "Preview -- 26.3 never launched",
+     "D3DMetal", "12", "Preview -- crashes on 26.3",
      "Fixed", "Dynasty-Warriors-Origins"),
     ("Beast of Reincarnation", "Unreal Engine 5",
      "Startup video plays with sound, no picture", "NV12 restored, Electra forced to software",
