@@ -31,6 +31,8 @@ static const char *process_name(void)
     return who;
 }
 
+static LONG log_lines;
+
 static void logf_(const char *fmt, ...)
 {
     char buf[1024];
@@ -47,6 +49,8 @@ static void logf_(const char *fmt, ...)
     if (m < 0) return;
     n += m;
     buf[n] = '\n';
+
+    if (InterlockedIncrement(&log_lines) > 300) return;
 
     h = CreateFileA(LOGFILE, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -957,10 +961,106 @@ static HRESULT WINAPI my_MFTEnumEx(GUID category, UINT32 flags,
     return hr;
 }
 
+
+/* Follow the source reader itself.
+ *
+ * The reader is created and the file opens -- so the container is fine, and
+ * everything about codecs and registration is settled. What is not settled is
+ * what happens next: which streams the reader offers, whether the game and the
+ * reader agree a media type, and whether ReadSample ever returns a sample.
+ *
+ * IMFSourceReader vtable, after IUnknown's three:
+ *   GetStreamSelection 3, SetStreamSelection 4, GetNativeMediaType 5,
+ *   GetCurrentMediaType 6, SetCurrentMediaType 7, SetCurrentPosition 8,
+ *   ReadSample 9, Flush 10, GetServiceForStream 11, GetPresentationAttribute 12
+ */
+#define SLOT_GET_NATIVE_TYPE  5
+#define SLOT_SET_CURRENT_TYPE 7
+#define SLOT_READ_SAMPLE      9
+
+static HRESULT (WINAPI *real_GetNativeMediaType)(void *, DWORD, DWORD, void **);
+static HRESULT (WINAPI *real_SetCurrentMediaType)(void *, DWORD, DWORD *, void *);
+static HRESULT (WINAPI *real_ReadSample)(void *, DWORD, DWORD, DWORD *, DWORD *,
+                                         LONGLONG *, void **);
+
+static HRESULT WINAPI my_GetNativeMediaType(void *self, DWORD stream, DWORD index, void **type)
+{
+    HRESULT hr = real_GetNativeMediaType(self, stream, index, type);
+    if (SUCCEEDED(hr) && type && *type)
+    {
+        GUID sub;
+        if (type_subtype(*type, &sub))
+        {
+            char label[48];
+            snprintf(label, sizeof(label), "stream %lu offers", stream);
+            describe_subtype(label, &sub);
+        }
+    }
+    else if (hr != 0xC00D36B3L /* MF_E_NO_MORE_TYPES */ && hr != 0xC00D36BAL)
+        logf_("GetNativeMediaType(stream %lu, %lu) -> 0x%08lx", stream, index, hr);
+    return hr;
+}
+
+static HRESULT WINAPI my_SetCurrentMediaType(void *self, DWORD stream, DWORD *reserved, void *type)
+{
+    HRESULT hr = real_SetCurrentMediaType(self, stream, reserved, type);
+    GUID sub;
+    if (type && type_subtype(type, &sub))
+    {
+        char label[64];
+        snprintf(label, sizeof(label), "stream %lu asked for", stream);
+        describe_subtype(label, &sub);
+    }
+    logf_("SetCurrentMediaType(stream %lu) -> 0x%08lx%s", stream, hr,
+          FAILED(hr) ? "   << no agreed format on this stream" : "");
+    return hr;
+}
+
+static HRESULT WINAPI my_ReadSample(void *self, DWORD stream, DWORD flags,
+                                    DWORD *actual, DWORD *sflags,
+                                    LONGLONG *ts, void **sample)
+{
+    static LONG calls, got, failed;
+    HRESULT hr = real_ReadSample(self, stream, flags, actual, sflags, ts, sample);
+    LONG n = InterlockedIncrement(&calls);
+    if (SUCCEEDED(hr) && sample && *sample)
+    {
+        LONG g = InterlockedIncrement(&got);
+        if (g == 1 || g == 50)
+            logf_("ReadSample: sample %ld arrived  << the reader is producing", g);
+    }
+    else if (FAILED(hr))
+    {
+        if (InterlockedIncrement(&failed) == 1)
+            logf_("ReadSample -> 0x%08lx on call %ld  << nothing comes out", hr, n);
+    }
+    else if (n == 1 || n == 200)
+        logf_("ReadSample: no sample, flags 0x%lx (call %ld, %ld so far)",
+              sflags ? *sflags : 0, n, got);
+    return hr;
+}
+
 static HRESULT WINAPI my_MFCreateSourceReaderFromByteStream(void *stream, void *attrs, void **reader)
 {
+    static LONG made;
     HRESULT hr = real_MFCreateSourceReaderFromByteStream(stream, attrs, reader);
-    logf_("MFCreateSourceReaderFromByteStream -> 0x%08lx", hr);
+    LONG n = InterlockedIncrement(&made);
+    if (n == 1 || FAILED(hr))
+        logf_("MFCreateSourceReaderFromByteStream -> 0x%08lx (reader %ld)", hr, n);
+    if (SUCCEEDED(hr) && reader && *reader)
+    {
+        static void *gn, *sc, *rs;
+        patch_slot("GetNativeMediaType",  *reader, SLOT_GET_NATIVE_TYPE,
+                   (void *)my_GetNativeMediaType,  &gn);
+        patch_slot("SetCurrentMediaType", *reader, SLOT_SET_CURRENT_TYPE,
+                   (void *)my_SetCurrentMediaType, &sc);
+        patch_slot("ReadSample",          *reader, SLOT_READ_SAMPLE,
+                   (void *)my_ReadSample,          &rs);
+        real_GetNativeMediaType  = (HRESULT (WINAPI *)(void *, DWORD, DWORD, void **))gn;
+        real_SetCurrentMediaType = (HRESULT (WINAPI *)(void *, DWORD, DWORD *, void *))sc;
+        real_ReadSample = (HRESULT (WINAPI *)(void *, DWORD, DWORD, DWORD *, DWORD *,
+                                              LONGLONG *, void **))rs;
+    }
     return hr;
 }
 
@@ -1041,6 +1141,120 @@ static void *hook_import(const char *dll, const char *func, void *replacement)
     return original;
 }
 
+
+/* Watch the D3D9 side, where this game is understood to stop.
+ *
+ * The reader negotiates video and audio and then never reads a sample, so the
+ * player gives up before asking for data. Persona 5 Strikers decodes with
+ * Media Foundation on D3D11 and presents through D3D9, sharing a surface
+ * between the two, and Wine's d3d9 answers "Resource sharing not implemented"
+ * -- the string is still in Preview's copy.
+ *
+ * That is the shape of the explanation, and it is exactly the kind of tidy
+ * story that has been wrong three times today, so it gets measured.
+ *
+ * IDirect3D9:      CreateDevice 16
+ * IDirect3DDevice9: CreateTexture 23, CreateRenderTarget 28,
+ *                   CreateOffscreenPlainSurface 36
+ */
+#define SLOT_D3D9_CREATE_DEVICE   16
+#define SLOT_DEV_CREATE_TEXTURE   23
+#define SLOT_DEV_CREATE_RT        28
+#define SLOT_DEV_CREATE_OFFSCREEN 36
+
+static void *(WINAPI *real_Direct3DCreate9)(UINT);
+static HRESULT (WINAPI *real_Direct3DCreate9Ex)(UINT, void **);
+static HRESULT (WINAPI *real_CreateDevice)(void *, UINT, DWORD, HWND, DWORD, void *, void **);
+static HRESULT (WINAPI *real_CreateTexture)(void *, UINT, UINT, UINT, DWORD, DWORD, DWORD, void **, HANDLE *);
+static HRESULT (WINAPI *real_CreateRenderTarget)(void *, UINT, UINT, DWORD, DWORD, DWORD, BOOL, void **, HANDLE *);
+static HRESULT (WINAPI *real_CreateOffscreen)(void *, UINT, UINT, DWORD, DWORD, void **, HANDLE *);
+
+static void note_shared(const char *what, UINT w, UINT h, DWORD fmt,
+                        HRESULT hr, HANDLE *shared)
+{
+    static LONG said[4];
+    int i = what[0] & 3;
+    if (!shared) return;                 /* not a sharing request; uninteresting */
+    if (InterlockedIncrement(&said[i]) > 3) return;
+    logf_("%s(%ux%u fmt=%lu, SHARED requested) -> 0x%08lx, handle %p%s",
+          what, w, h, fmt, hr, *shared,
+          (SUCCEEDED(hr) && !*shared)
+              ? "   << succeeded but handed back no handle: nothing to share"
+              : "");
+}
+
+static HRESULT WINAPI my_CreateTexture(void *self, UINT w, UINT h, UINT levels,
+                                       DWORD usage, DWORD fmt, DWORD pool,
+                                       void **tex, HANDLE *shared)
+{
+    HRESULT hr = real_CreateTexture(self, w, h, levels, usage, fmt, pool, tex, shared);
+    note_shared("CreateTexture", w, h, fmt, hr, shared);
+    return hr;
+}
+
+static HRESULT WINAPI my_CreateRenderTarget(void *self, UINT w, UINT h, DWORD fmt,
+                                            DWORD ms, DWORD msq, BOOL lockable,
+                                            void **surface, HANDLE *shared)
+{
+    HRESULT hr = real_CreateRenderTarget(self, w, h, fmt, ms, msq, lockable, surface, shared);
+    note_shared("CreateRenderTarget", w, h, fmt, hr, shared);
+    return hr;
+}
+
+static HRESULT WINAPI my_CreateOffscreen(void *self, UINT w, UINT h, DWORD fmt,
+                                         DWORD pool, void **surface, HANDLE *shared)
+{
+    HRESULT hr = real_CreateOffscreen(self, w, h, fmt, pool, surface, shared);
+    note_shared("CreateOffscreenPlainSurface", w, h, fmt, hr, shared);
+    return hr;
+}
+
+static HRESULT WINAPI my_CreateDevice(void *self, UINT adapter, DWORD type, HWND focus,
+                                      DWORD flags, void *params, void **device)
+{
+    HRESULT hr = real_CreateDevice(self, adapter, type, focus, flags, params, device);
+    logf_("IDirect3D9::CreateDevice -> 0x%08lx", hr);
+    if (SUCCEEDED(hr) && device && *device)
+    {
+        static void *ct, *rt, *op;
+        patch_slot("d3d9 CreateTexture",      *device, SLOT_DEV_CREATE_TEXTURE,
+                   (void *)my_CreateTexture,   &ct);
+        patch_slot("d3d9 CreateRenderTarget", *device, SLOT_DEV_CREATE_RT,
+                   (void *)my_CreateRenderTarget, &rt);
+        patch_slot("d3d9 CreateOffscreen",    *device, SLOT_DEV_CREATE_OFFSCREEN,
+                   (void *)my_CreateOffscreen, &op);
+        real_CreateTexture = (HRESULT (WINAPI *)(void *, UINT, UINT, UINT, DWORD, DWORD, DWORD, void **, HANDLE *))ct;
+        real_CreateRenderTarget = (HRESULT (WINAPI *)(void *, UINT, UINT, DWORD, DWORD, DWORD, BOOL, void **, HANDLE *))rt;
+        real_CreateOffscreen = (HRESULT (WINAPI *)(void *, UINT, UINT, DWORD, DWORD, void **, HANDLE *))op;
+    }
+    return hr;
+}
+
+static void watch_d3d9_object(void *d3d9)
+{
+    static void *cd;
+    if (!d3d9) return;
+    if (patch_slot("d3d9 CreateDevice", d3d9, SLOT_D3D9_CREATE_DEVICE,
+                   (void *)my_CreateDevice, &cd))
+        real_CreateDevice = (HRESULT (WINAPI *)(void *, UINT, DWORD, HWND, DWORD, void *, void **))cd;
+}
+
+static void *WINAPI my_Direct3DCreate9(UINT sdk)
+{
+    void *d3d9 = real_Direct3DCreate9(sdk);
+    logf_("Direct3DCreate9 -> %p", d3d9);
+    watch_d3d9_object(d3d9);
+    return d3d9;
+}
+
+static HRESULT WINAPI my_Direct3DCreate9Ex(UINT sdk, void **out)
+{
+    HRESULT hr = real_Direct3DCreate9Ex(sdk, out);
+    logf_("Direct3DCreate9Ex -> 0x%08lx", hr);
+    if (SUCCEEDED(hr) && out) watch_d3d9_object(*out);
+    return hr;
+}
+
 static DWORD WINAPI worker(LPVOID unused)
 {
     (void)unused;
@@ -1052,6 +1266,47 @@ static DWORD WINAPI worker(LPVOID unused)
         if (GetEnvironmentVariableA("BEAST_FORCE_NV12", v, sizeof(v)) && v[0] == '1')
             restore_nv12 = TRUE;
     }
+    /* Hook the import table as well as GetProcAddress.
+     *
+     * The version of this probe that found Beast of Reincarnation's faults only
+     * hooked GetProcAddress, because that game delay-loads Media Foundation and
+     * resolves every entry point through it. Persona 5 Strikers imports the
+     * same functions normally, so the loader binds them and GetProcAddress is
+     * never asked -- the probe watched an empty road and reported no traffic.
+     *
+     * Both are needed, and neither implies the other. */
+    {
+        struct { const char *dll, *fn; void *ours; void **real; } hooks[] = {
+            { "mfplat.dll",      "MFStartup",
+              (void *)my_MFStartup,      (void **)&real_MFStartup },
+            { "mfplat.dll",      "MFTEnumEx",
+              (void *)my_MFTEnumEx,      (void **)&real_MFTEnumEx },
+            { "mfreadwrite.dll", "MFCreateSourceReaderFromByteStream",
+              (void *)my_MFCreateSourceReaderFromByteStream,
+              (void **)&real_MFCreateSourceReaderFromByteStream },
+            { "mfreadwrite.dll", "MFCreateSourceReaderFromURL",
+              (void *)my_MFCreateSourceReaderFromURL,
+              (void **)&real_MFCreateSourceReaderFromURL },
+        };
+        size_t i;
+        int got = 0;
+        for (i = 0; i < sizeof(hooks) / sizeof(hooks[0]); i++)
+        {
+            void *was = hook_import(hooks[i].dll, hooks[i].fn, hooks[i].ours);
+            if (was) { *hooks[i].real = was; got++; }
+        }
+        {
+            void *was;
+            if ((was = hook_import("d3d9.dll", "Direct3DCreate9", (void *)my_Direct3DCreate9)))
+                { *(void **)&real_Direct3DCreate9 = was; got++; }
+            if ((was = hook_import("d3d9.dll", "Direct3DCreate9Ex", (void *)my_Direct3DCreate9Ex)))
+                { *(void **)&real_Direct3DCreate9Ex = was; got++; }
+        }
+        logf_("import table: %d of %d Media Foundation and D3D9 entries hooked "
+              "(0 here means this game resolves them some other way)",
+              got, (int)(sizeof(hooks) / sizeof(hooks[0])) + 2);
+    }
+
     logf_("---- armed: D3D manager %s from the MFT | NV12 relabel %s | "
           "MFCreateDXGIDeviceManager %s ----",
           withhold_d3d_from_mft ? "WITHHELD" : "passed",
