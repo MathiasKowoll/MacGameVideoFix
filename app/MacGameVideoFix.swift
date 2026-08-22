@@ -2842,6 +2842,10 @@ struct ContentView: View {
     /// together today, and a shared highlight would be a quiet bug the first
     /// time they did.
     @State private var droppingLibrary = false
+    /// Collapsed by default: the manual path is the advanced one. Opened
+    /// automatically when the survey found nothing to offer, because then it is
+    /// the only path there is.
+    @State private var showManualLibrary = false
     @State private var follow = true
 
     var body: some View {
@@ -3684,12 +3688,37 @@ struct ContentView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             } else {
-                libraryDropZone
-                Text("The folder holding steamapps works too, and so does one "
-                   + "game's folder — it is traced back to the library it sits in.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                // What the app already knows comes first, and the manual way
+                // second. Someone who installs games through Steam and CrossOver
+                // has no reason to know where a bottle keeps its library, and
+                // asking them to drag a folder they cannot name is asking them
+                // to fail. The bottles are read anyway; offering the answer
+                // before the question costs nothing.
                 discoveredLibraries
+
+                DisclosureGroup(isExpanded: $showManualLibrary) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        libraryDropZone
+                        Text("The folder holding steamapps works too, and so does "
+                           + "one game's folder — it is traced back to the library "
+                           + "it sits in.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.top, 6)
+                } label: {
+                    Text(runner.survey?.libraries.isEmpty ?? false
+                         ? "Point at it yourself"
+                         : "Somewhere else — point at it yourself")
+                        .font(.caption)
+                }
+                .onChange(of: runner.survey?.libraries.count ?? -1) { _, n in
+                    // Nothing to offer means the manual path is not the advanced
+                    // one any more; it is the only one. Opening it beats leaving
+                    // someone staring at a collapsed row after being told no
+                    // library was found.
+                    if n == 0 { showManualLibrary = true }
+                }
             }
         }
     }
