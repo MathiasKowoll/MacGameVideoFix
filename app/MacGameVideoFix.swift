@@ -1330,11 +1330,18 @@ extension SupportedGame {
     /// and has to appear as a row saying so rather than vanish from the scan.
     func isRooted(at folder: URL) -> Bool {
         guard let exe = executable else { return false }
-        if case .dynastyWarriors = self {
+        /// Two layouts, and getting them the wrong way round loses a game
+        /// silently. Unreal titles keep the shipping binary at
+        /// <folder>/<Project>/Binaries/Win64; the Koei Tecmo ones put it in the
+        /// folder itself. Persona 5 Strikers was missing from every scan
+        /// because it was being looked for in the Unreal place.
+        switch self {
+        case .dynastyWarriors, .personaStrikers:
             return FileManager.default.fileExists(
                 atPath: folder.appendingPathComponent(exe).path)
+        default:
+            return GameFolder(root: folder).hasExecutable(exe)
         }
-        return GameFolder(root: folder).hasExecutable(exe)
     }
 }
 
@@ -1670,6 +1677,12 @@ struct ContentView: View {
 
     /// Built as a plain string rather than inline: the compiler gave up
     /// type-checking the nested conditionals in reasonable time.
+    /// True when every row that can be acted on already is.
+    private var allSelected: Bool {
+        let actionable = runner.plan.filter(\.actionable)
+        return !actionable.isEmpty && actionable.allSatisfy(\.selected)
+    }
+
     private var codecMessage: String {
         if Codecs.staged {
             let n = Codecs.bottlesConfigured().count
@@ -1718,6 +1731,16 @@ struct ContentView: View {
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.03)))
 
             HStack(spacing: 12) {
+                Button(allSelected ? "Deselect all" : "Select all") {
+                    let target = !allSelected
+                    for i in runner.plan.indices where runner.plan[i].actionable {
+                        runner.plan[i].selected = target
+                    }
+                }
+                .disabled(runner.busy || !runner.plan.contains { $0.actionable })
+
+                Divider().frame(height: 16)
+
                 Button(action: { confirming = true }) {
                     Text(installAction
                          ? "Fix \(runner.selectedHits.filter { $0.state != .applied }.count) game(s)"
