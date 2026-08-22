@@ -950,7 +950,12 @@ final class Runner: ObservableObject {
     /// somebody made on purpose is not a repair, so it gets its own sentence in
     /// the banner and its own button rather than being swept up by Repair.
     var needsCodecAttention: Bool {
-        codecs.contains { $0.state.needsRepair || $0.state.isWaiting }
+        // Only bottles the codec is for. A bottle that carries the variable
+        // because an older version of this app wrote it everywhere is not
+        // something to alarm anybody about: nothing there loads it. Warning
+        // about six of those, on a machine where none of them needed it, is how
+        // a working app convinces someone it is broken.
+        codecs.contains { $0.wanted && ($0.state.needsRepair || $0.state.isWaiting) }
     }
 
     /// The bottles set to a CrossOver their own "Version" does not name.
@@ -1352,8 +1357,15 @@ final class Runner: ObservableObject {
             // file alone overwrote a choice made in the sheet without saying so
             // and left the two disagreeing, which the next survey reported as
             // drift the user had not caused.
+            // Only the bottles the codec is actually for. `wanted` is true
+            // where Persona 5 Strikers has run, or where the user said so in
+            // the sheet. Writing into the rest was the old behaviour and it
+            // was wrong twice over: it edits configuration nobody asked us to
+            // touch, and it turns every unrelated bottle into a drift warning
+            // the next time it changes CrossOver.
             var touched: [String] = []
-            for bottle in Codecs.survey() {
+            let mine = Codecs.survey().filter(\.wanted)
+            for bottle in mine {
                 guard let target = bottle.target else { continue }
                 if Codecs.configure(bottle: bottle.url, engine: target) == nil {
                     touched.append(bottle.name)
@@ -1361,9 +1373,19 @@ final class Runner: ObservableObject {
             }
             note("")
             Codecs.refresh()
-            note("Codec staged, and \(touched.count) bottle(s) pointed at it.")
-            noteRestart(touched.count == 1 ? touched.first : nil)
-            status = "Codec ready."
+            if touched.isEmpty {
+                // Not a failure. The decoder is built and waiting; there is
+                // simply no bottle yet that has any use for it.
+                note("Codec staged. No bottle needs it yet — Persona 5 Strikers "
+                   + "has not run in any of them.")
+                note("Run the game once and press Re-apply, or pick a bottle "
+                   + "yourself under Bottles.")
+                status = "Codec ready, not wired anywhere."
+            } else {
+                note("Codec staged, and \(touched.count) bottle(s) pointed at it.")
+                noteRestart(touched.count == 1 ? touched.first : nil)
+                status = "Codec ready."
+            }
         }
     }
 
@@ -2037,6 +2059,21 @@ enum Codecs {
         /// What this bottle should be pointing at: what the user said, or
         /// failing that what the bottle itself records.
         var target: String? { choice ?? runs }
+
+        /// Whether the game that needs the codec has ever run here.
+        let hostsProject: Bool
+
+        /// Whether the codec belongs in this bottle at all.
+        ///
+        /// One of the six titles needs it and no other. Writing GST_PLUGIN_PATH
+        /// into every bottle on the machine was harmless in the sense that
+        /// nothing loaded it, and harmful in every other: it is the user's
+        /// configuration, it changes plugin resolution for whatever else lives
+        /// there, and every one of those bottles then drifts the moment it
+        /// changes CrossOver -- producing a screenful of warnings about bottles
+        /// the codec was never for. Measured on the machine this was written
+        /// on: eight bottles carried it, six had drifted, none needed it.
+        var wanted: Bool { hostsProject || choice != nil }
     }
 
     /// The verdicts. Separate cases rather than a bool, because the repair is
@@ -2102,6 +2139,22 @@ enum Codecs {
         return found
     }
 
+    /// Has Persona 5 Strikers ever run in this bottle? Its save folder is the
+    /// signal, the same one Bottle.candidates uses. A game that has never been
+    /// launched leaves nothing, which is correct: there is nothing to configure
+    /// yet, and the sheet is where someone says "put it here anyway".
+    private static func hostsProject(_ bottle: URL) -> Bool {
+        let fm = FileManager.default
+        let users = bottle.appendingPathComponent("drive_c/users")
+        for person in (try? fm.contentsOfDirectory(at: users,
+                                                   includingPropertiesForKeys: nil)) ?? [] {
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: person.appendingPathComponent("AppData/Local/P5S").path,
+                             isDirectory: &isDir), isDir.boolValue { return true }
+        }
+        return false
+    }
+
     private static func readSurvey() -> [BottleState] {
         let fm = FileManager.default
         let chosen = choices()
@@ -2109,7 +2162,8 @@ enum Codecs {
             .filter { fm.fileExists(atPath: $0.appendingPathComponent("cxbottle.conf").path) }
             .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent)
                       == .orderedAscending }
-            .map { classify($0, choice: chosen[$0.lastPathComponent]) }
+            .map { classify($0, choice: chosen[$0.lastPathComponent],
+                            hostsProject: hostsProject($0)) }
     }
 
     /// The order of these tests is load-bearing.
@@ -2119,11 +2173,13 @@ enum Codecs {
     /// would be a button that lies. Drift is ranked above the staging test,
     /// because a drifted bottle whose target has no staging is still drift --
     /// the repair stages, then re-points, in that order.
-    private static func classify(_ url: URL, choice: String?) -> BottleState {
+    private static func classify(_ url: URL, choice: String?,
+                                 hostsProject: Bool) -> BottleState {
         func made(_ runs: String?, _ pointsAt: String?, _ pathEngine: String?,
                   _ state: Wiring) -> BottleState {
             BottleState(url: url, runs: runs, pointsAt: pointsAt,
-                        pathEngine: pathEngine, choice: choice, state: state)
+                        pathEngine: pathEngine, choice: choice, state: state,
+                        hostsProject: hostsProject)
         }
         guard let text = try? String(
             contentsOf: url.appendingPathComponent("cxbottle.conf"), encoding: .utf8)
