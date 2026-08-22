@@ -60,9 +60,11 @@ macOS". This is that effect from inside the process: one game, reversible, and
 nothing outside the game folder touched.
 
 The console variable `Electra.Win.H264UseOldOutputPath` selects the same
-fallback and is set too, so the fix does not depend on a user `Engine.ini`
-existing. A non-zero value takes the fallback — the polarity is worth stating,
-because it was assumed backwards for an afternoon.
+fallback, and the DLL sets it itself. **No `Engine.ini` is needed** — measured,
+by playing with the file deleted. That removes the most fragile part of the old
+arrangement: a path depending on the Unreal project name, inside a bottle that
+had to be guessed. Its polarity is worth recording anyway, because it was
+assumed backwards for an afternoon: a non-zero value takes the fallback.
 
 ## Caveats
 

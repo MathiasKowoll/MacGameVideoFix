@@ -59,6 +59,8 @@ fi
 
 echo "==> bundling scripts"
 cp "$ROOT/scripts/transcode-movies.sh" "$ROOT/scripts/pak-hide-videos.py" "$RES/"
+cp "$ROOT/runtime/install-p5s-bridge.sh" "$ROOT/runtime/amd_ags_x64.dll" "$RES/"
+cp "$ROOT/runtime/stage-codecs.sh" "$RES/"
 chmod +x "$RES/transcode-movies.sh" "$RES/pak-hide-videos.py"
 
 # The runtime patch: the installer resolves the proxy and the PE reader next to

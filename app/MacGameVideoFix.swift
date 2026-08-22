@@ -86,42 +86,21 @@ private func runStreaming(_ executable: String,
 /// Is CrossOver patched to decode VP9 at all?
 ///
 /// Neither fix here decodes anything: they get an already-decoded frame to
-/// where the game can use it. Without winevideo there is nothing to decode VP9
 /// in a WebM container, so installing either would look like it worked and
 /// change nothing on screen. Better to say so first.
-struct Winevideo {
-    let engines: [String]        // CrossOver builds carrying the VP9 plugins
-
-    var found: Bool { !engines.isEmpty }
-
-    /// The plugins are the honest signal. A patched winegstreamer without them
-    /// still cannot demux a WebM or decode VP9, and they are the pieces
-    /// winevideo actually drops in.
-    static func detect() -> Winevideo {
-        let fm = FileManager.default
-        let roots = ["/Applications",
-                     (NSHomeDirectory() as NSString).appendingPathComponent("Applications")]
-        var found: [String] = []
-
-        for root in roots {
-            guard let apps = try? fm.contentsOfDirectory(atPath: root) else { continue }
-            for app in apps where app.hasSuffix(".app") && app.localizedCaseInsensitiveContains("crossover") {
-                let base = "\(root)/\(app)/Contents/SharedSupport/CrossOver"
-                // The plugin directory moved between CrossOver versions.
-                let dirs = ["\(base)/lib64/gstreamer-1.0",
-                            "\(base)/lib/x86_64/gstreamer-1.0"]
-                for dir in dirs
-                where fm.fileExists(atPath: "\(dir)/libgstvpx.dylib")
-                   && fm.fileExists(atPath: "\(dir)/libgstmatroska.dylib") {
-                    found.append(app)
-                    break
-                }
-            }
-        }
-        return Winevideo(engines: found)
+/// What this needs from CrossOver, and what it does not.
+///
+/// needs it any more -- Preview decodes VP9, H.264 and AAC on its own -- and
+/// warning about something irrelevant is worse than not warning at all: it
+/// sends people to install something that will not change their problem.
+///
+/// Persona 5 Strikers does need a VC-1 decoder CrossOver does not ship, and
+/// that is said on its own row rather than as a blanket requirement.
+enum Requirements {
+    static var note: String {
+        "CrossOver 26.2 or later on Apple Silicon. Nothing else, for most games."
     }
 }
-
 
 /// The games this knows how to fix.
 ///
@@ -137,6 +116,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
     case lisDoubleExposure
     case unrealOther
     case dynastyWarriors
+    case personaStrikers
 
     var id: String { rawValue }
 
@@ -148,6 +128,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .lisDoubleExposure: return "Life is Strange: Double Exposure"
         case .unrealOther:       return "Another Unreal Engine 5 title"
         case .dynastyWarriors:   return "DYNASTY WARRIORS: ORIGINS"
+        case .personaStrikers:   return "Persona 5 Strikers"
         }
     }
 
@@ -159,6 +140,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
              .lisDoubleExposure: return "Runs, then freezes after a while"
         case .unrealOther:       return "Crash on the first cutscene, or a freeze after a while"
         case .dynastyWarriors:   return "Cutscene plays with sound, picture black"
+        case .personaStrikers:   return "Video never starts; sound only"
         }
     }
 
@@ -173,6 +155,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .lisDoubleExposure: return "Chronos-Win64-Shipping.exe"
         case .unrealOther:       return nil
         case .dynastyWarriors:   return "DWORIGINS.exe"
+        case .personaStrikers:   return "game.exe"
         }
     }
 
@@ -192,14 +175,40 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .lisDoubleExposure: return "…/steamapps/common/LifeIsStrangeDoubleExposure"
         case .unrealOther:       return "…/steamapps/common/<Game>"
         case .dynastyWarriors:   return "…/steamapps/common/DWORIGINS"
+        case .personaStrikers:   return "…/steamapps/common/P5S"
         }
     }
 
     var modes: [Mode] {
         switch self {
-        case .dynastyWarriors: return [.videoBridge]
-        default:               return [.runtime]
+        case .dynastyWarriors, .personaStrikers: return [.videoBridge]
+        default:                                 return [.runtime]
         }
+    }
+
+    /// The script that installs this game's fix.
+    ///
+    /// Three of them now, and which one a game needs is a property of the game
+    /// rather than of the mode: DYNASTY WARRIORS and Persona 5 Strikers both
+    /// ride a bridge, on different carrier DLLs and with different code.
+    var installer: String {
+        switch self {
+        case .dynastyWarriors: return "install-dwo-bridge.sh"
+        case .personaStrikers: return "install-p5s-bridge.sh"
+        default:               return "install-runtime-fix.sh"
+        }
+    }
+
+    /// Said on a row that installs cleanly and still will not play.
+    ///
+    /// Persona 5 Strikers is the only game here needing a codec CrossOver does
+    /// not ship. The bridge goes in either way; without the codec there is
+    /// nothing for it to carry.
+    var extraRequirement: String? {
+        if case .personaStrikers = self {
+            return "Also needs the VC-1 codec staged."
+        }
+        return nil
     }
 
     /// Said when the folder is not the one this game needs. Naming the thing
@@ -208,6 +217,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         switch self {
         case .dynastyWarriors:
             return "No DWORIGINS.exe there. Pick the folder the game's executable is in."
+        case .personaStrikers:
+            return "No game.exe and data/pd there. Pick the folder Persona 5 Strikers is in."
         case .unrealOther:
             return "No Engine/Binaries/ThirdParty/Ogg below there. "
                  + "Pick the game's own folder, the one with Engine and Content in it."
@@ -221,6 +232,18 @@ enum SupportedGame: String, CaseIterable, Identifiable {
     /// folder and a game folder look alike from the outside.
     func title(from url: URL) -> Title? {
         let fm = FileManager.default
+        if case .personaStrikers = self {
+            var candidates = [url]
+            if let subs = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
+                candidates += subs
+            }
+            for c in candidates
+            where fm.fileExists(atPath: c.appendingPathComponent("game.exe").path)
+               && fm.fileExists(atPath: c.appendingPathComponent("data/pd").path) {
+                return .bridgeGame(c, .personaStrikers)
+            }
+            return nil
+        }
         if case .dynastyWarriors = self {
             var candidates = [url]
             if let subs = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
@@ -228,7 +251,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
             }
             for c in candidates
             where fm.fileExists(atPath: c.appendingPathComponent("DWORIGINS.exe").path) {
-                return .dynastyWarriors(c)
+                return .bridgeGame(c, .dynastyWarriors)
             }
             return nil
         }
@@ -244,27 +267,27 @@ enum SupportedGame: String, CaseIterable, Identifiable {
 /// Which game a chosen folder turns out to be. Each has its own fixes, and
 /// nothing is offered that does not apply to what was actually found.
 enum Title {
-    case unrealVP9(GameFolder)      // any UE5 title with VP9 cutscenes
-    case dynastyWarriors(URL)       // DYNASTY WARRIORS: ORIGINS
+    case unrealVP9(GameFolder)          // any UE5 title with VP9 cutscenes
+    case bridgeGame(URL, SupportedGame) // a title with its own video bridge
 
     var name: String {
         switch self {
         case .unrealVP9:      return "Unreal Engine title with VP9 cutscenes"
-        case .dynastyWarriors: return "DYNASTY WARRIORS: ORIGINS"
+        case .bridgeGame(_, let g): return g.name
         }
     }
 
     var path: String {
         switch self {
         case .unrealVP9(let g):    return g.root.path
-        case .dynastyWarriors(let u): return u.path
+        case .bridgeGame(let u, _): return u.path
         }
     }
 
     var modes: [Mode] {
         switch self {
         case .unrealVP9:       return [.runtime]
-        case .dynastyWarriors: return [.videoBridge]
+        case .bridgeGame:      return [.videoBridge]
         }
     }
 
@@ -277,7 +300,12 @@ enum Title {
             candidates += subs
         }
         for c in candidates where fm.fileExists(atPath: c.appendingPathComponent("DWORIGINS.exe").path) {
-            return .dynastyWarriors(c)
+            return .bridgeGame(c, .dynastyWarriors)
+        }
+        for c in candidates
+        where fm.fileExists(atPath: c.appendingPathComponent("game.exe").path)
+           && fm.fileExists(atPath: c.appendingPathComponent("data/pd").path) {
+            return .bridgeGame(c, .personaStrikers)
         }
         if let g = GameFolder.locate(from: url) { return .unrealVP9(g) }
         return nil
@@ -426,7 +454,6 @@ final class Runner: ObservableObject {
     @Published var log: [String] = []
     @Published var busy = false
     @Published var title: Title?
-    @Published var winevideo = Winevideo.detect()
     @Published var chosen: SupportedGame = .mortalShell2 {
         didSet { if oldValue != chosen { clearSelection() } }
     }
@@ -449,8 +476,10 @@ final class Runner: ObservableObject {
         if case .unrealVP9(let g) = title { return g }
         return nil
     }
-    var dwFolder: URL? {
-        if case .dynastyWarriors(let u) = title { return u }
+    /// The folder of a title fixed by its own bridge, and which title it is --
+    /// there are two of them now, on different carrier DLLs.
+    var bridgeFolder: (url: URL, game: SupportedGame)? {
+        if case .bridgeGame(let u, let g) = title { return (u, g) }
         return nil
     }
 
@@ -530,14 +559,14 @@ final class Runner: ObservableObject {
     /// Dispatches to whichever inspection the detected game needs.
     func inspectTitle() async {
         switch title {
-        case .unrealVP9(let g):     await inspect(g)
-        case .dynastyWarriors(let u): await inspectBridge(u)
-        case .none:                 break
+        case .unrealVP9(let g):        await inspect(g)
+        case .bridgeGame(let u, let g): await inspectBridge(u, g)
+        case .none:                    break
         }
     }
 
-    private func inspectBridge(_ folder: URL) async {
-        let script = resources.appendingPathComponent("install-dwo-bridge.sh").path
+    private func inspectBridge(_ folder: URL, _ game: SupportedGame) async {
+        let script = resources.appendingPathComponent(game.installer).path
         statusAnswer = ""
         let code = await runStreaming("/bin/bash", [script, folder.path, "--status"]) { line in
             Task { @MainActor [weak self] in
@@ -549,7 +578,7 @@ final class Runner: ObservableObject {
 
         guard code == 0 else {
             bridgeState = .notApplied
-            status = "This copy has no libxess.dll for the bridge to ride on."
+            status = "This copy has nothing for the bridge to ride on."
             return
         }
         switch statusAnswer.split(separator: " ", maxSplits: 1).first.map(String.init) {
@@ -694,14 +723,14 @@ final class Runner: ObservableObject {
     // MARK: Video bridge
 
     private func runBridge(install: Bool) {
-        guard let folder = dwFolder else { return }
+        guard let (folder, game) = bridgeFolder else { return }
         busy = true
         Task {
             defer { busy = false; indeterminate = false; phaseLabel = ""; detail = "" }
             status = install ? "Working…" : "Reverting…"
             progress = 0
 
-            let script = resources.appendingPathComponent("install-dwo-bridge.sh").path
+            let script = resources.appendingPathComponent(game.installer).path
             let args = install ? [script, folder.path] : [script, folder.path, "--restore"]
             let ok = await run(install ? .installingBridge : .removingBridge, "/bin/bash", args)
 
@@ -709,8 +738,7 @@ final class Runner: ObservableObject {
             note("")
             if ok && install {
                 note("Done. Launch the game — the cutscenes should play.")
-                note("CrossOver has to be patched with winevideo, or there is nothing")
-                note("to decode them: this presents frames, it does not decode.")
+                if let extra = game.extraRequirement { note(extra) }
                 note("Note: Steam's \"verify integrity of game files\" undoes this.")
             } else if ok {
                 note("Reverted. The game is back to its original files.")
@@ -768,6 +796,8 @@ final class Runner: ObservableObject {
     @Published var scanning = false
     @Published var plan: [ScanHit] = []
     @Published var scanNote = ""
+    /// What the last scan was pointed at, so it can be repeated.
+    @Published var lastRoot: URL?
     @Published var batchStep = ""
     /// Honoured between games, never inside one. Interrupting an installer
     /// mid-rename is what manufactures the state that destroys an original.
@@ -793,6 +823,7 @@ final class Runner: ObservableObject {
 
     /// `url` nil means: ask the bottles where their libraries are.
     func startScan(from url: URL?) {
+        lastRoot = url
         scanning = true
         plan = []
         log.removeAll()
@@ -875,8 +906,7 @@ final class Runner: ObservableObject {
     /// and that belongs nowhere near a log someone might paste in public.
     private func probe(_ hit: ScanHit) async -> ScanHit {
         var hit = hit
-        let script = resources.appendingPathComponent(
-            hit.game == .dynastyWarriors ? "install-dwo-bridge.sh" : "install-runtime-fix.sh").path
+        let script = resources.appendingPathComponent(hit.game.installer).path
 
         statusAnswer = ""
         let code = await runStreaming("/bin/bash", [script, hit.root.path, "--status"]) { line in
@@ -890,9 +920,7 @@ final class Runner: ObservableObject {
         guard code == 0 else {
             hit.state = .notApplied
             hit.selected = false
-            hit.blocker = hit.game == .dynastyWarriors
-                ? "This copy ships no libxess.dll for the bridge to ride on."
-                : "This copy ships no libogg for the fix to ride on."
+            hit.blocker = "This copy has no carrier DLL for the fix to ride on."
             return hit
         }
         switch statusAnswer.split(separator: " ", maxSplits: 1).first.map(String.init) {
@@ -926,8 +954,7 @@ final class Runner: ObservableObject {
                 status = install ? "Installing…" : "Removing…"
                 note(""); note("▸ \(hit.game.name)")
 
-                let script = resources.appendingPathComponent(
-                    hit.game == .dynastyWarriors ? "install-dwo-bridge.sh" : "install-runtime-fix.sh").path
+                let script = resources.appendingPathComponent(hit.game.installer).path
                 var args = [script, hit.root.path]
                 if !install { args.append("--restore") }
 
@@ -1272,6 +1299,8 @@ enum SteamLibrary {
 // MARK: - Interface
 
 struct ContentView: View {
+    @State private var confirming = false
+    @State private var installAction = true
     @StateObject private var runner = Runner()
     @State private var dropping = false
     @State private var follow = true
@@ -1280,12 +1309,17 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 16) {
             header
             requirement
-            supported
-            dropZone
-            if let t = runner.title {
-                if runner.legacyReencode != .notApplied { legacyBanner }
-                if t.modes.count > 1 { modePicker(t) }
-                actions
+            if runner.bulk {
+                planTable
+            } else {
+                allAtOnce
+                supported
+                dropZone
+                if let t = runner.title {
+                    if runner.legacyReencode != .notApplied { legacyBanner }
+                    if t.modes.count > 1 { modePicker(t) }
+                    actions
+                }
             }
             if runner.busy || runner.progress > 0 { progressBar }
             logView
@@ -1306,34 +1340,13 @@ struct ContentView: View {
 
     /// Says up front whether the thing both fixes depend on is present.
     private var requirement: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: runner.winevideo.found
-                  ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(runner.winevideo.found ? Color.green : Color.orange)
-            VStack(alignment: .leading, spacing: 2) {
-                if runner.winevideo.found {
-                    Text("winevideo found in \(runner.winevideo.engines.joined(separator: ", "))")
-                        .font(.callout)
-                } else {
-                    Text("winevideo not found in any CrossOver on this Mac")
-                        .font(.callout.weight(.medium))
-                    Text("Neither fix decodes video — they carry an already-decoded frame to "
-                       + "where the game can use it. Without winevideo there is nothing to "
-                       + "decode VP9, so installing one will change nothing on screen.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Link("github.com/Jfishin/winevideo",
-                         destination: URL(string: "https://github.com/Jfishin/winevideo")!)
-                        .font(.caption)
-                }
-            }
+        HStack(spacing: 8) {
+            Image(systemName: "info.circle").foregroundStyle(.secondary)
+            Text(Requirements.note).font(.caption).foregroundStyle(.secondary)
             Spacer()
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 8)
-            .fill((runner.winevideo.found ? Color.green : Color.orange).opacity(0.08)))
     }
+
 
     /// Pick the game first. The folder to look for depends on it, and saying
     /// so up front is the difference between guidance and a guessing game.
@@ -1439,6 +1452,171 @@ struct ContentView: View {
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 10)
             .fill(Color.orange.opacity(0.08)))
+    }
+
+    /// The plan, which is also the result.
+    ///
+    /// One table, not a wizard. It shows what was found, what will happen to
+    /// each row, and afterwards what did happen -- in the same rows, so the
+    /// before and after are read in one place. A separate confirmation screen
+    /// that is thrown away would be ceremony for four rows.
+    ///
+    /// Rows the app cannot act on carry no checkbox and say why instead. A
+    /// disabled control with no explanation is the thing that makes people
+    /// think software is broken.
+    /// The way in, for someone who does not want to do this six times.
+    ///
+    /// Steam names install folders after the project rather than the game --
+    /// Mortal Shell 2 lives under Sparta, Persona 5 Strikers under P5S -- so
+    /// asking someone to find each one by hand is asking them to know
+    /// something they have no reason to know. The library folder they can
+    /// find, and everything past it is ours to work out.
+    private var allAtOnce: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "square.stack.3d.down.right")
+                .font(.title2).foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("All your games at once").font(.body.weight(.medium))
+                Text("Point at your Steam library and every supported game in it "
+                   + "gets found, listed, and fixed in one pass.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button("Find my games") { runner.enterBulk(); runner.startScan(from: nil) }
+            Button("Choose folder…") { chooseLibrary() }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.accentColor.opacity(0.07)))
+    }
+
+    private func chooseLibrary() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Scan"
+        panel.message = "Choose your Steam library — the folder holding steamapps, "
+                      + "or the common folder inside it. One game's folder works too."
+        if panel.runModal() == .OK, let url = panel.url {
+            runner.enterBulk()
+            runner.startScan(from: url)
+        }
+    }
+
+    private var planTable: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(runner.scanNote.isEmpty ? "Scanning…" : runner.scanNote)
+                    .font(.headline)
+                Spacer()
+                Button("Scan again") { runner.startScan(from: runner.lastRoot) }
+                    .disabled(runner.busy || runner.scanning)
+                Button("Back") { runner.leaveBulk() }
+                    .disabled(runner.busy)
+            }
+
+            if runner.scanning {
+                ProgressView().progressViewStyle(.linear)
+            }
+
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach($runner.plan) { $hit in
+                        planRow($hit)
+                        Divider()
+                    }
+                }
+            }
+            .frame(minHeight: 160, maxHeight: 280)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.03)))
+
+            HStack(spacing: 12) {
+                Button(action: { confirming = true }) {
+                    Text(installAction
+                         ? "Fix \(runner.selectedHits.filter { $0.state != .applied }.count) game(s)"
+                         : "Remove from \(runner.selectedHits.filter { $0.state != .notApplied }.count) game(s)")
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(runner.busy || runner.selectedHits.isEmpty)
+
+                Picker("", selection: $installAction) {
+                    Text("Install").tag(true)
+                    Text("Remove").tag(false)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 160)
+                .disabled(runner.busy)
+
+                if runner.busy {
+                    Button("Stop") { runner.stopping = true }
+                        .help("Finishes the game it is on, then stops.")
+                }
+                Spacer()
+                Text(runner.batchStep.isEmpty ? runner.status : runner.batchStep)
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+        }
+        .alert("Ready to change \(runner.selectedHits.count) game(s)?",
+               isPresented: $confirming) {
+            Button(installAction ? "Install" : "Remove") {
+                runner.applyPlan(install: installAction)
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text(runner.selectedHits.map(\.game.name).joined(separator: "\n")
+                 + "\n\nEach game's own DLL is moved aside and can be put back "
+                 + "with Remove.")
+        }
+    }
+
+    private func planRow(_ hit: Binding<ScanHit>) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            if hit.wrappedValue.actionable {
+                Toggle("", isOn: hit.selected).labelsHidden()
+            } else {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(.orange).frame(width: 22)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(hit.wrappedValue.game.name).font(.body.weight(.medium))
+                Text(hit.wrappedValue.root.lastPathComponent)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                if let why = hit.wrappedValue.blocker {
+                    Text(why).font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let extra = hit.wrappedValue.game.extraRequirement,
+                   hit.wrappedValue.blocker == nil {
+                    Text(extra).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            Text(hit.wrappedValue.outcome ?? stateWord(hit.wrappedValue.state))
+                .font(.callout)
+                .foregroundStyle(outcomeColour(hit.wrappedValue))
+        }
+        .padding(.vertical, 8).padding(.horizontal, 10)
+    }
+
+    private func stateWord(_ s: FixState) -> String {
+        switch s {
+        case .applied:    return "Already fixed"
+        case .partial:    return "Half-installed"
+        case .notApplied: return "Not fixed"
+        case .unknown:    return "…"
+        }
+    }
+
+    private func outcomeColour(_ hit: ScanHit) -> Color {
+        if let o = hit.outcome { return o.hasPrefix("Failed") ? .orange : .green }
+        switch hit.state {
+        case .applied: return .green
+        case .partial: return .orange
+        default:       return .secondary
+        }
     }
 
     private var actions: some View {

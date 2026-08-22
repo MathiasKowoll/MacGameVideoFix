@@ -8,9 +8,17 @@
 		<data>
 		LajWBiZ1zvJoBMjYyVtzzaUkg50=
 		</data>
+		<key>Resources/amd_ags_x64.dll</key>
+		<data>
+		o3nwm4CJdsXGHC1OrA/m2Ci1pbc=
+		</data>
 		<key>Resources/install-dwo-bridge.sh</key>
 		<data>
 		UvqkmD26ErHVJC8DPDC/qDkbz4I=
+		</data>
+		<key>Resources/install-p5s-bridge.sh</key>
+		<data>
+		h24wPZ9PW6tdJfFIppm5XK85aZg=
 		</data>
 		<key>Resources/install-runtime-fix.sh</key>
 		<data>
@@ -32,6 +40,10 @@
 		<data>
 		MX4pwD79RmoQKdJRh4ZEG6ucsh0=
 		</data>
+		<key>Resources/stage-codecs.sh</key>
+		<data>
+		GVQNWRidAVbU879dsQ0qv+EbP+0=
+		</data>
 		<key>Resources/transcode-movies.sh</key>
 		<data>
 		W8mu3RRHLVHSf/X0ZbwOnqKJ6Po=
@@ -46,11 +58,25 @@
 			xCCIocTDQ9fWW0k6sKTaG5uEXQf8xLF4FOv+3/oYXDg=
 			</data>
 		</dict>
+		<key>Resources/amd_ags_x64.dll</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			NfYjg8eP2Q26L+UzczDP5ApWQ3wqXO4FNZkkImOLTfE=
+			</data>
+		</dict>
 		<key>Resources/install-dwo-bridge.sh</key>
 		<dict>
 			<key>hash2</key>
 			<data>
 			CpPDW1/Y5gufYOO5+A9C6lvFITJt+AQpcTljBdUnSTs=
+			</data>
+		</dict>
+		<key>Resources/install-p5s-bridge.sh</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			ijkObdJGA/HqvqLYauq19b6LNBBqwcCV2OXxe5ornEA=
 			</data>
 		</dict>
 		<key>Resources/install-runtime-fix.sh</key>
@@ -86,6 +112,13 @@
 			<key>hash2</key>
 			<data>
 			lN/FfviVbfPt4XkdIDsou6Yr10QGu4szptklayH/a98=
+			</data>
+		</dict>
+		<key>Resources/stage-codecs.sh</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			mgijzjdB5P+GC8DUZrkV5O1KGx5UUHLg1TKjRCDjY8s=
 			</data>
 		</dict>
 		<key>Resources/transcode-movies.sh</key>

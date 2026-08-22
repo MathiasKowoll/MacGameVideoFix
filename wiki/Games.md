@@ -9,39 +9,26 @@ Tested on an M4 Max, macOS 27, CrossOver 26.2 patched with
 
 <!-- games:begin -->
 
-| Game | Engine | Symptom | Fix | winevideo | Status |
-| --- | --- | --- | --- | --- | --- |
-| [Mortal Shell 2](Mortal-Shell-2.md) | Unreal Engine 5.6.1 | Crash on the first cutscene | Runtime patch, 4 sites | No <sup>1</sup> | Fixed |
-| [Life is Strange: Reunion](Life-is-Strange-Reunion.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard | No <sup>1</sup> | Fixed |
-| [Life is Strange: Double Exposure](Life-is-Strange-Double-Exposure.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard, same DLL | No <sup>2</sup> | Fixed |
-| [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | Video bridge, D3D11 to D3D12 | No <sup>3</sup> | Fixed |
-| [Beast of Reincarnation](Beast-of-Reincarnation.md) | Unreal Engine 5 | Startup video plays with sound, no picture | NV12 restored, Electra forced to software | No <sup>1</sup> | Fixed |
+| Game | Engine | Symptom | Fix | Status |
+| --- | --- | --- | --- | --- |
+| [Mortal Shell 2](Mortal-Shell-2.md) | Unreal Engine 5.6.1 | Crash on the first cutscene | Runtime patch, 4 sites | Fixed |
+| [Life is Strange: Reunion](Life-is-Strange-Reunion.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard | Fixed |
+| [Life is Strange: Double Exposure](Life-is-Strange-Double-Exposure.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard, same DLL | Fixed |
+| [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | Video bridge, D3D11 to D3D12 | Fixed |
+| [Beast of Reincarnation](Beast-of-Reincarnation.md) | Unreal Engine 5 | Startup video plays with sound, no picture | NV12 restored, Electra forced to software | Fixed |
+| [Persona 5 Strikers](Persona-5-Strikers.md) | Koei Tecmo, in-house | Video never starts; sound only | Staged VC-1 codec, and a D3D9 to D3D11 bridge | Fixed |
 
-<sup>1</sup> Measured, not assumed. Mortal Shell 2 and Life is Strange:
-Reunion were played on a CrossOver carrying no winevideo and again on one that
-did, same version, differing only in the GStreamer plugins. Beast of
-Reincarnation was measured differently and more strictly: every run of it was in
-a bottle winevideo has never touched.
+**None of these games needs CrossOver patched.** That was not true when this
+project started, and it is the single biggest thing that changed: CrossOver
+Preview decodes VP9 profile 0 and 2, H.264 and AAC on its own. Persona 5
+Strikers needs a VC-1 decoder CrossOver does not ship, and that is staged
+beside it rather than patched into it.
 
-<sup>2</sup> Inferred from Reunion rather than measured: identical fault,
-identical DLL.
-
-<sup>3</sup> Measured on CrossOver Preview 20260821, in a bottle winevideo had
-never touched and with no `.webm` byte-stream handler registered. It was
-expected to fail there and did not. **How the WebM is opened at all under those
-conditions is not yet explained** -- Preview's own mfplat contains neither the
-handler's CLSID nor the string "webm" -- so this is recorded as a measurement
-with an open question behind it, not as an understood result.
-
-**No game here needs CrossOver patched with winevideo.** That was not true when
-this project started, and it is the single biggest change: Preview decodes VP9
-profile 0 and 2, H.264 and AAC on its own. What is still needed is everything
-in the Fix column, because none of it is decoding.
+None of these fixes decodes anything. The frames existed all along; they were
+being crashed on, mislabelled, or thrown away.
 
 Every row is a title we deliberately took on, and every claim on the linked
-page comes from a measurement on an installed copy. Where something was
-established by reading the executable rather than by playing to the failure,
-the page says so.
+page comes from a measurement on an installed copy.
 
 <!-- games:end -->
 

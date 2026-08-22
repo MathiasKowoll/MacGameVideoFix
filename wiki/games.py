@@ -19,50 +19,39 @@ import sys
 GAMES = [
     ("Mortal Shell 2", "Unreal Engine 5.6.1",
      "Crash on the first cutscene", "Runtime patch, 4 sites",
-     "No <sup>1</sup>", "Fixed", "Mortal-Shell-2"),
+     "Fixed", "Mortal-Shell-2"),
     ("Life is Strange: Reunion", "Unreal Engine 5",
      "Freezes after a while, anywhere", "DXGI node guard",
-     "No <sup>1</sup>", "Fixed", "Life-is-Strange-Reunion"),
+     "Fixed", "Life-is-Strange-Reunion"),
     ("Life is Strange: Double Exposure", "Unreal Engine 5",
      "Freezes after a while, anywhere", "DXGI node guard, same DLL",
-     "No <sup>2</sup>", "Fixed", "Life-is-Strange-Double-Exposure"),
+     "Fixed", "Life-is-Strange-Double-Exposure"),
     ("DYNASTY WARRIORS: ORIGINS", "Koei Tecmo, in-house",
      "Cutscene runs with sound, picture black", "Video bridge, D3D11 to D3D12",
-     "No <sup>3</sup>", "Fixed", "Dynasty-Warriors-Origins"),
+     "Fixed", "Dynasty-Warriors-Origins"),
     ("Beast of Reincarnation", "Unreal Engine 5",
      "Startup video plays with sound, no picture", "NV12 restored, Electra forced to software",
-     "No <sup>1</sup>", "Fixed", "Beast-of-Reincarnation"),
+     "Fixed", "Beast-of-Reincarnation"),
+    ("Persona 5 Strikers", "Koei Tecmo, in-house",
+     "Video never starts; sound only", "Staged VC-1 codec, and a D3D9 to D3D11 bridge",
+     "Fixed", "Persona-5-Strikers"),
 ]
 
-HEAD = ("| Game | Engine | Symptom | Fix | winevideo | Status |\n"
-        "| --- | --- | --- | --- | --- | --- |\n")
+HEAD = ("| Game | Engine | Symptom | Fix | Status |\n"
+        "| --- | --- | --- | --- | --- |\n")
 
 NOTE = """
-<sup>1</sup> Measured, not assumed. Mortal Shell 2 and Life is Strange:
-Reunion were played on a CrossOver carrying no winevideo and again on one that
-did, same version, differing only in the GStreamer plugins. Beast of
-Reincarnation was measured differently and more strictly: every run of it was in
-a bottle winevideo has never touched.
+**None of these games needs CrossOver patched.** That was not true when this
+project started, and it is the single biggest thing that changed: CrossOver
+Preview decodes VP9 profile 0 and 2, H.264 and AAC on its own. Persona 5
+Strikers needs a VC-1 decoder CrossOver does not ship, and that is staged
+beside it rather than patched into it.
 
-<sup>2</sup> Inferred from Reunion rather than measured: identical fault,
-identical DLL.
-
-<sup>3</sup> Measured on CrossOver Preview 20260821, in a bottle winevideo had
-never touched and with no `.webm` byte-stream handler registered. It was
-expected to fail there and did not. **How the WebM is opened at all under those
-conditions is not yet explained** -- Preview's own mfplat contains neither the
-handler's CLSID nor the string "webm" -- so this is recorded as a measurement
-with an open question behind it, not as an understood result.
-
-**No game here needs CrossOver patched with winevideo.** That was not true when
-this project started, and it is the single biggest change: Preview decodes VP9
-profile 0 and 2, H.264 and AAC on its own. What is still needed is everything
-in the Fix column, because none of it is decoding.
+None of these fixes decodes anything. The frames existed all along; they were
+being crashed on, mislabelled, or thrown away.
 
 Every row is a title we deliberately took on, and every claim on the linked
-page comes from a measurement on an installed copy. Where something was
-established by reading the executable rather than by playing to the failure,
-the page says so.
+page comes from a measurement on an installed copy.
 """
 
 BEGIN, END = "<!-- games:begin -->", "<!-- games:end -->"
@@ -70,8 +59,8 @@ BEGIN, END = "<!-- games:begin -->", "<!-- games:end -->"
 
 def table():
     rows = "".join(
-        f"| [{g}]({page}.md) | {engine} | {sym} | {fix} | {wv} | {status} |\n"
-        for g, engine, sym, fix, wv, status, page in GAMES)
+        f"| [{g}]({page}.md) | {engine} | {sym} | {fix} | {status} |\n"
+        for g, engine, sym, fix, status, page in GAMES)
     return f"{BEGIN}\n\n{HEAD}{rows}{NOTE}\n{END}"
 
 

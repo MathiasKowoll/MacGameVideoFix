@@ -6,32 +6,17 @@ Five games so far, failing for reasons that have almost nothing in common.
 They install the same way: open the app, pick the game from the list, drop its
 folder on it, press Apply.
 
-| Game | Symptom | Fix | winevideo |
 | --- | --- | --- | --- |
-| [**Mortal Shell 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Mortal-Shell-2) | Crash on the first cutscene | Runtime patch | no <sup>1</sup> |
-| [**Life is Strange: Reunion**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Reunion) | Runs, then freezes after a while | Runtime patch | no <sup>1</sup> |
-| [**Life is Strange: Double Exposure**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Double-Exposure) | Runs, then freezes after a while | Runtime patch | no <sup>2</sup> |
-| [**Beast of Reincarnation**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Beast-of-Reincarnation) | Startup video plays with sound, no picture | NV12 restored, Electra forced to software | no |
-| [**DYNASTY WARRIORS: ORIGINS**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Dynasty-Warriors-Origins) | Cutscene plays with sound, picture black | Video bridge | no <sup>2</sup> |
+| [**Mortal Shell 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Mortal-Shell-2) | Crash on the first cutscene | Runtime patch |
+| [**Life is Strange: Reunion**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Reunion) | Runs, then freezes after a while | Runtime patch |
+| [**Life is Strange: Double Exposure**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Double-Exposure) | Runs, then freezes after a while | Runtime patch |
+| [**Beast of Reincarnation**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Beast-of-Reincarnation) | Startup video plays with sound, no picture | NV12 restored, Electra forced to software |
+| [**DYNASTY WARRIORS: ORIGINS**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Dynasty-Warriors-Origins) | Cutscene plays with sound, picture black | Video bridge |
 
 Each row links to a page in the [wiki](https://github.com/MathiasKowoll/MacGameVideoFix/wiki) with that game's findings and fix.
 
-**None of these needs CrossOver patched with
-[winevideo](https://github.com/Jfishin/winevideo).** That was not true when this
-project started, and it is the single biggest thing that has changed: CrossOver
-Preview decodes VP9 profile 0 and 2, H.264 and AAC on its own — measured
-end-to-end, not inferred. What is still needed is everything in the Fix column,
-because none of that is decoding. The frames exist; they were being crashed on,
-mislabelled, or thrown away.
 
-winevideo remains worth having, and it solves things this does not — above all
-games protected against tampering, where nothing that patches a running process
-can reach. See [what winevideo is still
-for](docs/winevideo-on-preview.md).
-
-<sup>1</sup> Measured: played on a CrossOver without winevideo and again on one
 with it, same version, differing only in the GStreamer plugins.
-<sup>2</sup> Measured in a bottle winevideo has never touched, and with no
 `.webm` byte-stream handler registered. It was expected to fail there and did
 not; how the WebM is opened under those conditions is **not yet explained**, so
 this is a measurement with an open question behind it.
@@ -51,8 +36,7 @@ Tested on an M4 Max, macOS 27, CrossOver 26.2 with Game Porting Toolkit 4.0b2.
 
 1. Download `MacGameVideoFix.app` from
    [Releases](../../releases), or build it yourself with `app/build-app.sh`.
-2. For **Mortal Shell 2** only, create the user `Engine.ini` described below.
-3. Open the app, **pick your game from the list**, drop its folder on it, and
+2. Open the app, **pick your game from the list**, drop its folder on it, and
    press **Apply Fix**.
 
 Picking the game first is what tells the app which folder to ask for, and it
@@ -60,7 +44,6 @@ says so on the drop zone. It also checks the game's shipping executable is
 really under the folder you dropped, so pointing Double Exposure at Reunion's
 folder is caught rather than half-applied.
 
-The app also checks whether CrossOver is patched with winevideo and says so.
 For DYNASTY WARRIORS that warning is fatal — nothing will decode. For the
 Unreal titles it is advice.
 
@@ -115,14 +98,11 @@ first launch. Right click it and choose **Open**, then confirm.
 
 For **DYNASTY WARRIORS: ORIGINS**, additionally:
 
-- [winevideo](https://github.com/Jfishin/winevideo) applied to CrossOver
 
 Not optional there. Without it `MFCreateSourceReaderFromByteStream` on a
 `.webm` fails outright and no frame is ever decoded for the bridge to carry.
 
-The **Unreal** fix does not need winevideo, and this is now measured rather
 than assumed. Mortal Shell 2 and Life is Strange: Reunion were both played on
-CrossOver 26.3 with no winevideo, and again on CrossOver-winevideo 26.3 — the
 same version, differing only in the GStreamer plugins — and the fix worked
 either way.
 
@@ -132,7 +112,6 @@ conversion was broken, which is what the patch reroutes), and the Life is
 Strange freeze is in DXGI, nowhere near video.
 
 `diagnostics/launch-with.sh` is what makes that comparison possible — bottles
-are shared between CrossOver installs, so the same games run with winevideo
 present or absent without reinstalling anything.
 
 ## DYNASTY WARRIORS: ORIGINS
@@ -182,22 +161,6 @@ hypotheses that were wrong on the way there.
 ---
 
 ## Mortal Shell 2: the cutscene crash
-
-### The Engine.ini
-
-At `~/Library/Application Support/CrossOver/Bottles/<BOTTLE>/drive_c/users/crossover/AppData/Local/<GAME>/Saved/Config/Windows/Engine.ini`:
-
-```ini
-[SystemSettings]
-Electra.Win.H264UseOldOutputPath=1
-Electra.Win.H265UseOldOutputPath=1
-```
-
-Make it read-only afterwards — Unreal rewrites it:
-
-```bash
-chmod 444 ".../Saved/Config/Windows/Engine.ini"
-```
 
 ### The crash
 
@@ -542,9 +505,17 @@ derivative of this work equally available.
 
 - [CrossOver](https://www.codeweavers.com/crossover) by CodeWeavers, and
   [Wine](https://www.winehq.org/) underneath it.
-- [winevideo](https://github.com/Jfishin/winevideo) by Jfishin, whose Media
-  Foundation patches make the H.264 path work on macOS. This project depends on
-  it and does not duplicate it.
+- **[winevideo](https://github.com/Jfishin/winevideo) by Jfishin.** None of
+  this would exist without it. Its patches are where every one of these faults
+  was first identified: that Electra will accept NV12 and nothing else, that
+  CrossOver censors that format on macOS, that Electra decides in software by
+  asking its own platform handle, that a D3D9 surface has to be bridged rather
+  than shared. This project reaches several of the same places from inside the
+  game process instead of by patching Wine, which is a different trade-off, not
+  a better one — and it is only possible because winevideo had already worked
+  out what was wrong. Where the two differ most: winevideo works outside the
+  game, so it reaches titles protected against tampering, which nothing here
+  can.
 - [DXMT](https://github.com/3Shain/dxmt) and
   [vkd3d-proton](https://github.com/HansKristian-Work/vkd3d-proton), whose
   source made the root cause legible.
