@@ -1366,8 +1366,6 @@ enum Codecs {
     /// once staging has pointed new bottles at the codec.
     static func refresh() {
         cached = nil
-        cachedSurvey = nil
-        cachedChoices = nil
         cachedEngines = nil
         cachedEngineNames = nil
         cachedFramework = nil
@@ -1566,6 +1564,8 @@ enum Codecs {
     }
 
     /// Bottles that already point at the staged folder.
+    private static var cachedBottles: [String]?
+
     /// Cached for the same reason the version is: a SwiftUI body asks for this
     /// on every published change, and answering means reading every bottle's
     /// cxbottle.conf off disk.
@@ -2402,12 +2402,23 @@ struct ContentView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
-            if !Codecs.staged {
+            do {
                 if Codecs.gstreamerInstalled {
-                    Button("Stage codec") { runner.stageCodecs() }
+                    // Offered even when everything is staged, which is the whole
+                    // point. Staging also re-points every bottle at the engine it
+                    // now runs under, so this is the action someone needs after
+                    // switching CrossOver -- and that is precisely the moment the
+                    // old `if !Codecs.staged` hid it, because every engine had a
+                    // directory and only the pointer was stale. The one control
+                    // that fixes the problem, missing exactly when it appears.
+                    Button(Codecs.staged ? "Re-apply" : "Stage codec") { runner.stageCodecs() }
                         .disabled(runner.busy)
-                        .keyboardShortcut(.defaultAction)
-                } else {
+                        .keyboardShortcut(Codecs.staged ? nil : KeyboardShortcut.defaultAction)
+                        .help(Codecs.staged
+                              ? "Re-stage for every CrossOver installed and point each bottle at "
+                                + "the one it runs under. Use this after switching CrossOver."
+                              : "Borrow the VC-1 decoder from your GStreamer install.")
+                } else if !Codecs.staged {
                     /// The button that resolves the problem, rather than a URL
                     /// to copy out by hand. It is the only thing standing
                     /// between this row and a working game.
