@@ -66,6 +66,13 @@ is_ours() { [ -f "$1" ] && LC_ALL=C grep -qa "$MARKER" "$1"; }
 status() {
   if is_ours "$LIVE" && [ -f "$REAL" ]; then echo installed
   elif is_ours "$LIVE"; then echo broken       # proxy present, original missing
+  elif [ ! -f "$LIVE" ] && [ -f "$REAL" ]; then
+    # The original is saved aside and nothing is live: the game will not start.
+    # Both sibling installers report this and this one did not, so an install
+    # interrupted between the move and the copy left the original stranded under
+    # a name nothing looks for, while the app said "not patched yet" and greyed
+    # out the one control that puts it back.
+    echo half
   else echo absent
   fi
 }
@@ -98,6 +105,17 @@ case "$MODE" in
   if [ "$(status)" = installed ]; then
     echo "the bridge is already installed, nothing to do"
     exit 0
+  fi
+
+  # Half-installed: the original is saved aside and nothing is live. Installing
+  # on top would move whatever is in its place over the saved original and lose
+  # it. Restoring first is the only safe order, and the only one that leaves the
+  # game able to start.
+  if [ "$(status)" = half ]; then
+    echo "error: this install is half finished — the original is at $REAL" >&2
+    echo "       and nothing is in its place, so the game will not start." >&2
+    echo "       Run with --restore first, then install again." >&2
+    exit 1
   fi
 
   echo "[1/4] checking libxess.dll"
