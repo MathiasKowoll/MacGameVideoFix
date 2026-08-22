@@ -95,7 +95,31 @@ first launch. Right click it and choose **Open**, then confirm.
 ## Requirements
 
 - Apple Silicon Mac, macOS 14 or later
-- CrossOver 26.2 / 26.3, or CrossOver Preview
+- CrossOver Preview, for four of the six. See the table below.
+
+### Which CrossOver, per title
+
+Measured on this machine, CrossOver 26.3 against a current Preview. Blank means
+not measured rather than not working — the claim is only ever what was tried.
+
+| Title | Preview | Stable 26.3 |
+| --- | --- | --- |
+| Mortal Shell 2 | works | works |
+| Beast of Reincarnation | works | works |
+| Persona 5 Strikers | works | works |
+| Life is Strange: Reunion | works | **crashes** |
+| Life is Strange: Double Exposure | works | **crashes** |
+| DYNASTY WARRIORS: ORIGINS | works | |
+
+The two that crash are the two that share the H.264 half of the runtime patch,
+which puts NV12 back on the decoder's menu after CrossOver removes it on macOS.
+That half was written against Preview and evidently assumes something Preview
+does; on a stable build the same move offers the game a format nothing can
+deliver. It is our defect, not the engine's, and it is being worked on — until
+then, **use Preview for the two Life is Strange titles.**
+
+Persona 5 Strikers is unaffected because it depends on no decoder of CrossOver's
+at all: it stages its own.
 
 For **DYNASTY WARRIORS: ORIGINS**, additionally: a build whose Media Foundation
 can decode VP9 in a WebM container. Recent CrossOver Preview does that on its
