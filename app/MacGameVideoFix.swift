@@ -1500,25 +1500,22 @@ enum Codecs {
         }
         let want = stagedPath(forEngine: engine)
 
-        // An existing line is REPLACED, not left alone. It used to be left
-        // alone, which meant a bottle migrated to another CrossOver kept
-        // pointing at the previous engine's directory for good -- and that is
-        // the two-cores crash, arriving silently, months after the install.
-        if let line = text.range(of: #"^"GST_PLUGIN_PATH".*$"#,
-                                 options: [.regularExpression, .anchored]) ??
-                      text.range(of: "\n\"GST_PLUGIN_PATH\"[^\n]*",
-                                 options: .regularExpression) {
-            let replacement = (text[line].hasPrefix("\n") ? "\n" : "")
-                            + "\"GST_PLUGIN_PATH\" = \"\(want)\""
-            if text[line] == replacement { return nil }
-            text.replaceSubrange(line, with: replacement)
-        } else {
-            guard let range = text.range(of: "[EnvironmentVariables]") else {
-                return "\(bottle.lastPathComponent) has no [EnvironmentVariables] section."
-            }
-            text.replaceSubrange(range,
-                with: "[EnvironmentVariables]\n\"GST_PLUGIN_PATH\" = \"\(want)\"")
+        // Every existing line is stripped and exactly one is inserted.
+        //
+        // It used to leave an existing key alone, which meant a bottle migrated
+        // to another CrossOver kept pointing at the previous engine's directory
+        // for good -- the two-cores crash, arriving silently, months later.
+        // Replacing in place was the obvious fix and was wrong too: a key
+        // outside [EnvironmentVariables] left the file with two, and a config
+        // file with two answers has no answer. Stripping first is idempotent.
+        text = text.replacingOccurrences(
+            of: #"(?m)^"GST_PLUGIN_PATH"[^\n]*\n?"#, with: "", options: .regularExpression)
+        guard let range = text.range(of: "[EnvironmentVariables]") else {
+            return "\(bottle.lastPathComponent) has no [EnvironmentVariables] section."
         }
+        text.replaceSubrange(range,
+            with: "[EnvironmentVariables]\n\"GST_PLUGIN_PATH\" = \"\(want)\"")
+
         do {
             try text.write(to: conf, atomically: true, encoding: .utf8)
             return nil
