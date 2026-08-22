@@ -2504,6 +2504,29 @@ static void *hook_import_ordinal(const char *dll, WORD ordinal, void *replacemen
     } while (0)
 
 /*
+ * A second module to try for the same function, and the reason it cannot be
+ * another HOOK.
+ *
+ * HOOK assigns whatever hook_import returns, so calling it twice for one
+ * function overwrites the saved original with NULL the moment the second
+ * module is not imported. The IAT is patched by then, so the game's next call
+ * lands in our replacement and dereferences that NULL -- a jump to address
+ * zero, from inside our own DLL, before anything has been logged. NieR
+ * Replicant imports d3d11 directly and Nioh 3 does not, which is why only one
+ * of them showed it.
+ */
+#define HOOK_ALT(dll, name)                                                   \
+    do {                                                                      \
+        if (!real_##name) {                                                   \
+            void *was_ = hook_import(dll, #name, (void *)my_##name);          \
+            if (was_) {                                                       \
+                *(void **)&real_##name = was_;                                \
+                logf_("  %-40s hooked via %s", #name, dll);                   \
+            }                                                                 \
+        }                                                                     \
+    } while (0)
+
+/*
  * The rest of the MFPlat surface, wrapped uniformly.
  *
  * Filling in the aspect ratio and interlace mode did not change anything, and
@@ -2684,8 +2707,8 @@ static DWORD WINAPI worker(LPVOID unused)
      * A game that does neither leaves both "not imported", which is a fact
      * worth having in the log rather than a silence to interpret.
      */
-    HOOK("sl.interposer.dll", D3D11CreateDevice);
-    HOOK("sl.interposer.dll", D3D12CreateDevice);
+    HOOK_ALT("sl.interposer.dll", D3D11CreateDevice);
+    HOOK_ALT("sl.interposer.dll", D3D12CreateDevice);
     HOOK("KERNEL32.dll", GetProcAddress);
     HOOK("KERNEL32.dll", CreateFileW);
     HOOK("KERNEL32.dll", FindFirstFileW);
@@ -2700,6 +2723,26 @@ static DWORD WINAPI worker(LPVOID unused)
     HOOK("MFPlat.DLL", MFCreateFile);
     HOOK("MFPlat.DLL", MFTEnumEx);
     HOOK("MFReadWrite.dll", MFCreateSourceReaderFromByteStream);
+    /*
+     * MFCreateAttributes is called, never intercepted, so what matters is
+     * having its address rather than having hooked it.
+     *
+     * A game that resolves it through GetProcAddress -- NieR Replicant does --
+     * leaves the import-table hook empty, and the attribute copy that strips
+     * D3D_MANAGER is guarded on this pointer. It was therefore skipped
+     * silently, the reader kept the D3D request, and the game died inside
+     * SetCurrentMediaType asking for NV12. Taking the address directly costs
+     * nothing and does not depend on how the game reaches it.
+     */
+    if (!real_MFCreateAttributes && real_GetProcAddress)
+    {
+        HMODULE mfplat_ = LoadLibraryA("mfplat.dll");
+        if (mfplat_)
+            *(void **)&real_MFCreateAttributes =
+                (void *)real_GetProcAddress(mfplat_, "MFCreateAttributes");
+        logf_("  %-40s %s", "MFCreateAttributes (direct)",
+              real_MFCreateAttributes ? "resolved" : "NOT FOUND");
+    }
     hook_remaining_mfplat();
 
     /*
