@@ -446,6 +446,12 @@ static HRESULT WINAPI my_GetOutputStreamInfo(void *self, DWORD stream, void *inf
                 logf_("GetOutputStreamInfo: claiming PROVIDES_SAMPLES so the "
                       "caller stops allocating flat buffers");
         }
+        /* Once. Electra asks per frame, and 200 identical lines is not a log,
+         * it is a wall -- the first one carries every bit of the information. */
+        {
+            static LONG once;
+            if (InterlockedIncrement(&once) != 1) return hr;
+        }
         logf_("GetOutputStreamInfo: flags=0x%lx -- %s allocates the frame%s",
               flags, (flags & 0x100) ? "the DECODER" : "the CALLER",
               (flags & 0x100) ? "" : "   << a caller buffer is not IMF2DBuffer, "
@@ -816,8 +822,7 @@ static HRESULT WINAPI my_ProcessOutput(void *self, DWORD flags, DWORD count,
     {
         LONG f = InterlockedIncrement(&frames_out);
         if (f == 1 || f == 10 || f == 100)
-            logf_("ProcessOutput: frame %ld decoded OK  << the decoder works; "
-                  "if the screen is black the frame is being lost after this", f);
+            logf_("ProcessOutput: frame %ld decoded OK", f);
     }
     else if (n == 1 || (n % 200) == 0)
     {
