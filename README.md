@@ -2,7 +2,7 @@
 
 Makes Windows games show their cutscenes under CrossOver on Apple Silicon.
 
-Four games so far, failing for reasons that have almost nothing in common.
+Five games so far, failing for reasons that have almost nothing in common.
 They install the same way: open the app, pick the game from the list, drop its
 folder on it, press Apply.
 
@@ -11,25 +11,37 @@ folder on it, press Apply.
 | [**Mortal Shell 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Mortal-Shell-2) | Crash on the first cutscene | Runtime patch | no <sup>1</sup> |
 | [**Life is Strange: Reunion**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Reunion) | Runs, then freezes after a while | Runtime patch | no <sup>1</sup> |
 | [**Life is Strange: Double Exposure**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Double-Exposure) | Runs, then freezes after a while | Runtime patch | no <sup>2</sup> |
-| [**DYNASTY WARRIORS: ORIGINS**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Dynasty-Warriors-Origins) | Cutscene plays with sound, picture black | Video bridge | **yes** |
+| [**Beast of Reincarnation**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Beast-of-Reincarnation) | Startup video plays with sound, no picture | NV12 restored, Electra forced to software | no |
+| [**DYNASTY WARRIORS: ORIGINS**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Dynasty-Warriors-Origins) | Cutscene plays with sound, picture black | Video bridge | no <sup>2</sup> |
 
 Each row links to a page in the [wiki](https://github.com/MathiasKowoll/MacGameVideoFix/wiki) with that game's findings and fix.
 
-**Only DYNASTY WARRIORS needs CrossOver patched with
-[winevideo](https://github.com/Jfishin/winevideo)**, because it decodes VP9
-through Media Foundation and there is otherwise nothing to decode it with. The
-two Life is Strange titles freeze inside DXGI and never involved video at all;
-Mortal Shell decodes VP9 in-process with Unreal's own libvpx. Install winevideo
-regardless — it fixes a great deal on its own — but only one fix here depends
-on it.
+**None of these needs CrossOver patched with
+[winevideo](https://github.com/Jfishin/winevideo).** That was not true when this
+project started, and it is the single biggest thing that has changed: CrossOver
+Preview decodes VP9 profile 0 and 2, H.264 and AAC on its own — measured
+end-to-end, not inferred. What is still needed is everything in the Fix column,
+because none of that is decoding. The frames exist; they were being crashed on,
+mislabelled, or thrown away.
 
-<sup>1</sup> Measured: both were played on CrossOver 26.3 without winevideo
-and again on CrossOver-winevideo 26.3, and the fix worked either way.
-<sup>2</sup> Inferred from Reunion — identical fault, identical DLL.
+winevideo remains worth having, and it solves things this does not — above all
+games protected against tampering, where nothing that patches a running process
+can reach. See [what winevideo is still
+for](docs/winevideo-on-preview.md).
 
-The Unreal fix carries two unrelated repairs in one DLL: the Electra buffer
-path that crashes Mortal Shell, and the adapter-node walk that freezes both
-Life is Strange titles. Installing it is the same act either way.
+<sup>1</sup> Measured: played on a CrossOver without winevideo and again on one
+with it, same version, differing only in the GStreamer plugins.
+<sup>2</sup> Measured in a bottle winevideo has never touched, and with no
+`.webm` byte-stream handler registered. It was expected to fail there and did
+not; how the WebM is opened under those conditions is **not yet explained**, so
+this is a measurement with an open question behind it.
+
+One DLL carries three unrelated repairs, and each is asked for by executable
+name rather than applied wherever its pattern happens to match: the Electra
+buffer path that crashes Mortal Shell, the adapter-node walk that freezes both
+Life is Strange titles, and the H.264 output negotiation that leaves Beast of
+Reincarnation silent-but-blank. They share one file because they share one
+carrier DLL — separate files would mean a title could only ever have one.
 
 Tested on an M4 Max, macOS 27, CrossOver 26.2 with Game Porting Toolkit 4.0b2.
 
