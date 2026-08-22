@@ -22,11 +22,13 @@ otherwise.
 | [Persona 5 Strikers](Persona-5-Strikers.md) | Koei Tecmo, in-house | Video never starts; sound only | Staged VC-1 codec, and a D3D9 to D3D11 bridge | **DXMT** | 11 | 26.3 and Preview | Fixed |
 | [Nioh](Nioh.md) | Koei Tecmo, in-house | Cutscene refuses to play, then crashes | Staged WMV3 codec, and the same D3D9 to D3D11 bridge | **DXMT** | 11 | Preview -- not tried on 26.3 | Fixed |
 | [Nioh 2](Nioh-2.md) | Koei Tecmo, in-house | Cutscene refuses to play, then crashes | Same codec and same bridge as Nioh, unchanged | **DXMT** | 11 | Preview -- not tried on 26.3 | Fixed |
+| [Nioh 3](Nioh-3.md) | Koei Tecmo, in-house | Failed to play movie | The DYNASTY WARRIORS bridge, unchanged | D3DMetal | 12 | Preview -- not tried on 26.3 | Fixed |
 
 **Backend and DX are not preferences, they are requirements.** Persona 5
-Strikers and the two Nioh titles only work on DXMT: all three need a shared D3D9
+Strikers, Nioh and Nioh 2 only work on DXMT: all three need a shared D3D9
 surface handle, and DXMT implements sharing where D3DMetal has none to build on.
-The other five run on
+Nioh 3, despite the name, belongs with the other group -- it is D3D12 on
+D3DMetal and never touches D3D9. The other six run on
 D3DMetal with the D3D12 renderer, which is also what keeps PSO precompilation
 -- `-dx11` dodges some of these faults and costs permanent shader-compilation
 stutter.
@@ -51,8 +53,8 @@ not usable under another, and none had been built for 26.3 yet.
 DYNASTY WARRIORS crashes there too; that much was run, while the reason given for
 it is read from the two installs' plugin sets rather than from watching it fail.
 
-The two Nioh rows record an absence rather than a result: both were fixed on
-Preview and neither was launched on 26.3, so nothing is claimed either way.
+The three Nioh rows record an absence rather than a result: all were fixed on
+Preview and none was launched on 26.3, so nothing is claimed either way.
 Their codec is staged the same way Strikers' is, which is the half that made
 Strikers portable, but the bridge half has only ever run against the Preview
 build's DXMT.
@@ -70,8 +72,9 @@ comparison the conclusion rests on is in [Findings](Findings.md), under *The
 container, not the codec*.
 
 Three titles need a codec no CrossOver ships -- VC-1 for Persona 5 Strikers,
-WMV3 for both Nioh titles -- and it is staged beside the game rather than
-patched into it.
+WMV3 for Nioh and Nioh 2 -- and it is staged beside the game rather than patched
+into it. Nioh 3 needs none: its video is already NV12 by the time Media
+Foundation is asked for it.
 
 None of these fixes decodes anything. The frames existed all along; they were
 being crashed on, mislabelled, or thrown away.

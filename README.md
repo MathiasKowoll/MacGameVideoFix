@@ -25,6 +25,7 @@ the list, drop its folder on it, press Apply.
 | [**DYNASTY WARRIORS: ORIGINS**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Dynasty-Warriors-Origins) | Cutscene plays with sound, picture black | Preview 20260821 — no video on 26.3 |
 | [**Nioh**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Nioh) | Cutscene refuses to play, then crashes | Preview 20260821 — not tried on 26.3 |
 | [**Nioh 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Nioh-2) | Cutscene refuses to play, then crashes | Preview 20260821 — not tried on 26.3 |
+| [**Nioh 3**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Nioh-3) | Failed to play movie | Preview 20260821 — not tried on 26.3 |
 
 **This project targets `crossover-preview-arm64-20260821`**, and that is what
 "Preview" means in the column above and everywhere else in this file. Every title

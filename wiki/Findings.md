@@ -292,6 +292,26 @@ D3DMetal has none to build on: `GetSharedHandle` appears 17 times in DXMT's
 DXMT and on nothing else, and why a game in DYNASTY WARRIORS' position may work
 under a different backend instead — untested here.
 
+## Two bridges, and which title needs which
+
+By the ninth title the pattern is not one bridge but two, and the split does
+not follow the names on the boxes.
+
+The **D3D9 bridge** serves Persona 5 Strikers, Nioh and Nioh 2. They ask D3D9
+for a shared surface, Wine returns `S_OK` with a handle of zero, and the bridge
+supplies a real one from the D3D11 side. It needs DXMT, because
+`GetSharedHandle` is what the whole design rests on and D3DMetal has none.
+
+The **D3D11-to-D3D12 bridge** serves DYNASTY WARRIORS and Nioh 3. They ask
+Media Foundation to decode into D3D video textures, which D3DMetal cannot
+provide -- `QueryInterface(ID3D11VideoDevice)` is `E_NOINTERFACE` -- so the
+bridge strips the request down to software decode and stubs the entire video
+processor the game then drives by hand. It runs on D3DMetal.
+
+Nioh 3 belongs to the second group despite sharing a name with the first two,
+which is worth stating plainly: the series a game is in predicts nothing. What
+predicts the fix is which API it reaches its frames through.
+
 ## The same bridge, three games
 
 Nioh and Nioh 2 were both fixed by the Persona 5 Strikers bridge with no change
@@ -353,6 +373,35 @@ DXMT. Whether
 the bridge works under D3DMetal is not open in the same way -- the sidecar needs
 `GetSharedHandle`, which is `E_NOTIMPL` there -- but it has not been tried, and
 26.3 has not been tried at all.
+
+## The module a function lives in is not the module it is asked from
+
+Three of these fixes hook a function by naming the DLL it belongs to. That
+assumption held for eight titles and broke on the ninth.
+
+Nioh 3 ships NVIDIA Streamline. It imports `D3D11CreateDevice` and
+`D3D12CreateDevice` from `sl.interposer.dll`, a drop-in replacement exporting
+the same names, and never mentions `d3d11.dll` or `d3d12.dll` anywhere in its
+import table. A hook placed against the real module's name finds nothing, says
+`not imported`, and the game proceeds unwatched.
+
+There are two ways a game reaches these entry points and both need covering: a
+static import from whatever module it names, and a runtime `GetProcAddress`.
+DYNASTY WARRIORS uses the second, Nioh 3 the first, and the probe written for
+Ninja Gaiden 4 had only ever needed the second.
+
+**A half-placed hook is worse than none.** Hooking Nioh 3's D3D11 without its
+D3D12 did not leave the game where it started -- it crashed it with
+`0xC0000005`. The bridge has two halves that only work together: one hands the
+game an invented share handle when `GetSharedHandle` fails under D3DMetal, the
+other recognises that handle when the D3D12 renderer brings it back. With only
+the first in place, `0xD3D12B21D` reached a real D3D12 device.
+
+The guard that was missing from the start, and that DYNASTY WARRIORS never
+needed because its D3D12 always came through a watched path: **do not hand out
+an invented handle unless the hook that can read it is armed.** A game that
+cannot share surfaces and is told so fails cleanly. A game that is lied to
+dies. That is now enforced rather than assumed.
 
 ## Living outside CrossOver
 

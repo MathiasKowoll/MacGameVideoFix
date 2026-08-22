@@ -285,6 +285,33 @@ static struct stub_object stub_vp_output_view;
 static struct stub_object stub_dxgi_buffer;
 
 static const char *dxgi_format_name(UINT f);
+/*
+ * What the device says it can do with a format.
+ *
+ * winevideo carries a patch whose only reason to exist is that D3DMetal
+ * cannot create NV12 textures. A player that asks first and believes the
+ * answer would abandon the video before touching Media Foundation -- which is
+ * the shape of what Nioh 3 did: MFStartup, silence, MFShutdown. This says
+ * whether that is what happened, instead of leaving it a good story.
+ */
+#define DXGI_FORMAT_NV12_ 103
+#define SLOT_DEV11_CHECKFORMATSUPPORT 29
+static HRESULT (WINAPI *real_CheckFormatSupport)(void *, UINT, UINT *);
+static LONG format_queries;
+
+static HRESULT WINAPI my_CheckFormatSupport(void *self, UINT format, UINT *support)
+{
+    HRESULT hr = real_CheckFormatSupport(self, format, support);
+    /* NV12 always, everything else only for the first few: a renderer asks
+     * about dozens of formats at startup and they would bury the one line
+     * that matters. */
+    if (format == DXGI_FORMAT_NV12_ || InterlockedIncrement(&format_queries) <= 24)
+        logf_("CheckFormatSupport(format=%u%s) -> 0x%08lx, support=0x%08x",
+              format, format == DXGI_FORMAT_NV12_ ? " NV12" : "",
+              (unsigned long)hr, support ? *support : 0);
+    return hr;
+}
+
 static void log_guid(const char *label, const GUID *g);
 static HRESULT WINAPI my_D3D12CreateDevice(void *adapter, UINT feature_level,
                                            REFIID iid, void **device);
@@ -1458,6 +1485,20 @@ static HRESULT WINAPI my_D3D11CreateDevice(void *adapter, UINT driver_type, HMOD
                         &iid_video_context);
         install_video_stubs(device ? *(void **)device : NULL,
                             context ? *(void **)context : NULL);
+        if (device && *device && !real_CheckFormatSupport)
+        {
+            /* Saved before the slot is published: a call arriving in between
+             * would otherwise land on a null original. That ordering has cost
+             * this project two crashes. */
+            void **vt = *(void ***)*device;
+            real_CheckFormatSupport =
+                (HRESULT (WINAPI *)(void *, UINT, UINT *))vt[SLOT_DEV11_CHECKFORMATSUPPORT];
+            if (!patch_vtable_slot(*device, SLOT_DEV11_CHECKFORMATSUPPORT,
+                                   (void *)my_CheckFormatSupport))
+                real_CheckFormatSupport = NULL;
+            else
+                logf_("  watching CheckFormatSupport for NV12");
+        }
         if (!video_device && device)  video_device  = *(ID3D11Device **)device;
         if (!video_context && context) video_context = *(ID3D11DeviceContext **)context;
     }
@@ -1719,6 +1760,24 @@ static HANDLE WINAPI my_CreateFileW(LPCWSTR name, DWORD access, DWORD share,
 {
     HANDLE h = real_CreateFileW(name, access, share, sa, disposition, flags, template_file);
 
+    /*
+     * Successful opens too, bounded and filtered.
+     *
+     * The first Nioh 3 run proved nothing about whether a movie was ever
+     * opened, because only failures were being written down. An absence in a
+     * log that never recorded presence is not evidence, and it was about to be
+     * read as some.
+     */
+    if (h != INVALID_HANDLE_VALUE && name)
+    {
+        static LONG opens;
+        if ((StrStrIW(name, L"movie") || StrStrIW(name, L".fdata")
+             || StrStrIW(name, L"video") || StrStrIW(name, L"usm")
+             || StrStrIW(name, L".wmv")  || StrStrIW(name, L".mp4")
+             || StrStrIW(name, L".webm"))
+            && InterlockedIncrement(&opens) <= 40)
+            logf_("CreateFileW ok: %ls", name);
+    }
     if (h == INVALID_HANDLE_VALUE)
     {
         /* Every failure, up to a limit: whatever the video system cannot find
@@ -2612,6 +2671,21 @@ static DWORD WINAPI worker(LPVOID unused)
           real_D3D12CreateDevice ? "hooked in DllMain" : "not imported");
     report_d3d12_import();
     HOOK("d3d11.dll", D3D11CreateDevice);
+    /*
+     * And again through Streamline.
+     *
+     * Nioh 3 imports D3D11CreateDevice and D3D12CreateDevice from
+     * sl.interposer.dll by name, statically. The GetProcAddress substitution
+     * above catches a game that asks for them at runtime -- Ninja Gaiden 4
+     * does -- but a static import never asks, so that hook stayed cold and the
+     * first Nioh 3 run saw no renderer at all. Hooking the same two functions
+     * against the interposer's name covers the other half.
+     *
+     * A game that does neither leaves both "not imported", which is a fact
+     * worth having in the log rather than a silence to interpret.
+     */
+    HOOK("sl.interposer.dll", D3D11CreateDevice);
+    HOOK("sl.interposer.dll", D3D12CreateDevice);
     HOOK("KERNEL32.dll", GetProcAddress);
     HOOK("KERNEL32.dll", CreateFileW);
     HOOK("KERNEL32.dll", FindFirstFileW);
