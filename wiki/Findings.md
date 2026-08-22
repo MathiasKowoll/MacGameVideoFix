@@ -3,14 +3,19 @@
 What the nine titles have in common: the results that are not about any one of
 them, the mechanism the fixes share, and what was tried and did not work.
 
-Every claim here is listed with its evidence and its method under
-[Evidence and method, finding by finding](#evidence-and-method-finding-by-finding),
-including the ones that are inference rather than measurement and the ones that
-were never measured at all. Start there if the question is how much weight a
-particular result carries.
+**This page is addressed to whoever maintains Wine, D3DMetal, DXMT or
+CrossOver's packaging.** Every result is stated as a defect or a gap in the
+translation stack rather than as a property of a game, and each one carries what
+was observed, how to reproduce it, and what would close it. Start at
+[Defects, by the component that would fix them](#defects-by-the-component-that-would-fix-them);
+the sections after it are the mechanism and the background.
 
-The per-title pages carry the findings for a title and the wrong turns that came
-first. This page carries what is common to all of them, and it is where a claim
+What this project got wrong on the way to these results is deliberately not
+here. It is in
+[docs/what-we-got-wrong.md](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/what-we-got-wrong.md),
+because it is of no use to anyone implementing a fix.
+
+The per-title pages carry the findings for a title. This page carries what is common to all of them, and it is where a claim
 lives when it belongs to an engine, to CrossOver, or to the toolkit rather than
 to a game. Where a title page already tells a story in full, this page links to
 it rather than telling it again.
@@ -22,103 +27,194 @@ Everything here was measured on an M4 Max, macOS 27, GPTK 4.0b2, against
 CrossOver 26.3 and `crossover-preview-arm64-20260821`. "Preview" on this page
 means that build and no other.
 
-## Evidence and method, finding by finding
+## Defects, by the component that would fix them
 
-Every claim on this page, with what was actually observed and how it was
-produced. It exists because a finding without its method is not reportable: the
-whole argument for working outside CrossOver is that these results can be handed
-to whoever maintains the runtime, and that only holds if each one says how it
-can be reproduced or challenged.
+Everything below is a gap or a defect in the translation stack, not in a game.
+Each one carries what was observed, how to reproduce it, and what would close
+it. The games are only where it surfaced.
 
-Four words are used precisely, and the difference between them is the point:
+Four words are used precisely: **measured** (observed directly here),
+**controlled** (observed with and without the thing under test), **inferred**
+(reasoned from something measured, not itself observed), and **not measured**
+(recorded so it is not mistaken for a result).
 
-- **Measured** — observed directly, on this machine, in a run or in a file.
-- **Controlled** — measured with and without the thing under test, so the
-  comparison rules out what a single observation cannot.
-- **Inferred** — reasoned from something measured, not itself observed. Every
-  one of these is a place a report upstream should be read sceptically.
-- **Not measured** — recorded so it is not mistaken for a result.
+### Wine
 
-### CrossOver and its media stack
+**`d3d9` reports success and returns a null share handle.**
 
-| Finding | What was observed | How | Standing |
-| --- | --- | --- | --- |
-| Preview can open a WebM container and stable 26.3 cannot | 26.3 carries 17 GStreamer plugins, Preview 19; the two Preview has to itself are `matroska` and `osxaudio` | listing the plugin set of both installs on disk; no run | **Measured** for the plugin sets, **Inferred** for the effect on stable — DYNASTY WARRIORS has never been launched on 26.3 |
-| Both builds decode VP9 identically | both carry `applemedia` and reach VideoToolbox; neither ships `libgstvpx` or `libgstlibav` | same comparison | **Measured** |
-| `GST_PLUGIN_PATH` survives into a bottle | CrossOver's launcher sets only `GST_PLUGIN_SYSTEM_PATH` and never touches `GST_PLUGIN_PATH` | read out of Preview's `bin/wine`, around line 690 | **Measured** on Preview; **Inferred** that it holds on other builds — not checked on any other |
-| GStreamer 1.24.14 is usable for staging | the game played with it | one title, one version | **Measured** for 1.24.14; **Inferred** that the 1.24 series works, from ABI policy alone |
-| `libgstlibav` had never loaded, for any title | `libgstpbutils` names `libgsttag`, dyld resolves that `@rpath` against the staging directory rather than CrossOver's, and the plugin fails to load silently | `otool -L` down the dependency chain, then Nioh's DMO `Init` moving from `0xD0000001` to `S_OK` once the chain was followed | **Measured** |
-| Persona 5 Strikers does not depend on the staged decoder | it played through while that plugin was never loading | the finding above, applied backwards to an earlier result | **Not explained.** Whatever decodes its VC-1 is not the staged ffmpeg, and this has not been chased down |
+- *Observed.* `IDirect3DDevice9::CreateRenderTarget` with a share handle
+  requested returns `S_OK` and writes zero into the handle. Three titles, same
+  result: `CreateRenderTarget(1920x1080, SHARED requested) -> S_OK, handle 0`.
+- *Consequence.* A caller that believes the return value carries the null
+  forward. Nioh reaches `mov rdx, [rdx+0x10]` with `rdx` at zero on its video
+  thread and the process dies. No crash report names the cause.
+- *Reproduce.* Nioh, Nioh 2 or Persona 5 Strikers under DXMT; patch slot 28 of
+  `IDirect3DDevice9` and log the handle written.
+- *What would fix it.* Either implement D3D9 resource sharing, or fail the
+  creation when a share handle is asked for and cannot be produced. The second
+  is much smaller and removes the crash: a caller told *no* can fall back, and
+  every one of these titles has a non-shared path. Success-with-null is the
+  harmful answer, not the missing feature.
+- *Standing.* **Measured**, three titles.
 
-### D3DMetal and DXMT
+**No D3D11 resource sharing in `d3d11`.**
 
-| Finding | What was observed | How | Standing |
-| --- | --- | --- | --- |
-| D3DMetal does not implement `ID3DDestructionNotifier` | `QueryInterface` returns `E_NOINTERFACE`, the caller does not check, and the next line reads address 0 | the crash stack naming `WindowsElectraDecoderGPUBufferHelpers.h:276`, read against the engine header | **Measured** |
-| D3DMetal answers `S_OK` for every adapter node index | the accumulating walk never ends; refusing node 1 with `DXGI_ERROR_INVALID_CALL` ends it, once per session | the guard writes one line the first time it refuses; that line is the whole signal | **Measured** |
-| `IDXGIResource::GetSharedHandle` is `E_NOTIMPL` under D3DMetal | the call fails for every resource | direct observation in the bridge | **Measured** |
-| DXMT implements sharing and Wine does not | `GetSharedHandle` appears 17 times in DXMT's `d3d11.dll` and not once in Wine's | symbol scan of both binaries | **Measured** |
-| D3DMetal provides no `ID3D11VideoDevice` | `QueryInterface(ID3D11VideoDevice)` and `(ID3D11VideoContext)` both return `0x80004002` | probe attached to Nioh 3, at device creation | **Measured** |
-| D3DMetal cannot create NV12 textures | not observed here | winevideo carries a patch whose stated reason is exactly this | **Inferred**, from a second project's patch notes. Nioh 3 never called `CheckFormatSupport` at all, so the hypothesis that a title checks and gives up was **tested and not supported** |
-| GPTK 3 freezes both Life is Strange titles and 4.0b2 does not | 26.3 carries D3DMetal 3.0, Preview carries 4.0b2 and ships 3.0 beside it; the two copies of 3.0 are byte-identical | hashing both copies; same proxy, same bottle, same backend either side | **Measured** that this is the only difference. **Not measured** why 3.0 freezes — open, and the shape a report upstream would take |
+- *Observed.* `GetSharedHandle` appears 17 times in DXMT's `d3d11.dll` and not
+  once in Wine's, by symbol scan of both.
+- *Consequence.* The bridges here work only on DXMT. On Wine's own D3D11 there
+  is nothing to build a shared surface on.
+- *Standing.* **Measured.**
 
-### The Unreal fault
+**No VP9 decoder MFT is registered.**
 
-| Finding | What was observed | How | Standing |
-| --- | --- | --- | --- |
-| The VP9 path always enters the D3D12 buffer pool | `bUseGPUBuffers = (PlatformDevice && PlatformDeviceVersion >= 12000)` with no guard, where H.264 and H.265 have a CVar | engine source read against the shipped binary | **Measured** |
-| There is no VPx CVar to escape it | only `Electra.Win.H264UseOldOutputPath` and `Electra.Win.H265UseOldOutputPath` exist | every string extracted from the shipped executable, exhaustively rather than sampled | **Measured** |
-| The patch reaches four sites in this build | each of the four confirmed reached at runtime | not assumed from the disassembly — the running process was watched | **Measured** |
-| Offsets move between game builds | the crash site alone shifted `0x2C70` between two builds of one title | comparing the two builds | **Measured** — which is why the fix is a pattern scan and not a table of offsets |
-| Mortal Shell 2's VP9 never touches CrossOver's media stack | the fix worked identically on 26.3 with and without winevideo, the same version differing only in GStreamer plugins | paired run through `diagnostics/launch-with.sh` | **Controlled.** The only controlled comparison in the project, made on this title and no other |
-| The Life is Strange freeze is not caused by anything installed here | the fix removed entirely, the game restored to what Steam delivers, relaunched on 26.3 — freezes exactly as before | control run | **Controlled** |
-| The node guard never runs on 26.3 | five lines of log against twenty-nine, and no adapter node ever walked | comparing the guard's own log between builds | **Measured** — the fault arrives before the code written for it can act |
-| The node walk is not specific to these titles | two executables scanned, both carry the loop | static scan | **Measured**, on a sample of two. That is the whole sample |
-| The 100 ms cache made things smoother | it was reported as feeling smoother | nothing captured before or after | **Not measured.** Recorded as a report; the cache was not kept |
+- *Observed.* `MFTEnumEx(MFT_CATEGORY_VIDEO_DECODER, 0x3F, {Video, VP90})`
+  returns zero entries, and the registry contains no mention of VP9 anywhere.
+- *Consequence.* A title that asks before decoding never proceeds. Ninja Gaiden
+  4 stops here and calls `exit(-1)`, leaving a black screen and no report.
+- *Note.* The capability exists — CrossOver Preview decodes VP9 profile 0 and 2
+  through `vp9parse → vtdec_hw`. What is missing is the declaration, not the
+  decoder.
+- *What would fix it.* Registering a VP9 decoder MFT. Proton carries one and
+  winevideo ports it under Microsoft's public VP9 Video Extensions CLSID.
+- *Standing.* **Measured.**
 
-### The bridges
+**No `.webm` byte-stream handler is registered.**
 
-| Finding | What was observed | How | Standing |
-| --- | --- | --- | --- |
-| Wine's D3D9 returns `S_OK` with a share handle of zero | `CreateRenderTarget(1920x1080, SHARED requested) -> S_OK, handle 0` | bridge log, three titles | **Measured** |
-| That null is what the game dies on | Nioh carries it to `mov rdx, [rdx+0x10]` on a worker thread | crash dump register state, `rdx` at zero | **Measured** |
-| The bridge delivers real picture, not an empty surface | luma readings on the delivered frames — `range 0..251`, `average 11..17` | reading the pixels rather than trusting that the game kept running | **Measured.** A valid but empty surface produces a running game and a black screen, and the two are indistinguishable without this |
-| One bridge serves three titles unchanged | Persona 5 Strikers, Nioh and Nioh 2, with different players above it — Media Foundation for two, DirectShow for one | the same binary logic on all three; for Nioh 2, literally the same built proxy | **Measured** |
-| Nioh 2 needed no rebuild | its carrier exports the identical 16 symbols | `comm` over both export lists | **Measured** |
-| The first Nioh crash was not caused by this project | the log held two lines, both of them patches, and no call ever reached our code | reasoning from the log — **not** an address comparison, because no earlier dump had been kept | **Inferred.** Stated as such: the stronger test was not available |
-| The NV12-to-BGRA converter is title-independent | moved from DYNASTY WARRIORS to Persona 5 Strikers unchanged, then absorbed Nioh 2's NV12-at-1920-pitch without adjustment | transferring it and measuring the result | **Measured** — and the first transfer cost a run, because the table it indexes came across without the call that fills it |
+- *Observed.* `MFCreateSourceReaderFromURL` resolves by file extension through
+  the registry and fails on `.webm`. `MFCreateSourceReaderFromByteStream`
+  resolves by content and succeeds on the same data.
+- *Consequence.* Two titles with the same container behave differently
+  depending only on which entry point their player uses.
+- *What would fix it.* Registering the handler. Content-based resolution is
+  already working, so this is a registration gap rather than a capability one.
+- *Standing.* **Measured.**
 
-### Streamline, and the ninth title
+**The WMV3 path fails to construct without an ffmpeg plugin present.**
 
-| Finding | What was observed | How | Standing |
-| --- | --- | --- | --- |
-| A game can ask for a function from a module that does not implement it | `Nioh3.exe` imports `D3D11CreateDevice` and `D3D12CreateDevice` from `sl.interposer.dll` and never names `d3d11.dll` or `d3d12.dll` at all | PE import and export dump via `runtime/pe.py` | **Measured** |
-| A hook against the real module's name therefore finds nothing | the bridge reported `d3d11 not imported` and the game ran unwatched | first Nioh 3 run with the bridge | **Measured** |
-| A half-placed hook is worse than none | with only D3D11 hooked the game crashed at `0xC0000005`; with both halves hooked it played | two runs differing by one hook | **Measured** |
-| Nioh 3's video is NV12 at 2560x1440, 29.97 fps | `GetNativeMediaType` reported it | probe attached during playback | **Measured** |
-| Nioh 3 asks for D3D-backed decode | `MF_SOURCE_READER_D3D_MANAGER` set and `MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS` at 1 | attribute dump at `MFCreateSourceReaderFromByteStream` | **Measured** |
-| Removing those two attributes is sufficient | Media Foundation resolved in software and the video played | dropping them from a copy of the attributes, never the game's own store | **Measured** |
+- *Observed.* `qasf` → `wmvdecod.dll` → winegstreamer's `wg_wmv_decoder`, which
+  probes a fixed WMV3-to-I420 1920x1080 transform before constructing anything.
+  With nothing able to serve it, `IDMOWrapperFilter::Init` returns
+  `0xD0000001` — `HRESULT_FROM_NT(0xC0000001)` — and the DirectShow graph never
+  builds. With `libgstlibav` reachable, the same call returns `S_OK`.
+- *Standing.* **Measured**, on Nioh, either side of the change.
 
-### Ninja Gaiden 4, which is not fixed
+### D3DMetal
 
-| Finding | What was observed | How | Standing |
-| --- | --- | --- | --- |
-| The game checks for a VP9 decoder MFT before anything else | `MFTEnumEx(MFT_CATEGORY_VIDEO_DECODER, {Video, VP90})` returns 0 entries; 0 mentions of VP9 anywhere in the registry | probe on the running process, plus a registry scan | **Measured** |
-| No GStreamer plugin ever loads in that process | `mfplat` and `mfreadwrite` load and nothing else does | watching the running process | **Measured** — no pipeline is built because none is asked for |
-| A source-reader failure is fatal here | the game calls `exit(-1)`, leaving a black screen and no crash report | observed behaviour plus the absence of any report | **Measured** |
-| `FromURL` resolves by extension, `FromByteStream` by content | DYNASTY WARRIORS works in a bottle where this does not, and uses the second | comparing the two titles' call sites | **Measured** — and the basis for the untried repair below |
-| The videos are 399 WebM/VP9 and one MP4 in a `.msd` | all 400 checked | header scan of every file, not a sample | **Measured**. An earlier sampled scan suggested CRI Sofdec and was wrong |
-| Answering the MFT gate from a proxy would be enough | — | never run | **Not measured.** The open question on this title |
-| Redirecting `FromURL` to `FromByteStream` would sidestep the registry | — | never written | **Not measured** |
+**`ID3DDestructionNotifier` is not implemented.**
 
-### What limits all of it
+- *Observed.* `QueryInterface` returns `E_NOINTERFACE`.
+- *Consequence.* Unreal Engine 5 does not check the result —
+  `WindowsElectraDecoderGPUBufferHelpers.h:276`, where the `check()` is compiled
+  out of shipping builds — and the next line dereferences a null vtable. Every
+  UE5 title with VP9 cutscenes on the D3D12 RHI crashes on its first cutscene,
+  with the same stack at different offsets.
+- *Reproduce.* Any such title; the stack names
+  `FElectraMediaDecoderOutputBufferPoolBlock_DX12::AllocateBuffer`.
+- *What would fix it.* Implementing the interface. It is small, and winevideo
+  ships a standalone shim DLL that does nothing else — evidence that the surface
+  needed is narrow.
+- *Standing.* **Measured.**
 
-| Finding | Standing |
-| --- | --- |
-| Everything here was measured on one machine — M4 Max, macOS 27, GPTK 4.0b2 | **Not controlled** for hardware or OS version. No second machine has run any of it |
-| The three Nioh titles have never been launched on stable 26.3 | **Not measured.** The tables record an absence, not a result |
-| DYNASTY WARRIORS has never been launched on 26.3 either | **Not measured.** Everything said about it on stable is read from plugin sets |
-| `dxgi.dll` tolerates being renamed; `d3d12.dll` is not known to | **Measured** for the first, **Not measured** for the second — which is what limits the CrossOver-wide guard |
+**`IDXGIAdapter3::QueryVideoMemoryInfo` succeeds for every node index.**
+
+- *Observed.* The call returns `S_OK` for indices past the number of memory
+  nodes. On Windows it fails there.
+- *Consequence.* Unreal's D3D12 RHI walks nodes accumulating totals and ends the
+  walk when the call fails. Against an answer that never fails, the walk does
+  not end. Two titles freeze.
+- *Reproduce.* Patch slot 14 of `IDXGIAdapter3` and refuse index 1 with
+  `DXGI_ERROR_INVALID_CALL`; the freeze stops.
+- *What would fix it.* Returning `DXGI_ERROR_INVALID_CALL` past the node count.
+  This is the smallest fix on this page and it removes a hard freeze.
+- *Standing.* **Measured.**
+
+**No `ID3D11VideoDevice` or `ID3D11VideoContext`.**
+
+- *Observed.* `QueryInterface` returns `0x80004002` for both, on a device that
+  was created successfully.
+- *Consequence.* Two distinct failures. A title that sets
+  `MF_SOURCE_READER_D3D_MANAGER` and `MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS`
+  gets no D3D-backed decode; and a title that drives the video processor itself
+  — `CreateVideoProcessorEnumerator`, `CreateVideoProcessor`, the input and
+  output views, and eleven `VideoProcessorSet*` calls — has nothing to drive.
+- *What would fix it.* Implementing the video device and processor. Short of
+  that, the software path works: stripping those two attributes from the source
+  reader's attribute store is sufficient for playback, which suggests a
+  fallback inside Media Foundation would serve titles that ask for acceleration
+  and can live without it.
+- *Standing.* **Measured.**
+
+**`IDXGIResource::GetSharedHandle` is `E_NOTIMPL`.**
+
+- *Consequence.* Decoding video on a D3D11 device and presenting it with a
+  D3D12 renderer cannot work at all, which is a common shape.
+- *Standing.* **Measured.**
+
+**D3DMetal 3.0 freezes two titles that 4.0b2 runs.**
+
+- *Observed.* CrossOver 26.3 carries 3.0; the Preview build carries 4.0b2 and
+  ships 3.0 beside it unused. The two copies of 3.0 are byte-identical.
+  Everything else is held constant: same game files, same bottle, same backend.
+- *Standing.* **Measured** that this is the only difference. **Not measured**
+  why. This is the shape a bug report would take rather than a diagnosis.
+
+**A per-title override table decides feature availability by executable name.**
+
+- *Observed.* `__ZL20ApplicationOverrides`, 49 records of `0x48` bytes, matched
+  against the executable's basename. Byte `+0x24` gates `EnumerateMetaCommands`.
+- *Consequence.* A title's DirectStorage support depends on whether its name is
+  in that table, which is invisible from outside and cannot be configured.
+- *Standing.* **Measured**, by binary analysis.
+
+**`d3d12.dll` refuses to initialise under another module name.**
+
+- *Observed.* Renamed, it returns `ERROR_DLL_INIT_FAILED`. `dxgi.dll` tolerates
+  the same rename.
+- *Consequence.* A CrossOver-level proxy is possible for DXGI and not for D3D12,
+  which is what keeps most fixes here per-game.
+- *Standing.* **Measured** for both. Whether a proxy that exports
+  `D3D12CreateDevice` itself is also refused is **not measured**.
+
+### CrossOver packaging
+
+**Stable 26.3 ships no WebM demuxer.**
+
+- *Observed.* 26.3 carries 17 GStreamer plugins and
+  `crossover-preview-arm64-20260821` carries 19; the two Preview has to itself
+  are `matroska` and `osxaudio`.
+- *Consequence.* A `.webm` cutscene cannot be opened on stable, so nothing gets
+  as far as a decoder. Both builds decode VP9 identically through
+  `applemedia`, so this is a container gap, not a codec one.
+- *What would fix it.* Shipping `libgstmatroska` in the stable line.
+- *Standing.* **Measured** for the plugin sets. **Inferred** for the effect on
+  stable — the affected title has never been launched there.
+
+**No VC-1 or WMV3 decoder is shipped in either line.**
+
+- *Observed.* Neither build carries `libgstlibav` or `libgstvpx`.
+- *Consequence.* Three titles here need a decoder staged from the user's own
+  GStreamer install to play at all.
+- *Standing.* **Measured.**
+
+**The launcher leaves `GST_PLUGIN_PATH` free.**
+
+- *Observed.* CrossOver's launcher sets only `GST_PLUGIN_SYSTEM_PATH`, around
+  line 690 of `bin/wine`, and the bottle's own environment is applied first.
+- *Consequence.* A plugin can be supplied per bottle without modifying the
+  installation. This is the property the staging here depends on; it is recorded
+  so that a change to it is known to break something.
+- *Standing.* **Measured** on Preview. **Inferred** for other builds — not
+  checked on any.
+
+### Open, and attributable to nobody yet
+
+**Why D3DMetal 3.0 freezes those two titles.** The fault arrives before any
+guard can act: on 3.0 the adapter node walk never happens, so whatever stops
+them is upstream of the walk that explains the same freeze on other builds.
+
+**What decodes Persona 5 Strikers' VC-1.** The title plays on a system where the
+staged ffmpeg plugin is demonstrably not loading, so something else is serving
+it. Not chased down.
 
 ## The container, not the codec
 
@@ -179,12 +275,9 @@ Both Life is Strange titles freeze on stable CrossOver 26.3 and run on
 `crossover-preview-arm64-20260821`. This is the canonical account; both title
 pages state the observation and point here.
 
-**It is not the fix.** That was written here twice as ours, open and unexplained,
-and the second time with a mechanism attached that turned out to be about a
-different title's half of the DLL. Both were withdrawn by the same experiment:
-the fix removed entirely, the game restored to what Steam delivers, relaunched on
-26.3 — and it freezes exactly as before. Nothing this project installs is
-involved in it.
+**Nothing installed beside the game is involved.** Established by a control
+run: the fix removed entirely, the game restored to what Steam delivers,
+relaunched on 26.3 — and it freezes exactly as before.
 
 **The guard never runs.** The policy table [below](#one-dll-three-repairs) arms
 the DXGI node guard for `Iris` and `Chronos` and nothing else. On Preview it arms
@@ -324,8 +417,8 @@ forever. Refusing node 1 with `DXGI_ERROR_INVALID_CALL` ends it, once per
 session — so the guard writes one line the first time it refuses, and that line
 in the log is what says the fix took effect. A log carrying the Electra lines
 but not that one says the game never made the walk, which rules this fault out
-rather than the fix. The disassembly, the spindump and the three wrong turns that came first
-are on [Reunion's page](Life-is-Strange-Reunion.md).
+rather than the fix. The disassembly and the spindump are on
+[Reunion's page](Life-is-Strange-Reunion.md).
 
 **This one is not about these games.** The walk is in Unreal's D3D12 RHI rather
 than in anything either title added, so the guard is worth trying on any Unreal
@@ -368,9 +461,8 @@ lacked. The fuller note is on [Reunion's page](Life-is-Strange-Reunion.md).
 The DYNASTY WARRIORS fault is what happens to any game that decodes video on a
 D3D11 device and presents it with a D3D12 renderer, because
 `IDXGIResource::GetSharedHandle` is `E_NOTIMPL` under D3DMetal for all of them.
-The five faults in sequence, the bridge design, the copy-queue reasoning, the
-cost work and the three conclusions that had to be withdrawn are on
-[that title's page](Dynasty-Warriors-Origins.md).
+The five faults in sequence, the bridge design and the copy-queue reasoning are
+on [that title's page](Dynasty-Warriors-Origins.md).
 
 Three things from it generalise.
 
@@ -386,9 +478,7 @@ no reference implementation are the ones most likely to be fragile.
 across from the DYNASTY WARRIORS bridge to the
 [Persona 5 Strikers](Persona-5-Strikers.md) bridge unchanged. That is the
 clearest evidence so far that the logic in these fixes is general and only the
-carrier is not — and the transfer cost a run of its own, because the table the
-converter indexes came across without the call that fills it, and a zeroed clamp
-table turns good input into a uniformly black frame.
+carrier is not.
 
 **Backend is a requirement, not a preference.** DXMT implements sharing where
 D3DMetal has none to build on: `GetSharedHandle` appears 17 times in DXMT's
@@ -445,24 +535,12 @@ working: a bridge that hands over a valid but empty surface produces a game that
 runs and a screen that is black, and the two are indistinguishable without
 reading the pixels.
 
-**What had to change was one slot number.** The bridge watched
-`IDirect3D9::CreateDevice`, slot 16. Nioh reaches its device through
-`Direct3DCreate9Ex` and `CreateDeviceEx`, slot 20, so the bridge armed a vtable
-the game never called and sat there logging two lines while the cutscene failed.
-Hooking an interface is not enough. A game can reach the same object through a
-different door, and on every D3D9 interface that has an Ex variant, that variant
-is a second door.
-
-Slot 20 is written only when the object came from `Direct3DCreate9Ex`. On a
+**The Ex variants are a second door.** Persona 5 Strikers creates its device
+through `IDirect3D9::CreateDevice`, slot 16. Nioh reaches the same object
+through `Direct3DCreate9Ex` and `CreateDeviceEx`, slot 20, and never calls slot
+16 at all. Anything watching one of those interfaces has to watch both, and slot
+20 may only be written on an object that came from `Direct3DCreate9Ex` — on a
 plain `IDirect3D9` that index is past the end of the vtable.
-
-**A crash that was not ours, and how that was settled.** The first Nioh run with
-the bridge installed crashed. What settled the attribution was not a comparison
-of addresses against an earlier dump -- none had been kept -- but the log: two
-lines, both of them patches, and no call ever reaching our code, so none of it
-could have taken part. One line in it reads like a failure and is not.
-`Direct3DCreate9Ex -> 0x00000000` looks like a null return; that function
-returns an `HRESULT`, so the value is `S_OK`.
 
 **And it held for a third.** Nioh 2 needed no code change at all -- same
 carrier, exporting the identical 16 symbols, so even the built proxy was reused.
@@ -494,18 +572,16 @@ static import from whatever module it names, and a runtime `GetProcAddress`.
 DYNASTY WARRIORS uses the second, Nioh 3 the first, and the probe written for
 Ninja Gaiden 4 had only ever needed the second.
 
-**A half-placed hook is worse than none.** Hooking Nioh 3's D3D11 without its
-D3D12 did not leave the game where it started -- it crashed it with
-`0xC0000005`. The bridge has two halves that only work together: one hands the
-game an invented share handle when `GetSharedHandle` fails under D3DMetal, the
-other recognises that handle when the D3D12 renderer brings it back. With only
-the first in place, `0xD3D12B21D` reached a real D3D12 device.
+**A substituted handle needs both ends.** A bridge that answers a failing
+`GetSharedHandle` with a handle of its own invention is only correct if the
+place that handle comes back to — `ID3D12Device::OpenSharedHandle` — is also
+intercepted. Reaching one and not the other sends an invented value into a real
+device, and the result is an access violation rather than a clean failure. Both
+ends have to be gated on each other.
 
-The guard that was missing from the start, and that DYNASTY WARRIORS never
-needed because its D3D12 always came through a watched path: **do not hand out
-an invented handle unless the hook that can read it is armed.** A game that
-cannot share surfaces and is told so fails cleanly. A game that is lied to
-dies. That is now enforced rather than assumed.
+This is worth stating for the same reason as the defect it works around: a
+component that answers *no* to sharing lets a caller fall back, and a caller
+handed something that is not a handle has nowhere to go.
 
 ## Living outside CrossOver
 
@@ -685,21 +761,17 @@ and says so when it is outside 1.24, reporting rather than refusing: turning
 away something that might work is as unhelpful as staying quiet about something
 that might not.
 
-**A plugin that never loaded.** Staging re-homes the plugin's `@rpath`
-dependencies beside it, and the first version followed exactly one level: link
-what the plugin itself names, stop there. That held until a library CrossOver
-ships turned out to want a sibling -- `libgstpbutils` wants `libgsttag` -- and
-dyld resolves that `@rpath` against the staging directory rather than against
-CrossOver's. The plugin then fails to load outright, silently, leaving no trace
-but a GStreamer warning nobody reads. `libgstlibav` had never loaded, for any
-title, for as long as the staging existed. It now follows the whole chain.
+**Re-homing has to follow the whole `@rpath` chain, not one level.** A staged
+plugin names its own dependencies, but those name siblings of their own —
+`libgstpbutils` names `libgsttag` — and dyld resolves those against the staging
+directory rather than against CrossOver's. Linking only what the plugin itself
+names leaves the second level unresolved, and the plugin then fails to load
+outright and silently: no error reaches the application, and the only trace is a
+GStreamer warning on a channel nobody is reading. A staging that appears to do
+nothing should be checked for this before anything else is concluded from it.
 
-That fix is what took Nioh's DMO `Init` from `0xD0000001` to `S_OK` and let the
-DirectShow graph build. It also means any earlier conclusion drawn from a run
-where the staged codec appeared to do nothing was drawn from a run where it was
-not loaded at all, and one such conclusion is still open: Persona 5 Strikers
-played while the plugin was never loading, so whatever decodes its VC-1 is not
-the staged ffmpeg. That has not been chased down.
+Following the chain is what takes Nioh's DMO `Init` from `0xD0000001` to `S_OK`
+and lets the DirectShow graph build.
 
 **Per-engine staging.** Every installed CrossOver gets its own staging
 directory, keyed by the engine's `CFBundleVersion` — the same string a bottle
@@ -857,29 +929,6 @@ rejects encrypted indexes and pak versions other than 11.
 Once an entry is gone the engine falls through to disk, because
 `FPakPlatformFile::IsNonPakFilenameAllowed` does not exclude `.mp4`.
 
-## Accounts that have been withdrawn
-
-Recorded together, because three of them survived for weeks by being restated in
-parallel on separate pages.
-
-- **That the H.264 half explains the Life is Strange crash on 26.3.** Withdrawn:
-  the policy table arms that half for Beast of Reincarnation alone, and Beast of
-  Reincarnation works on 26.3. See [the freeze on 26.3](#the-freeze-on-263-and-what-a-control-run-settled).
-- **That DYNASTY WARRIORS needs a VP9 decoder, or needs winevideo.** Withdrawn:
-  both builds decode VP9 identically. What stable lacks is a WebM demuxer. See
-  [the container, not the codec](#the-container-not-the-codec).
-- **That the DYNASTY WARRIORS handle problem was blocked upstream, and that
-  winevideo had already solved it.** Both withdrawn on
-  [that title's page](Dynasty-Warriors-Origins.md), which sets out what
-  winevideo's bridge actually does.
-- **That the winevideo paired run covered more than one title.** It covered
-  [Mortal Shell 2](Mortal-Shell-2.md) and no other.
-
-Two statements this wiki carried at different times reconcile on the container
-rather than on the codec: "none of these games needs CrossOver patched" holds
-wherever the container can be opened, and "winevideo, not optional" was true of
-a build with no WebM demuxer.
-
 ## Further reading
 
 In the repository rather than on the wiki:
@@ -887,6 +936,10 @@ In the repository rather than on the wiki:
 - [docs/winevideo-on-preview.md](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/winevideo-on-preview.md)
   — what a current CrossOver decodes on its own, measured codec by codec, and
   what winevideo is still for.
+- [docs/what-we-got-wrong.md](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/what-we-got-wrong.md)
+  — the mistakes made producing these results: claims that reached the wiki and
+  were withdrawn, the reading errors that caused them, and the hypotheses that
+  did not survive.
 - [docs/upstreaming.md](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/upstreaming.md)
   — what of this could stop being per-game, and what should not be attempted.
 
