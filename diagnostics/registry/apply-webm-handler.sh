@@ -40,8 +40,22 @@ done
 [ -n "$APP" ] || { echo "error: no $ENGINE.app" >&2; exit 1; }
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+
+# regedit needs two things this did not give it, and gave no sign of missing:
+# a Windows path, and /s. Without /s it opens an import dialog nobody is there
+# to click, and a Unix path is not something it resolves. The bottle maps z: to
+# the filesystem root, so the file is reachable as Z:\...\ with backslashes.
+WINPATH="Z:$(printf '%s' "$HERE/webm-bytestream-handler.reg" | tr '/' '\\')"
 echo "applying with $ENGINE ..."
+echo "  importing $WINPATH"
 "$APP/Contents/SharedSupport/CrossOver/bin/wine" --bottle "$BOTTLE" \
-  --cx-app regedit.exe "$HERE/webm-bytestream-handler.reg" >/dev/null 2>&1
-sleep 2
+  --cx-app 'C:\windows\regedit.exe' /s "$WINPATH" 2>&1 | grep -viE 'msync|^$' | sed 's/^/  /'
+
+# The bottle writes its registry lazily; a running wineserver may not have
+# flushed yet, and reporting before it does would say "absent" about something
+# that landed.
+for _ in 1 2 3 4 5 6; do
+  grep -qi 'ByteStreamHandlers\\\\\.webm' "$B/system.reg" 2>/dev/null && break
+  sleep 2
+done
 report

@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+#
+# Launch a bottle and keep everything it says.
+#
+# Wine, D3DMetal and DXMT write their diagnostics to stderr, which vanishes
+# when a game is started from the CrossOver interface or from Steam. Started
+# from a terminal, it can be kept -- and a message like
+#
+#     D3DMetal: ID3DDestructionNotifier ...
+#
+# is often the only statement of what is actually wrong, particularly with a
+# game that hangs on a black screen and leaves no crash report.
+#
+#     diagnostics/launch-and-capture.sh Steam
+#     diagnostics/launch-and-capture.sh Steam "CrossOver Preview"
+#
+# Everything is written to ~/Desktop/crossover-capture-<time>.log and shown as
+# it happens. Close the game to finish.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+set -uo pipefail
+
+BOTTLE="${1:-Steam}"
+ENGINE="${2:-CrossOver Preview}"
+
+APP=""
+for root in /Applications "$HOME/Applications"; do
+  [ -d "$root/$ENGINE.app" ] && APP="$root/$ENGINE.app" && break
+done
+[ -n "$APP" ] || { echo "error: no $ENGINE.app" >&2; exit 1; }
+
+B="$HOME/Library/Application Support/CrossOver/Bottles/$BOTTLE"
+[ -d "$B" ] || { echo "error: no bottle named $BOTTLE" >&2; exit 1; }
+
+OUT="$HOME/Desktop/crossover-capture-$(date +%H%M%S).log"
+
+echo "engine : $ENGINE"
+echo "bottle : $BOTTLE  ($(grep -o '"CX_GRAPHICS_BACKEND" = "[a-z0-9]*"' "$B/cxbottle.conf" 2>/dev/null | cut -d'"' -f4))"
+echo "log    : $OUT"
+echo
+echo "Start the game from Steam. Everything it says lands in that file."
+echo "Close the game when you are done, then Ctrl-C here."
+echo
+
+# WINEDEBUG is left alone deliberately. Turning on channels floods the output
+# and buries the one line that matters; the defaults already carry D3DMetal's
+# and DXMT's own complaints.
+"$APP/Contents/SharedSupport/CrossOver/bin/wine" \
+  --bottle "$BOTTLE" --cx-app 'C:\Program Files (x86)\Steam\steam.exe' 2>&1 \
+  | tee "$OUT"
