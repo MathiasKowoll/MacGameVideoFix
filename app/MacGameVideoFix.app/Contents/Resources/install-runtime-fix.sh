@@ -143,7 +143,11 @@ case "$MODE" in
     exit 1
   fi
   echo "[1/2] restoring the original libogg_64.dll"
-  if [ -f "$REAL" ]; then mv -f "$REAL" "$LIVE"; else mv -f "$LEGACY_REAL" "$LIVE"; fi
+  if [ -f "$REAL" ]; then FROM="$REAL"; else FROM="$LEGACY_REAL"; fi
+  mv -f "$FROM" "$LIVE" || {
+    echo "error: could not put the original back; it is still at $FROM" >&2
+    exit 1
+  }
   rm -f "$OGG/libogg_64.dll.orig" "$LEGACY_REAL" "$REAL"
   echo "[2/2] done — the game is back to stock"
   ;;
@@ -209,10 +213,26 @@ echo "[1/4] checking $(basename "$LIVE")"
   fi
 
   echo "[3/4] moving the original aside as $(basename "$REAL")"
-  mv -f "$LIVE" "$REAL"
+  # Guarded rather than trusting set -e. This file has always had -e, which is
+  # why it escaped the loss its two sibling installers could cause -- but that
+  # is one line away from not being true, and what stands behind it is somebody
+  # else's irreplaceable DLL. The rule holds regardless of the shell's mood:
+  # nothing overwrites $LIVE until the original is known to be safe at $REAL.
+  mv -f "$LIVE" "$REAL" || {
+    echo "error: could not move the original aside; nothing was changed" >&2
+    exit 1
+  }
+  [ -f "$REAL" ] || {
+    echo "error: the original is not where it should be; refusing to write" >&2
+    exit 1
+  }
 
   echo "[4/4] installing the proxy"
-  cp "$PROXY" "$LIVE"
+  cp "$PROXY" "$LIVE" || {
+    echo "error: could not install the proxy; putting the original back" >&2
+    mv -f "$REAL" "$LIVE" || echo "       and that failed too -- it is at $REAL" >&2
+    exit 1
+  }
 
   echo
   echo "installed"
