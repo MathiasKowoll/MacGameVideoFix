@@ -132,6 +132,7 @@ struct Winevideo {
 /// and exactly what was missing when it is not there.
 enum SupportedGame: String, CaseIterable, Identifiable {
     case mortalShell2
+    case beastOfReincarnation
     case lisReunion
     case lisDoubleExposure
     case unrealOther
@@ -142,6 +143,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
     var name: String {
         switch self {
         case .mortalShell2:      return "Mortal Shell 2"
+        case .beastOfReincarnation: return "Beast of Reincarnation"
         case .lisReunion:        return "Life is Strange: Reunion"
         case .lisDoubleExposure: return "Life is Strange: Double Exposure"
         case .unrealOther:       return "Another Unreal Engine 5 title"
@@ -152,6 +154,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
     var symptom: String {
         switch self {
         case .mortalShell2:      return "Crash on the first cutscene"
+        case .beastOfReincarnation: return "Startup video plays with sound, no picture"
         case .lisReunion,
              .lisDoubleExposure: return "Runs, then freezes after a while"
         case .unrealOther:       return "Crash on the first cutscene, or a freeze after a while"
@@ -165,6 +168,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
     var executable: String? {
         switch self {
         case .mortalShell2:      return "MortalShell2-Win64-Shipping.exe"
+        case .beastOfReincarnation: return "BeastOfReincarnation-Win64-Shipping.exe"
         case .lisReunion:        return "Iris-Win64-Shipping.exe"
         case .lisDoubleExposure: return "Chronos-Win64-Shipping.exe"
         case .unrealOther:       return nil
@@ -183,6 +187,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
     var example: String {
         switch self {
         case .mortalShell2:      return "…/steamapps/common/Sparta"
+        case .beastOfReincarnation: return "…/steamapps/common/BeastOfReincarnation"
         case .lisReunion:        return "…/steamapps/common/LifeisStrangeReunion"
         case .lisDoubleExposure: return "…/steamapps/common/LifeIsStrangeDoubleExposure"
         case .unrealOther:       return "…/steamapps/common/<Game>"
@@ -1075,10 +1080,28 @@ struct Bottle: Identifiable {
         return text.contains("H264UseOldOutputPath=1")
     }
 
-    /// Writes the file and makes it read-only, because Unreal rewrites its own
-    /// config on exit and would drop the setting again.
+    /// Removes an Engine.ini an older release wrote.
+    ///
+    /// Nothing needs that file any more: the DLL sets the console variable
+    /// itself, which removes the most fragile part of the whole arrangement --
+    /// a path depending on the Unreal project name, inside a bottle that had to
+    /// be guessed. It is only still findable so a stale one can be cleared.
     @discardableResult
-    func writeEngineIni(project: String) -> String? {
+    func removeEngineIni(project: String) -> String? {
+        guard let path = engineIni(project: project),
+              FileManager.default.fileExists(atPath: path.path) else { return nil }
+        do {
+            try FileManager.default.setAttributes([.posixPermissions: 0o644],
+                                                  ofItemAtPath: path.path)
+            try FileManager.default.removeItem(at: path)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    @discardableResult
+    private func writeEngineIni(project: String) -> String? {
         guard let path = engineIni(project: project) else {
             return "This game has not run in \(name) yet, so there is nowhere to put it."
         }

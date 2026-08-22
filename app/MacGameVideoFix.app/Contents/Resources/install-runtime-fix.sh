@@ -33,6 +33,16 @@ EXPORTS="$HERE/pe.py"
 # would move it aside and destroy the real one.
 MARKER='ue5-runtime-fix.log'
 LEGACY_MARKER='ue5-vpx-cpupath.log'
+# Diagnostic builds ride on the same carrier and are just as much ours. A probe
+# is a valid PE with readable exports, so the damaged-file check does not catch
+# it: without this it would read as the game's own DLL and be moved over the
+# saved original.
+PROBE_MARKER='electra-probe.log'
+# The Electra H.264 fix rides on the same carrier as the Unreal fix, so the
+# installer has to recognise it as ours too.
+ELECTRA_MARKER='electra-h264-fix.log'
+# The merged fix: all three halves in one file, since they share a carrier.
+MERGED_MARKER='ue5-media-fix.log'
 
 usage() { sed -n '3,25p' "$0" >&2; exit 1; }
 [ $# -ge 1 ] || usage
@@ -72,7 +82,11 @@ LEGACY_REAL="$OGG/libogg_real.dll"
 
 is_ours() {
   [ -f "$1" ] || return 1
-  LC_ALL=C grep -qa "$MARKER" "$1" || LC_ALL=C grep -qa "$LEGACY_MARKER" "$1"
+  LC_ALL=C grep -qa "$MARKER" "$1" \
+    || LC_ALL=C grep -qa "$LEGACY_MARKER" "$1" \
+    || LC_ALL=C grep -qa "$PROBE_MARKER" "$1" \
+    || LC_ALL=C grep -qa "$ELECTRA_MARKER" "$1" \
+    || LC_ALL=C grep -qa "$MERGED_MARKER" "$1"
 }
 
 status() {
