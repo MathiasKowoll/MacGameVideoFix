@@ -57,6 +57,10 @@ GAMES = [
      "Failed to play movie", "The DYNASTY WARRIORS bridge, unchanged",
      "D3DMetal", "12", "Preview -- not tried on 26.3",
      "Fixed", "Nioh-3"),
+    ("Wo Long: Fallen Dynasty", "Koei Tecmo, in-house",
+     "Cutscene runs with sound, picture black", "The DYNASTY WARRIORS bridge, unchanged",
+     "D3DMetal", "12", "Preview -- not tried on 26.3",
+     "Fixed", "Wo-Long-Fallen-Dynasty"),
     ("NieR Replicant ver.1.22474487139", "Toylogic, in-house",
      "Crashes when the first video starts", "Software decode, and the frame written into the game's target",
      "D3DMetal", "11", "Preview -- not tried on 26.3",
@@ -72,7 +76,7 @@ Strikers, Nioh and Nioh 2 only work on DXMT: all three need a shared D3D9
 surface handle, and DXMT implements sharing where D3DMetal has none to build on.
 Nioh 3, despite the name, belongs with the other group -- it is D3D12 on
 D3DMetal and never touches D3D9, and NieR Replicant is D3D11 on D3DMetal. The
-other seven run on
+other eight run on
 D3DMetal with the D3D12 renderer, which is also what keeps PSO precompilation
 -- `-dx11` dodges some of these faults and costs permanent shader-compilation
 stutter.

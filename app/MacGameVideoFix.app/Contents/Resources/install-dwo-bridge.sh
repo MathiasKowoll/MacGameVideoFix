@@ -15,12 +15,19 @@
 #   install-dwo-bridge.sh <game folder> --restore  remove
 #   install-dwo-bridge.sh <game folder> --status   report what is in place
 #
-# <game folder> is the one holding DWORIGINS.exe, e.g.
+# <game folder> is the one holding DWORIGINS.exe or WoLong.exe, e.g.
 #   .../steamapps/common/DWORIGINS
+#   .../steamapps/common/WoLongFallenDynasty
 #
-# CrossOver must be patched with winevideo: this presents frames, it does not
-# decode them, and VP9 in a WebM container does not come out of Media
-# Foundation without it.
+# Both titles ride libxess.dll and share this bridge: they decode video on a
+# D3D11 device and present it with a D3D12 renderer, which is the shape this
+# was written for.
+#
+# This presents frames, it does not decode them. DYNASTY WARRIORS needs a
+# container CrossOver Preview can open -- see the wiki -- and an earlier
+# version of this file said it needed CrossOver patched with winevideo, which
+# was withdrawn: both builds decode VP9 identically and what stable lacks is a
+# WebM demuxer.
 #
 # Part of MacGameVideoFix — https://github.com/MathiasKowoll/MacGameVideoFix
 # SPDX-License-Identifier: GPL-3.0-or-later
@@ -46,8 +53,14 @@ MODE="${2:---install}"
 # lost from one line of one other script. Structural beats positional.
 if [ "${MGVF_STATUS_ONLY:-0}" = 1 ]; then MODE=--status; fi
 
-[ -f "$GAME/DWORIGINS.exe" ] || {
-  echo "error: no DWORIGINS.exe in $GAME" >&2
+# Plain if rather than [ -f ] && assignment: under set -e a failing test as the
+# last command of the loop body would end the script here.
+GAME_EXE=""
+for e in DWORIGINS.exe WoLong.exe; do
+  if [ -f "$GAME/$e" ]; then GAME_EXE="$e"; fi
+done
+[ -n "$GAME_EXE" ] || {
+  echo "error: no DWORIGINS.exe or WoLong.exe in $GAME" >&2
   echo "       Point this at the folder holding the game's executable." >&2
   exit 1
 }
