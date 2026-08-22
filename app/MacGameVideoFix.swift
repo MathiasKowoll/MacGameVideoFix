@@ -1373,6 +1373,20 @@ final class Runner: ObservableObject {
             }
             note("")
             Codecs.refresh()
+            // And take it back out of the ones it was never for. Earlier
+            // versions wrote it into every bottle on the machine; those values
+            // load nothing and mean nothing, but they are still our litter in
+            // someone else's configuration.
+            var tidied = 0
+            for bottle in Codecs.survey() where !bottle.wanted {
+                if Codecs.unconfigure(bottle: bottle.url) { tidied += 1 }
+            }
+            if tidied > 0 {
+                note("Removed the codec line from \(tidied) bottle(s) that do not "
+                   + "need it — earlier versions wrote it everywhere.")
+            }
+            Codecs.refresh()
+
             if touched.isEmpty {
                 // Not a failure. The decoder is built and waiting; there is
                 // simply no bottle yet that has any use for it.
@@ -2293,6 +2307,24 @@ enum Codecs {
     /// `forced` is the engine the user picked. Without one this follows the
     /// bottle's own "Version", which is what every existing caller wants and
     /// why the parameter is defaulted rather than a second overload.
+    /// Takes the variable back out of a bottle that has no use for it.
+    ///
+    /// Only ever removes a value pointing into our own staging root. A path the
+    /// user set themselves is theirs, and a cleanup that quietly deletes
+    /// somebody's configuration is a worse bug than the mess it tidies.
+    /// Returns true when something was removed.
+    @discardableResult
+    static func unconfigure(bottle: URL) -> Bool {
+        let conf = bottle.appendingPathComponent("cxbottle.conf")
+        guard var text = try? String(contentsOf: conf, encoding: .utf8),
+              let line = text.range(of: #"(?m)^"GST_PLUGIN_PATH"[^\n]*\n?"#,
+                                    options: .regularExpression),
+              text[line].contains(stagedRoot)
+        else { return false }
+        text.removeSubrange(line)
+        return (try? text.write(to: conf, atomically: true, encoding: .utf8)) != nil
+    }
+
     static func configure(bottle: URL, engine forced: String? = nil) -> String? {
         let conf = bottle.appendingPathComponent("cxbottle.conf")
         guard var text = try? String(contentsOf: conf, encoding: .utf8) else {
