@@ -1202,7 +1202,13 @@ static void note_shared(const char *what, UINT w, UINT h, DWORD fmt,
  * account is wrong, and better to learn that from one build than from three
  * days of bridge.
  */
+#define SLOT_SURF_LOCKRECT     13
+#define SLOT_SURF_UNLOCKRECT   14
+static HRESULT (WINAPI *real_SurfUnlock)(void *);
+static HRESULT WINAPI my_SurfUnlock(void *self);
 static void *sidecar_device, *sidecar_context, *sidecar_texture;
+static void *sidecar_staging, *shared_surface;
+static UINT  sidecar_w, sidecar_h;
 static HANDLE sidecar_handle;
 
 static const GUID iid_dxgi_resource =
@@ -1292,6 +1298,18 @@ static HRESULT WINAPI my_CreateRenderTarget(void *self, UINT w, UINT h, DWORD fm
     {
         static LONG said;
         *shared = sidecar_handle;
+        sidecar_w = w; sidecar_h = h;
+        if (surface && *surface)
+        {
+            static void *su;
+            void **vt;
+            shared_surface = *surface;
+            vt = *(void ***)shared_surface;
+            real_SurfUnlock = (HRESULT (WINAPI *)(void *))vt[SLOT_SURF_UNLOCKRECT];
+            if (!patch_slot("surface UnlockRect", shared_surface, SLOT_SURF_UNLOCKRECT,
+                            (void *)my_SurfUnlock, &su))
+                real_SurfUnlock = NULL;
+        }
         if (InterlockedIncrement(&said) == 1)
             logf_("  handed the game a real shared handle %p instead of null -- "
                   "nothing copies into it yet; this only asks whether the game "
@@ -1305,6 +1323,277 @@ static HRESULT WINAPI my_CreateOffscreen(void *self, UINT w, UINT h, DWORD fmt,
 {
     HRESULT hr = real_CreateOffscreen(self, w, h, fmt, pool, surface, shared);
     note_shared("CreateOffscreenPlainSurface", w, h, fmt, hr, shared);
+    return hr;
+}
+
+
+/* Carry the frame from the sidecar to the surface D3D9 draws.
+ *
+ * Everything else is now measured. The reader produces samples, the game opens
+ * our shared handle on its own D3D11 device and writes the decoded frame into
+ * it, and the D3D9 surface reaches the screen -- it shows magenta, which is an
+ * uninitialised texture, and is therefore proof that the surface is being
+ * presented and simply has nothing in it.
+ *
+ * So the copy is the last piece: sidecar texture -> D3D9 surface, once per
+ * frame, triggered on Present because that is the one moment out here that is
+ * guaranteed to happen after the game has written and before anyone looks.
+ *
+ * It goes through the CPU. A staging texture is the only way to read a D3D11
+ * resource from out of process without owning the game's device, and D3D9's
+ * LockRect is the only way into its surface. 1920x1080x4 is 8.3 MB a frame,
+ * the same order as the DYNASTY WARRIORS bridge moved, and that ran fine.
+ *
+ * Slots, counted rather than guessed:
+ *   ID3D11Device::CreateTexture2D 5
+ *   ID3D11DeviceContext: Map 14, Unmap 15, CopyResource 47
+ *   IDirect3DSurface9:  LockRect 13, UnlockRect 14
+ *   IDirect3DDevice9::Present 17
+ */
+#define SLOT_CTX_MAP           14
+#define SLOT_CTX_UNMAP         15
+#define SLOT_CTX_COPYRESOURCE  47
+#define SLOT_DEV9_PRESENT      17
+
+static HRESULT (WINAPI *real_Present)(void *, const void *, const void *, HWND, const void *);
+
+typedef struct { void *pData; UINT RowPitch; UINT DepthPitch; } MAPPED_SUBRESOURCE;
+typedef struct { INT Pitch; void *pBits; } D3DLOCKED_RECT;
+
+static BOOL make_staging(void)
+{
+    struct { UINT w, h, mips, arr; DWORD fmt; struct { UINT c, q; } sample;
+             UINT usage; UINT bind; UINT cpu; UINT misc; } desc;
+    HRESULT (WINAPI *create_tex)(void *, const void *, const void *, void **);
+    HRESULT hr;
+
+    if (sidecar_staging) return TRUE;
+    if (!sidecar_device || !sidecar_w) return FALSE;
+
+    ZeroMemory(&desc, sizeof(desc));
+    desc.w = sidecar_w; desc.h = sidecar_h; desc.mips = 1; desc.arr = 1;
+    desc.fmt = 87;              /* B8G8R8A8_UNORM */
+    desc.sample.c = 1;
+    desc.usage = 3;             /* D3D11_USAGE_STAGING */
+    desc.cpu   = 0x20000;       /* D3D11_CPU_ACCESS_READ */
+    create_tex = (HRESULT (WINAPI *)(void *, const void *, const void *, void **))
+                 (*(void ***)sidecar_device)[5];
+    hr = create_tex(sidecar_device, &desc, NULL, &sidecar_staging);
+    if (FAILED(hr)) logf_("staging texture -> 0x%08lx", hr);
+    return SUCCEEDED(hr);
+}
+
+static void carry_frame(void)
+{
+    HRESULT (WINAPI *copy)(void *, void *, void *);
+    HRESULT (WINAPI *map)(void *, void *, UINT, UINT, UINT, MAPPED_SUBRESOURCE *);
+    void (WINAPI *unmap)(void *, void *, UINT);
+    HRESULT (WINAPI *lock)(void *, D3DLOCKED_RECT *, const void *, DWORD);
+    HRESULT (WINAPI *unlock)(void *);
+    MAPPED_SUBRESOURCE src;
+    D3DLOCKED_RECT dst;
+    static LONG frames, complained;
+
+    if (!sidecar_texture || !shared_surface || !sidecar_context) return;
+    if (!make_staging()) return;
+
+    copy  = (HRESULT (WINAPI *)(void *, void *, void *))(*(void ***)sidecar_context)[SLOT_CTX_COPYRESOURCE];
+    map   = (HRESULT (WINAPI *)(void *, void *, UINT, UINT, UINT, MAPPED_SUBRESOURCE *))
+            (*(void ***)sidecar_context)[SLOT_CTX_MAP];
+    unmap = (void (WINAPI *)(void *, void *, UINT))(*(void ***)sidecar_context)[SLOT_CTX_UNMAP];
+
+    copy(sidecar_context, sidecar_staging, sidecar_texture);
+    ZeroMemory(&src, sizeof(src));
+    if (FAILED(map(sidecar_context, sidecar_staging, 0, 1 /* MAP_READ */, 0, &src)) || !src.pData)
+    {
+        if (InterlockedIncrement(&complained) == 1) logf_("carry: staging Map failed");
+        return;
+    }
+
+    lock   = (HRESULT (WINAPI *)(void *, D3DLOCKED_RECT *, const void *, DWORD))
+             (*(void ***)shared_surface)[SLOT_SURF_LOCKRECT];
+    unlock = (HRESULT (WINAPI *)(void *))(*(void ***)shared_surface)[SLOT_SURF_UNLOCKRECT];
+
+    ZeroMemory(&dst, sizeof(dst));
+    if (SUCCEEDED(lock(shared_surface, &dst, NULL, 0)) && dst.pBits)
+    {
+        UINT row, bytes = sidecar_w * 4;
+        const BYTE *s = (const BYTE *)src.pData;
+        BYTE *d = (BYTE *)dst.pBits;
+        for (row = 0; row < sidecar_h; row++)
+            memcpy(d + (size_t)row * dst.Pitch, s + (size_t)row * src.RowPitch, bytes);
+        unlock(shared_surface);
+        {
+            LONG f = InterlockedIncrement(&frames);
+            if (f == 1 || f == 100)
+                logf_("carry: frame %ld moved to the D3D9 surface "
+                      "(%ux%u, src pitch %u, dst pitch %d)",
+                      f, sidecar_w, sidecar_h, src.RowPitch, dst.Pitch);
+        }
+    }
+    else if (InterlockedIncrement(&complained) == 1)
+        logf_("carry: LockRect on the D3D9 surface failed");
+
+    unmap(sidecar_context, sidecar_staging, 0);
+}
+
+static HRESULT WINAPI my_Present(void *self, const void *src, const void *dst,
+                                 HWND wnd, const void *dirty)
+{
+    carry_frame();
+    return real_Present(self, src, dst, wnd, dirty);
+}
+
+
+/* Which way does the frame travel?
+ *
+ * Present on the D3D9 device is never called, so that device is not drawing
+ * anything -- it is a source, not a sink. The game decodes into the D3D9
+ * surface and its D3D11 renderer opens the shared handle to display it, which
+ * is the opposite of what the first carry assumed.
+ *
+ * That also explains the magenta exactly: the game is faithfully showing our
+ * sidecar, and our sidecar is empty.
+ *
+ * So the copy has to run D3D9 surface -> sidecar, and it has to run when the
+ * game has finished writing. This watches the calls that could be that moment,
+ * rather than picking one and hoping.
+ *
+ * IDirect3DDevice9: UpdateSurface 30, GetRenderTargetData 32, StretchRect 34,
+ *                   ColorFill 35, SetRenderTarget 37
+ * IDirect3DSurface9: LockRect 13, UnlockRect 14
+ */
+#define SLOT_DEV9_UPDATESURFACE 30
+#define SLOT_DEV9_STRETCHRECT   34
+#define SLOT_DEV9_COLORFILL     35
+#define SLOT_DEV9_SETRT         37
+
+static HRESULT (WINAPI *real_UpdateSurface)(void *, void *, const void *, void *, const void *);
+static HRESULT (WINAPI *real_StretchRect)(void *, void *, const void *, void *, const void *, DWORD);
+static HRESULT (WINAPI *real_ColorFill)(void *, void *, const void *, DWORD);
+static HRESULT (WINAPI *real_SetRenderTarget)(void *, DWORD, void *);
+static HRESULT (WINAPI *real_SurfUnlock)(void *);
+
+
+/* Fill the sidecar from the surface the game writes.
+ *
+ * Measured, not assumed: the game ColorFills our shared surface, StretchRects
+ * the frame into it, and also locks and writes it directly. Those last two are
+ * the moments it has just finished writing, so that is when the copy runs.
+ *
+ * The direction is D3D9 surface -> sidecar, which is the opposite of the first
+ * attempt. Present on the D3D9 device is never called, and a device that
+ * presents nothing is not drawing: it is the source. The magenta filling the
+ * screen was the game faithfully displaying our empty sidecar.
+ *
+ * UpdateSubresource writes straight into the sidecar from the locked bits, so
+ * no staging texture is needed on this side. D3DFMT_X8R8G8B8 and
+ * DXGI_FORMAT_B8G8R8A8_UNORM have the same byte layout, so the rows go across
+ * unchanged.
+ *
+ * ID3D11DeviceContext::UpdateSubresource is slot 48, right after CopyResource.
+ */
+#define SLOT_CTX_UPDATESUBRESOURCE 48
+
+static void fill_sidecar_from_surface(const char *why)
+{
+    HRESULT (WINAPI *lock)(void *, D3DLOCKED_RECT *, const void *, DWORD);
+    HRESULT (WINAPI *unlock)(void *);
+    void (WINAPI *update)(void *, void *, UINT, const void *, const void *, UINT, UINT);
+    D3DLOCKED_RECT r;
+    static LONG frames, failed;
+
+    if (!shared_surface || !sidecar_texture || !sidecar_context) return;
+
+    lock = (HRESULT (WINAPI *)(void *, D3DLOCKED_RECT *, const void *, DWORD))
+           (*(void ***)shared_surface)[SLOT_SURF_LOCKRECT];
+    unlock = real_SurfUnlock ? real_SurfUnlock
+           : (HRESULT (WINAPI *)(void *))(*(void ***)shared_surface)[SLOT_SURF_UNLOCKRECT];
+    update = (void (WINAPI *)(void *, void *, UINT, const void *, const void *, UINT, UINT))
+             (*(void ***)sidecar_context)[SLOT_CTX_UPDATESUBRESOURCE];
+
+    ZeroMemory(&r, sizeof(r));
+    if (FAILED(lock(shared_surface, &r, NULL, 0x10 /* D3DLOCK_READONLY */)) || !r.pBits)
+    {
+        if (InterlockedIncrement(&failed) == 1)
+            logf_("fill: could not lock the shared surface for reading");
+        return;
+    }
+    update(sidecar_context, sidecar_texture, 0, NULL, r.pBits, (UINT)r.Pitch, 0);
+    unlock(shared_surface);
+
+    {
+        LONG f = InterlockedIncrement(&frames);
+        if (f == 1 || f == 100)
+            logf_("fill: frame %ld carried into the sidecar after %s "
+                  "(%ux%u, pitch %d)", f, why, sidecar_w, sidecar_h, r.Pitch);
+    }
+}
+
+static void seen(const char *what, void *surface)
+{
+    static LONG said[6];
+    int i = (int)((what[0] + what[1]) % 6);
+    if (InterlockedIncrement(&said[i]) > 2) return;
+    logf_("%s%s", what, surface == shared_surface ? "   << ON OUR SHARED SURFACE" : "");
+}
+
+static HRESULT WINAPI my_UpdateSurface(void *self, void *src, const void *srect,
+                                       void *dst, const void *dpoint)
+{
+    HRESULT hr = real_UpdateSurface(self, src, srect, dst, dpoint);
+    if (dst == shared_surface || src == shared_surface)
+        seen("UpdateSurface", dst);
+    return hr;
+}
+
+static HRESULT WINAPI my_StretchRect(void *self, void *src, const void *srect,
+                                     void *dst, const void *drect, DWORD filter)
+{
+    HRESULT hr = real_StretchRect(self, src, srect, dst, drect, filter);
+    if (dst == shared_surface || src == shared_surface)
+    {
+        seen(dst == shared_surface ? "StretchRect INTO it" : "StretchRect OUT of it", dst);
+        /* Deliberately NOT copying here.
+         *
+         * StretchRect is GPU work that has not finished when it returns, so
+         * locking the surface immediately after forces a sync in the middle of
+         * a blit -- which is the likeliest cause of the noise that appeared and
+         * the run ending. UnlockRect is the game saying it has finished
+         * writing, which is a fact rather than a guess about timing. */
+    }
+    return hr;
+}
+
+static HRESULT WINAPI my_ColorFill(void *self, void *surface, const void *rect, DWORD colour)
+{
+    HRESULT hr = real_ColorFill(self, surface, rect, colour);
+    if (surface == shared_surface) seen("ColorFill", surface);
+    return hr;
+}
+
+static HRESULT WINAPI my_SetRenderTarget(void *self, DWORD index, void *surface)
+{
+    HRESULT hr = real_SetRenderTarget(self, index, surface);
+    if (surface == shared_surface) seen("SetRenderTarget", surface);
+    return hr;
+}
+
+static HRESULT WINAPI my_SurfUnlock(void *self)
+{
+    HRESULT hr = real_SurfUnlock(self);
+    if (self == shared_surface)
+    {
+        static LONG inside;
+        seen("UnlockRect -- the game wrote to it directly", self);
+        /* fill_sidecar_from_surface locks and unlocks the same surface, so it
+         * would re-enter here. One flag, not a lock: this is the same thread. */
+        if (InterlockedCompareExchange(&inside, 1, 0) == 0)
+        {
+            fill_sidecar_from_surface("UnlockRect");
+            InterlockedExchange(&inside, 0);
+        }
+    }
     return hr;
 }
 
@@ -1325,6 +1614,32 @@ static HRESULT WINAPI my_CreateDevice(void *self, UINT adapter, DWORD type, HWND
         real_CreateTexture = (HRESULT (WINAPI *)(void *, UINT, UINT, UINT, DWORD, DWORD, DWORD, void **, HANDLE *))ct;
         real_CreateRenderTarget = (HRESULT (WINAPI *)(void *, UINT, UINT, DWORD, DWORD, DWORD, BOOL, void **, HANDLE *))rt;
         real_CreateOffscreen = (HRESULT (WINAPI *)(void *, UINT, UINT, DWORD, DWORD, void **, HANDLE *))op;
+        {
+            static void *us, *sr, *cf, *rt2;
+            patch_slot("d3d9 UpdateSurface",   *device, SLOT_DEV9_UPDATESURFACE,
+                       (void *)my_UpdateSurface, &us);
+            patch_slot("d3d9 StretchRect",     *device, SLOT_DEV9_STRETCHRECT,
+                       (void *)my_StretchRect,   &sr);
+            patch_slot("d3d9 ColorFill",       *device, SLOT_DEV9_COLORFILL,
+                       (void *)my_ColorFill,     &cf);
+            patch_slot("d3d9 SetRenderTarget", *device, SLOT_DEV9_SETRT,
+                       (void *)my_SetRenderTarget, &rt2);
+            real_UpdateSurface = (HRESULT (WINAPI *)(void *, void *, const void *, void *, const void *))us;
+            real_StretchRect = (HRESULT (WINAPI *)(void *, void *, const void *, void *, const void *, DWORD))sr;
+            real_ColorFill = (HRESULT (WINAPI *)(void *, void *, const void *, DWORD))cf;
+            real_SetRenderTarget = (HRESULT (WINAPI *)(void *, DWORD, void *))rt2;
+        }
+        {
+            static void *pr;
+            /* Publish the original before arming, which is the ordering that
+             * cost a crash earlier today. */
+            void **vt = *(void ***)*device;
+            real_Present = (HRESULT (WINAPI *)(void *, const void *, const void *,
+                                               HWND, const void *))vt[SLOT_DEV9_PRESENT];
+            if (!patch_slot("d3d9 Present", *device, SLOT_DEV9_PRESENT,
+                            (void *)my_Present, &pr))
+                real_Present = NULL;
+        }
     }
     return hr;
 }
