@@ -171,3 +171,24 @@ that the bridge carried what was put in it.
 ---
 
 Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md)
+
+## On stable CrossOver: one missing demuxer
+
+Measured by comparing the two installs plugin by plugin rather than by running
+anything. Stable 26.3 carries 17 GStreamer plugins, Preview 19, and the two
+Preview has to itself are `matroska` and `osxaudio`.
+
+`matroska` is the one that matters, and it is a demuxer, not a decoder. Both
+builds decode VP9 through `applemedia` and VideoToolbox — neither ships
+`libgstvpx` or `libgstlibav`. What stable cannot do is open the container. This
+title's 355 cutscenes are `.webm`, so on stable nothing gets as far as decoding.
+
+The comparison that settles it is Mortal Shell 2, whose cutscenes are the same
+codec in a different box: 61 VP9 files in `.mp4`, handled by `isomp4`, which both
+builds have. It plays on stable. This one does not.
+
+So the honest requirement is narrower than "needs winevideo": it needs something
+that can demux WebM. `libgstmatroska.dylib` is 756 KB, ships in the official
+GStreamer.framework, and re-homing a plugin into CrossOver's GStreamer is
+already solved here — it is what `runtime/stage-codecs.sh` does for Persona 5
+Strikers' VC-1. Not built, but a plugin to stage rather than an engine to patch.

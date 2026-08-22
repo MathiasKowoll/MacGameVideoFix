@@ -113,13 +113,21 @@ not measured rather than not working — the claim is only ever what was tried.
 
 Three fail on stable, for two unrelated reasons.
 
-**DYNASTY WARRIORS was expected to.** It decodes VP9 through Media Foundation and
-the bridge presents frames without decoding any, so on a build with no VP9 there
-is nothing to present — which is the requirement stated below, now measured
-rather than predicted. On stable it needs
-[winevideo](https://github.com/Jfishin/winevideo); on Preview it does not. What
-has not been confirmed is that the crash we saw *is* that gap rather than
-something else, so it is recorded as measured, not as explained.
+**DYNASTY WARRIORS is a container, not a codec.** Comparing the two installs
+plugin by plugin, stable 26.3 ships 17 GStreamer plugins and Preview 19. The
+difference is `matroska` and `osxaudio` — and `matroska` is the whole story.
+
+Both builds decode VP9 the same way, through `applemedia` and VideoToolbox;
+neither carries `libgstvpx` or `libgstlibav`. What only Preview can do is *open a
+WebM container*. DYNASTY WARRIORS ships 355 `.webm` files, so on stable nothing
+can demux them. Mortal Shell 2 ships its VP9 in `.mp4`, which `isomp4` handles on
+both — which is why the same codec plays there and not here.
+
+That reframes the fix. The missing piece is one 756 KB plugin,
+`libgstmatroska.dylib`, which the official GStreamer.framework already has and
+which this project already knows how to re-home — it is the same move that
+stages VC-1 for Persona 5 Strikers. Not built yet, but it is a plugin to stage
+rather than an engine to patch.
 
 **The two Life is Strange titles are our fault.** They share the H.264 half of
 the runtime patch, which puts NV12 back on the decoder's menu after CrossOver

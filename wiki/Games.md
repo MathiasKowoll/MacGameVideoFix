@@ -37,9 +37,12 @@ makes it the one title here that does not care what CrossOver decodes.
 
 **Which engine, per title.** Measured: Mortal Shell 2, Beast of Reincarnation and
 Persona 5 Strikers run on stable 26.3 and on Preview. The other three crash on
-stable, for two unrelated reasons. DYNASTY WARRIORS was expected to -- it decodes
-VP9 through Media Foundation and stable ships none, which is the winevideo
-requirement on its own row, now measured rather than predicted. Both Life is
+stable, for two unrelated reasons. DYNASTY WARRIORS turns out to be a container
+problem, not a codec one: stable 26.3 ships 17 GStreamer plugins to Preview's 19,
+and the one that matters is `matroska`. Both decode VP9 identically through
+VideoToolbox; only Preview can open a WebM. This title ships 355 `.webm` files
+and Mortal Shell 2 ships its VP9 in `.mp4`, which is exactly why the same codec
+plays on stable for one and not the other. Both Life is
 Strange titles are our own defect: they share the H.264 half, which restores NV12
 after CrossOver removes it on macOS and was written against Preview's behaviour.
 That one is open. Use Preview for those three.
