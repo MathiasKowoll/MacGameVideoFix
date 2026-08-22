@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-set -uo pipefail
+set -euo pipefail
 
 usage() { sed -n '3,16p' "$0" >&2; exit 1; }
 [ $# -ge 1 ] || usage
@@ -101,8 +101,25 @@ if [ -n "$missing" ]; then
 fi
 
 echo "[3/3] installing"
-mv -f "$LIVE" "$REAL"
-cp "$PROXY" "$LIVE"
+# Nothing may write over $LIVE until the original is known to be safe under
+# $REAL. Without this the two commands are independent: on a directory that
+# denies rename but leaves the file writable -- a network library, a restored
+# backup, a deny-delete_child ACL -- the mv fails, the cp truncates the original
+# in place, and the script exits 0 printing "installed". Reproduced exactly that
+# way against a chmod 555 directory. There is no undo; the file is gone.
+mv -f "$LIVE" "$REAL" || {
+  echo "error: could not move the original aside; nothing was changed" >&2
+  exit 1
+}
+[ -f "$REAL" ] || {
+  echo "error: the original is not where it should be; refusing to write" >&2
+  exit 1
+}
+cp "$PROXY" "$LIVE" || {
+  echo "error: could not install the bridge; putting the original back" >&2
+  mv -f "$REAL" "$LIVE" || echo "       and that failed too -- it is at $REAL" >&2
+  exit 1
+}
 echo
 echo "installed"
 echo "  the video bridge is in place"
