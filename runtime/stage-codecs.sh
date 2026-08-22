@@ -181,7 +181,11 @@ stage_one() {
     esac
   }
 
-  needed() { otool -L "$1" 2>/dev/null | grep -oE '@rpath/[^ ]+\.dylib' | sed 's|@rpath/||' | sort -u; }
+  # A library with no @rpath dependencies is normal, and grep saying so must not
+  # end the run: pipefail turns that empty result into a failure and set -e acts
+  # on it. The old code only ever asked this of libraries that always had some.
+  needed() { otool -L "$1" 2>/dev/null | grep -oE '@rpath/[^ ]+\.dylib' \
+               | sed 's|@rpath/||' | sort -u || true; }
 
   pending=$(needed "$TMP/gstreamer-1.0/libgstlibav.dylib")
   seen=""
@@ -191,7 +195,16 @@ stage_one() {
       case " $seen " in *" $lib "*) continue;; esac
       seen="$seen $lib"
       if from_crossover "$lib"; then
-        [ -e "$SRC/$lib" ] && ln -sf "$SRC/$lib" "$TMP/lib/$lib"
+        # Follow what CrossOver's own libraries need, too. Linking one and
+        # stopping there was enough until a library CrossOver ships turned out to
+        # want a sibling -- libgstpbutils wants libgsttag -- and dyld resolves
+        # that @rpath against this directory, not against CrossOver's. The plugin
+        # then fails to load outright, silently, and the only trace is a
+        # GStreamer warning nobody sees.
+        if [ -e "$SRC/$lib" ]; then
+          ln -sf "$SRC/$lib" "$TMP/lib/$lib"
+          next="$next $(needed "$SRC/$lib")"
+        fi
       elif [ -f "$FRAMEWORK/lib/$lib" ]; then
         cp -f "$FRAMEWORK/lib/$lib" "$TMP/lib/$lib"
         next="$next $(needed "$TMP/lib/$lib")"
