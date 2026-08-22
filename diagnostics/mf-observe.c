@@ -1206,6 +1206,23 @@ static void note_shared(const char *what, UINT w, UINT h, DWORD fmt,
 #define SLOT_SURF_UNLOCKRECT   14
 static HRESULT (WINAPI *real_SurfUnlock)(void *);
 static HRESULT WINAPI my_SurfUnlock(void *self);
+/* The write-path hooks are off.
+ *
+ * With them in, the run degraded: sound stopped and it ended early. With them
+ * in AND the copy disabled by a failing GetRenderTargetData, the same thing
+ * happened -- zero frames copied, same symptom. So the copy was not the cause
+ * and blaming it was wrong; the hooks themselves are.
+ *
+ * The likeliest of them is UnlockRect, which is patched on a vtable shared by
+ * every D3D9 surface in the process, so every unlock the game makes anywhere
+ * runs through it.
+ *
+ * This build keeps only what was measured to help: a real shared handle, which
+ * makes the game read samples and reach playable state with a magenta picture.
+ * That is worse than a picture and much better than nothing, and it is a state
+ * to build forward from rather than guess away from. */
+static BOOL watch_write_path = FALSE;
+
 static void *sidecar_device, *sidecar_context, *sidecar_texture;
 static void *sidecar_staging, *shared_surface;
 static UINT  sidecar_w, sidecar_h;
@@ -1306,8 +1323,8 @@ static HRESULT WINAPI my_CreateRenderTarget(void *self, UINT w, UINT h, DWORD fm
             shared_surface = *surface;
             vt = *(void ***)shared_surface;
             real_SurfUnlock = (HRESULT (WINAPI *)(void *))vt[SLOT_SURF_UNLOCKRECT];
-            if (!patch_slot("surface UnlockRect", shared_surface, SLOT_SURF_UNLOCKRECT,
-                            (void *)my_SurfUnlock, &su))
+            if (!watch_write_path || !patch_slot("surface UnlockRect", shared_surface,
+                    SLOT_SURF_UNLOCKRECT, (void *)my_SurfUnlock, &su))
                 real_SurfUnlock = NULL;
         }
         if (InterlockedIncrement(&said) == 1)
@@ -1467,6 +1484,8 @@ static HRESULT WINAPI my_Present(void *self, const void *src, const void *dst,
 #define SLOT_DEV9_STRETCHRECT   34
 #define SLOT_DEV9_COLORFILL     35
 #define SLOT_DEV9_SETRT         37
+#define SLOT_DEV9_GETRTDATA     32
+#define SLOT_DEV9_CREATE_OFFSCREEN 36
 
 static HRESULT (WINAPI *real_UpdateSurface)(void *, void *, const void *, void *, const void *);
 static HRESULT (WINAPI *real_StretchRect)(void *, void *, const void *, void *, const void *, DWORD);
@@ -1495,6 +1514,160 @@ static HRESULT (WINAPI *real_SurfUnlock)(void *);
  */
 #define SLOT_CTX_UPDATESUBRESOURCE 48
 
+static void *sysmem_surface, *d3d9_device;
+static HRESULT (WINAPI *real_GetRenderTargetData)(void *, void *, void *);
+
+/* Read the render target the way D3D9 intends.
+ *
+ * Locking a render target directly, once per frame, is what broke a state that
+ * had been working: sound played and the game was reachable, magenta and all,
+ * and after the copy went in there was noise and then nothing. LockRect on a
+ * render target forces a GPU sync in the middle of the game's own work.
+ *
+ * GetRenderTargetData copies it into a system-memory surface, which is then
+ * safe to lock because it is not something the GPU is drawing into. It is one
+ * more copy and the correct one.
+ */
+static BOOL make_sysmem(void)
+{
+    HRESULT (WINAPI *create_off)(void *, UINT, UINT, DWORD, DWORD, void **, HANDLE *);
+    HRESULT hr;
+    if (sysmem_surface) return TRUE;
+    if (!d3d9_device || !sidecar_w) return FALSE;
+    create_off = (HRESULT (WINAPI *)(void *, UINT, UINT, DWORD, DWORD, void **, HANDLE *))
+                 (*(void ***)d3d9_device)[SLOT_DEV9_CREATE_OFFSCREEN];
+    hr = create_off(d3d9_device, sidecar_w, sidecar_h, 22 /* X8R8G8B8 */,
+                    2 /* D3DPOOL_SYSTEMMEM */, &sysmem_surface, NULL);
+    if (FAILED(hr)) logf_("fill: system-memory surface -> 0x%08lx", hr);
+    return SUCCEEDED(hr);
+}
+
+
+/* Write where the game reads, on the device it reads with.
+ *
+ * The sidecar lives on a D3D11 device of ours; the game opens the shared handle
+ * on its own. Writes on one are not visible on the other, which is why the
+ * screen stayed magenta while a hundred converted frames went into a texture
+ * nobody was looking at.
+ *
+ * So the texture is created on the GAME'S device instead, handed back from its
+ * own OpenSharedResource, and written through its own immediate context. That
+ * removes the cross-device question entirely rather than trying to answer it.
+ *
+ * DXMT exposes ID3D11Multithread, and turning it on makes those writes safe
+ * from the video thread with ordinary D3D11 ordering guarantees -- program
+ * order against the engine's later reads. It is off by default in DXMT, so we
+ * turn it on.
+ *
+ * ID3D11Device:  CreateTexture2D 5, OpenSharedResource 28, GetImmediateContext 40
+ * ID3D11Multithread: Enter 3, Leave 4, SetMultithreadProtected 5
+ */
+#define SLOT_DEV11_CREATE_TEX2D   5
+#define SLOT_DEV11_OPENSHARED    28
+#define SLOT_DEV11_IMMCONTEXT    40
+
+static const GUID iid_multithread =
+    { 0x9b7e4e00, 0x342c, 0x4106, { 0xa1, 0x9f, 0x4f, 0x27, 0x04, 0xf6, 0x89, 0xf0 } };
+
+static void *game_device, *game_context, *game_texture, *game_mt;
+static HRESULT (WINAPI *real_OpenSharedResource)(void *, HANDLE, const GUID *, void **);
+static HRESULT (WINAPI *real_D3D11CreateDevice)(void *, UINT, void *, UINT, const UINT *,
+                                                UINT, UINT, void **, UINT *, void **);
+
+static void mt_enter(void) { if (game_mt) ((void (WINAPI *)(void *))(*(void ***)game_mt)[3])(game_mt); }
+static void mt_leave(void) { if (game_mt) ((void (WINAPI *)(void *))(*(void ***)game_mt)[4])(game_mt); }
+
+/* OpenSharedResource returns whatever interface was asked for -- usually
+ * ID3D11Texture2D, but a caller may ask for IDXGIResource or IDXGISurface.
+ * Returning the texture regardless would hand back an object that does not
+ * implement what the caller is about to call, which fails somewhere later and
+ * looks like nothing to do with us. */
+static HRESULT hand_back(const GUID *iid, void **out)
+{
+    HRESULT (WINAPI *qi)(void *, const GUID *, void **) =
+        (HRESULT (WINAPI *)(void *, const GUID *, void **))(*(void ***)game_texture)[0];
+    HRESULT hr = qi(game_texture, iid, out);
+    if (FAILED(hr))
+    {
+        static LONG told;
+        if (InterlockedIncrement(&told) == 1)
+            logf_("OpenSharedResource: the caller wanted "
+                  "{%08lX-%04X-%04X-...} which our texture does not implement",
+                  iid->Data1, iid->Data2, iid->Data3);
+    }
+    return hr;
+}
+
+static HRESULT WINAPI my_OpenSharedResource(void *self, HANDLE handle,
+                                            const GUID *iid, void **out)
+{
+    if (handle && handle == sidecar_handle && out)
+    {
+        struct { UINT w, h, mips, arr; DWORD fmt; struct { UINT c, q; } sample;
+                 UINT usage; UINT bind; UINT cpu; UINT misc; } desc;
+        HRESULT (WINAPI *create_tex)(void *, const void *, const void *, void **);
+        HRESULT hr;
+
+        if (game_texture) return hand_back(iid, out);
+
+        ZeroMemory(&desc, sizeof(desc));
+        desc.w = sidecar_w; desc.h = sidecar_h; desc.mips = 1; desc.arr = 1;
+        desc.fmt = 87;            /* B8G8R8A8_UNORM */
+        desc.sample.c = 1;
+        desc.usage = 1;           /* D3D11_USAGE_DEFAULT is 0; DYNAMIC is 2.
+                                   * IMMUTABLE(1) would refuse writes, so DEFAULT: */
+        desc.usage = 0;           /* DEFAULT */
+        /* A texture opened from a shared handle would normally be bindable as
+         * both a shader resource and a render target, and carry MISC_SHARED.
+         * Handing back one that is only samplable is a guess about how the game
+         * uses it, and a wrong guess here fails later rather than here. */
+        desc.bind = 8 | 32;       /* SHADER_RESOURCE | RENDER_TARGET */
+        desc.misc = 2;            /* MISC_SHARED */
+        create_tex = (HRESULT (WINAPI *)(void *, const void *, const void *, void **))
+                     (*(void ***)self)[SLOT_DEV11_CREATE_TEX2D];
+        hr = create_tex(self, &desc, NULL, &game_texture);
+        logf_("OpenSharedResource: our handle -- made a %ux%u texture on the "
+              "game's own device instead, hr 0x%08lx", sidecar_w, sidecar_h, hr);
+        if (FAILED(hr)) return real_OpenSharedResource(self, handle, iid, out);
+
+        game_device = self;
+        ((void (WINAPI *)(void *, void **))(*(void ***)self)[SLOT_DEV11_IMMCONTEXT])
+            (self, &game_context);
+        {
+            HRESULT (WINAPI *qi)(void *, const GUID *, void **) =
+                (HRESULT (WINAPI *)(void *, const GUID *, void **))(*(void ***)self)[0];
+            if (SUCCEEDED(qi(self, &iid_multithread, &game_mt)) && game_mt)
+            {
+                ((BOOL (WINAPI *)(void *, BOOL))(*(void ***)game_mt)[5])(game_mt, TRUE);
+                logf_("  multithread protection enabled on the game's device");
+            }
+        }
+        return hand_back(iid, out);
+    }
+    return real_OpenSharedResource(self, handle, iid, out);
+}
+
+static HRESULT WINAPI my_D3D11CreateDevice(void *adapter, UINT type, void *sw, UINT flags,
+                                           const UINT *levels, UINT nlevels, UINT sdk,
+                                           void **device, UINT *got, void **context)
+{
+    HRESULT hr = real_D3D11CreateDevice(adapter, type, sw, flags, levels, nlevels,
+                                        sdk, device, got, context);
+    if (SUCCEEDED(hr) && device && *device)
+    {
+        static void *os;
+        void **vt = *(void ***)*device;
+        real_OpenSharedResource = (HRESULT (WINAPI *)(void *, HANDLE, const GUID *, void **))
+                                  vt[SLOT_DEV11_OPENSHARED];
+        if (!patch_slot("d3d11 OpenSharedResource", *device, SLOT_DEV11_OPENSHARED,
+                        (void *)my_OpenSharedResource, &os))
+            real_OpenSharedResource = NULL;
+    }
+    return hr;
+}
+
+static void *owning_device;
+
 static void fill_sidecar_from_surface(const char *why)
 {
     HRESULT (WINAPI *lock)(void *, D3DLOCKED_RECT *, const void *, DWORD);
@@ -1502,32 +1675,41 @@ static void fill_sidecar_from_surface(const char *why)
     void (WINAPI *update)(void *, void *, UINT, const void *, const void *, UINT, UINT);
     D3DLOCKED_RECT r;
     static LONG frames, failed;
+    HRESULT hr;
 
     if (!shared_surface || !sidecar_texture || !sidecar_context) return;
+    if (!make_sysmem()) return;
 
-    lock = (HRESULT (WINAPI *)(void *, D3DLOCKED_RECT *, const void *, DWORD))
-           (*(void ***)shared_surface)[SLOT_SURF_LOCKRECT];
-    unlock = real_SurfUnlock ? real_SurfUnlock
-           : (HRESULT (WINAPI *)(void *))(*(void ***)shared_surface)[SLOT_SURF_UNLOCKRECT];
+    hr = real_GetRenderTargetData
+       ? real_GetRenderTargetData(owning_device, shared_surface, sysmem_surface)
+       : E_FAIL;
+    if (FAILED(hr))
+    {
+        if (InterlockedIncrement(&failed) == 1)
+            logf_("fill: GetRenderTargetData -> 0x%08lx", hr);
+        return;
+    }
+
+    lock   = (HRESULT (WINAPI *)(void *, D3DLOCKED_RECT *, const void *, DWORD))
+             (*(void ***)sysmem_surface)[SLOT_SURF_LOCKRECT];
+    unlock = (HRESULT (WINAPI *)(void *))(*(void ***)sysmem_surface)[SLOT_SURF_UNLOCKRECT];
     update = (void (WINAPI *)(void *, void *, UINT, const void *, const void *, UINT, UINT))
              (*(void ***)sidecar_context)[SLOT_CTX_UPDATESUBRESOURCE];
 
     ZeroMemory(&r, sizeof(r));
-    if (FAILED(lock(shared_surface, &r, NULL, 0x10 /* D3DLOCK_READONLY */)) || !r.pBits)
+    if (SUCCEEDED(lock(sysmem_surface, &r, NULL, 0x10 /* READONLY */)) && r.pBits)
     {
-        if (InterlockedIncrement(&failed) == 1)
-            logf_("fill: could not lock the shared surface for reading");
-        return;
+        update(sidecar_context, sidecar_texture, 0, NULL, r.pBits, (UINT)r.Pitch, 0);
+        unlock(sysmem_surface);
+        {
+            LONG f = InterlockedIncrement(&frames);
+            if (f == 1 || f == 100)
+                logf_("fill: frame %ld carried after %s (%ux%u, pitch %d)",
+                      f, why, sidecar_w, sidecar_h, r.Pitch);
+        }
     }
-    update(sidecar_context, sidecar_texture, 0, NULL, r.pBits, (UINT)r.Pitch, 0);
-    unlock(shared_surface);
-
-    {
-        LONG f = InterlockedIncrement(&frames);
-        if (f == 1 || f == 100)
-            logf_("fill: frame %ld carried into the sidecar after %s "
-                  "(%ux%u, pitch %d)", f, why, sidecar_w, sidecar_h, r.Pitch);
-    }
+    else if (InterlockedIncrement(&failed) == 1)
+        logf_("fill: could not lock the system-memory surface");
 }
 
 static void seen(const char *what, void *surface)
@@ -1547,6 +1729,247 @@ static HRESULT WINAPI my_UpdateSurface(void *self, void *src, const void *srect,
     return hr;
 }
 
+/* D3DSURFACE_DESC, in order: Format, Type, Usage, Pool, MultiSampleType,
+ * MultiSampleQuality, Width, Height. IDirect3DSurface9::GetDesc is slot 12. */
+typedef struct { DWORD fmt, type, usage, pool, ms, msq, w, h; } SURF_DESC;
+
+static const char *pool_name(DWORD pool)
+{
+    switch (pool) {
+    case 0: return "DEFAULT";
+    case 1: return "MANAGED";
+    case 2: return "SYSTEMMEM";
+    case 3: return "SCRATCH";
+    default: return "?";
+    }
+}
+
+/* Take the frame from the surface the game is blitting FROM.
+ *
+ * GetRenderTargetData on the destination answers D3DERR_INVALIDCALL, so it
+ * cannot be read back. The source is the surface holding the decoded frame,
+ * and if it lives anywhere lockable it can be read directly -- which is one
+ * copy instead of two and avoids touching a render target at all.
+ *
+ * This logs what the source actually is before trying, because guessing at a
+ * surface's pool and then locking it is how a working state was lost earlier. */
+
+#define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
+
+/* The source surface is NV12, measured: its D3DFORMAT is 0x3231564E, and the
+ * lock hands back a pitch of 1920 on a 1920-wide frame -- one byte per pixel,
+ * the luma plane. Copying those bytes into a BGRA texture is what produced
+ * noise: correct data read as the wrong thing.
+ *
+ * The converter below is lifted unchanged from the DYNASTY WARRIORS bridge,
+ * where it has been carrying frames for weeks. Two pixels at a time, because
+ * NV12 chroma is subsampled 2:1 across and both read the same pair, and
+ * saturation by table rather than two branches per channel.
+ */
+#define CLAMP_BIAS 512
+static BYTE clamp8[1024 + 512];
+
+static void build_clamp_table(void)
+{
+    int i;
+    for (i = 0; i < (int)ARRAY_COUNT(clamp8); ++i)
+    {
+        int v = i - CLAMP_BIAS;
+        clamp8[i] = (BYTE)(v < 0 ? 0 : v > 255 ? 255 : v);
+    }
+}
+
+/*
+ * NV12 to BGRA, BT.709 limited range, writing at the destination's own row
+ * pitch so no second pass is needed to re-align it.
+ *
+ * Two pixels at a time: NV12 chroma is subsampled 2:1 across and both read
+ * the same pair, so the three chroma terms are computed once rather than six
+ * times. At 3.7 million pixels a frame that arithmetic is the whole cost.
+ */
+
+/*
+ * NV12 to BGRA, BT.709 limited range, writing at the destination's own row
+ * pitch so no second pass is needed to re-align it.
+ *
+ * Two pixels at a time: NV12 chroma is subsampled 2:1 across and both read
+ * the same pair, so the three chroma terms are computed once rather than six
+ * times. At 3.7 million pixels a frame that arithmetic is the whole cost.
+ */
+static void nv12_to_bgra(const BYTE *nv12, UINT stride, BYTE *bgra, UINT dst_pitch,
+                         UINT width, UINT height)
+{
+    const BYTE *chroma = nv12 + (size_t)stride * height;
+    UINT x, y;
+
+    for (y = 0; y < height; ++y)
+    {
+        const BYTE *luma_row = nv12 + (size_t)stride * y;
+        const BYTE *chroma_row = chroma + (size_t)stride * (y / 2);
+        BYTE *out = bgra + (size_t)dst_pitch * y;
+
+        for (x = 0; x + 1 < width; x += 2)
+        {
+            int d = chroma_row[x] - 128;
+            int e = chroma_row[x + 1] - 128;
+            int r_add = 459 * e + 128;
+            int g_add = -55 * d - 136 * e + 128;
+            int b_add = 541 * d + 128;
+            int c0 = 298 * (luma_row[x] - 16);
+            int c1 = 298 * (luma_row[x + 1] - 16);
+
+            out[0] = clamp8[((c0 + b_add) >> 8) + CLAMP_BIAS];
+            out[1] = clamp8[((c0 + g_add) >> 8) + CLAMP_BIAS];
+            out[2] = clamp8[((c0 + r_add) >> 8) + CLAMP_BIAS];
+            out[3] = 0xff;
+            out[4] = clamp8[((c1 + b_add) >> 8) + CLAMP_BIAS];
+            out[5] = clamp8[((c1 + g_add) >> 8) + CLAMP_BIAS];
+            out[6] = clamp8[((c1 + r_add) >> 8) + CLAMP_BIAS];
+            out[7] = 0xff;
+            out += 8;
+        }
+        if (x < width)                        /* odd width, one left over */
+        {
+            int d = chroma_row[x & ~1u] - 128;
+            int e = chroma_row[(x & ~1u) + 1] - 128;
+            int c = 298 * (luma_row[x] - 16);
+            out[0] = clamp8[((c + 541 * d + 128) >> 8) + CLAMP_BIAS];
+            out[1] = clamp8[((c - 55 * d - 136 * e + 128) >> 8) + CLAMP_BIAS];
+            out[2] = clamp8[((c + 459 * e + 128) >> 8) + CLAMP_BIAS];
+            out[3] = 0xff;
+        }
+    }
+}
+
+/* NOTE ON DEVICES, which cost a wrong conclusion.
+ *
+ * There are two D3D9 devices in this process: the engine's, created through
+ * CreateDevice, and the movie player's, created through CreateDeviceEx. Wine
+ * shares one vtable between them, so a hook installed from one fires for the
+ * other -- which is why patching from the engine's device caught the movie
+ * player's calls, and why global caching of "the" device is wrong.
+ *
+ * GetRenderTargetData answered D3DERR_INVALIDCALL because it was asked of the
+ * engine's device about the movie player's surface. The owning device is the
+ * `self` of the call being intercepted, and it is used from now on. */
+static void take_from_source(void *self, void *src)
+{
+    HRESULT (WINAPI *get_desc)(void *, SURF_DESC *);
+    HRESULT (WINAPI *lock)(void *, D3DLOCKED_RECT *, const void *, DWORD);
+    HRESULT (WINAPI *unlock)(void *);
+    void (WINAPI *update)(void *, void *, UINT, const void *, const void *, UINT, UINT);
+    SURF_DESC d;
+    D3DLOCKED_RECT r;
+    static LONG told, frames, failed;
+    HRESULT hr;
+
+    if (!src || !sidecar_texture || !sidecar_context) return;
+
+    get_desc = (HRESULT (WINAPI *)(void *, SURF_DESC *))(*(void ***)src)[12];
+    ZeroMemory(&d, sizeof(d));
+    if (FAILED(get_desc(src, &d))) return;
+
+    if (InterlockedIncrement(&told) == 1)
+        logf_("source surface: %ux%u fmt=%lu pool=%s usage=0x%lx",
+              d.w, d.h, d.fmt, pool_name(d.pool), d.usage);
+
+    lock   = (HRESULT (WINAPI *)(void *, D3DLOCKED_RECT *, const void *, DWORD))(*(void ***)src)[SLOT_SURF_LOCKRECT];
+    unlock = (HRESULT (WINAPI *)(void *))(*(void ***)src)[SLOT_SURF_UNLOCKRECT];
+    update = (void (WINAPI *)(void *, void *, UINT, const void *, const void *, UINT, UINT))
+             (*(void ***)sidecar_context)[SLOT_CTX_UPDATESUBRESOURCE];
+
+    ZeroMemory(&r, sizeof(r));
+    hr = lock(src, &r, NULL, 0x10 /* READONLY */);
+    if (FAILED(hr) || !r.pBits)
+    {
+        if (InterlockedIncrement(&failed) == 1)
+            logf_("source surface: LockRect -> 0x%08lx -- trying the destination "
+                  "through its own device instead", hr);
+        {
+            HRESULT (WINAPI *grt)(void *, void *, void *) =
+                (HRESULT (WINAPI *)(void *, void *, void *))(*(void ***)self)[SLOT_DEV9_GETRTDATA];
+            real_GetRenderTargetData = grt;
+            owning_device = self;
+            fill_sidecar_from_surface("StretchRect, via GetRenderTargetData");
+        }
+        return;
+    }
+    /* Only if it is the size and shape the sidecar expects; a mismatched blit
+     * would write a frame-sized amount into the wrong place. */
+    if (d.w == sidecar_w && d.h == sidecar_h)
+    {
+        static BYTE *scratch;
+        static UINT scratch_size;
+        UINT need = sidecar_w * 4 * sidecar_h;
+        if (scratch_size < need)
+        {
+            BYTE *bigger = (BYTE *)HeapAlloc(GetProcessHeap(), 0, need);
+            if (bigger) { if (scratch) HeapFree(GetProcessHeap(), 0, scratch);
+                          scratch = bigger; scratch_size = need; }
+        }
+        if (scratch)
+        {
+            /* Is there a picture in there at all?
+             *
+             * Black and magenta look equally like failure from the sofa, and
+             * they mean opposite things: magenta was an untouched texture,
+             * black could be our writes not landing OR a source that is itself
+             * empty. Averaging the luma plane separates them in one number,
+             * which is what settled the same ambiguity on DYNASTY WARRIORS. */
+            {
+                static LONG sampled;
+                if (InterlockedIncrement(&sampled) <= 3)
+                {
+                    const BYTE *y = (const BYTE *)r.pBits;
+                    unsigned long long sum = 0;
+                    UINT px, py, lo = 255, hi = 0;
+                    for (py = 0; py < sidecar_h; py += 8)
+                        for (px = 0; px < sidecar_w; px += 8)
+                        {
+                            BYTE v = y[(size_t)r.Pitch * py + px];
+                            sum += v;
+                            if (v < lo) lo = v;
+                            if (v > hi) hi = v;
+                        }
+                    logf_("source luma: average %llu, range %u..%u  << %s",
+                          sum / (((sidecar_h + 7) / 8) * ((sidecar_w + 7) / 8)),
+                          lo, hi,
+                          hi <= 16 ? "the SOURCE is black -- the frame is not here"
+                                   : "the source HAS a picture -- the loss is after this");
+                }
+            }
+            if (d.fmt == 0x3231564E)      /* NV12 */
+                nv12_to_bgra((const BYTE *)r.pBits, (UINT)r.Pitch, scratch,
+                             sidecar_w * 4, sidecar_w, sidecar_h);
+            else
+                CopyMemory(scratch, r.pBits, need);
+            if (game_context && game_texture)
+            {
+                void (WINAPI *gupdate)(void *, void *, UINT, const void *,
+                                       const void *, UINT, UINT) =
+                    (void (WINAPI *)(void *, void *, UINT, const void *,
+                                     const void *, UINT, UINT))
+                    (*(void ***)game_context)[SLOT_CTX_UPDATESUBRESOURCE];
+                mt_enter();
+                gupdate(game_context, game_texture, 0, NULL, scratch, sidecar_w * 4, 0);
+                mt_leave();
+            }
+            else
+                update(sidecar_context, sidecar_texture, 0, NULL, scratch, sidecar_w * 4, 0);
+        }
+    }
+    else if (InterlockedIncrement(&failed) == 1)
+        logf_("source surface is %ux%u but the sidecar is %ux%u -- not copying",
+              d.w, d.h, sidecar_w, sidecar_h);
+    unlock(src);
+
+    {
+        LONG f = InterlockedIncrement(&frames);
+        if (f == 1 || f == 100)
+            logf_("fill: frame %ld taken from the StretchRect source (pitch %d)", f, r.Pitch);
+    }
+}
+
 static HRESULT WINAPI my_StretchRect(void *self, void *src, const void *srect,
                                      void *dst, const void *drect, DWORD filter)
 {
@@ -1554,6 +1977,7 @@ static HRESULT WINAPI my_StretchRect(void *self, void *src, const void *srect,
     if (dst == shared_surface || src == shared_surface)
     {
         seen(dst == shared_surface ? "StretchRect INTO it" : "StretchRect OUT of it", dst);
+        if (dst == shared_surface && SUCCEEDED(hr)) { owning_device = self; take_from_source(self, src); }
         /* Deliberately NOT copying here.
          *
          * StretchRect is GPU work that has not finished when it returns, so
@@ -1616,18 +2040,21 @@ static HRESULT WINAPI my_CreateDevice(void *self, UINT adapter, DWORD type, HWND
         real_CreateOffscreen = (HRESULT (WINAPI *)(void *, UINT, UINT, DWORD, DWORD, void **, HANDLE *))op;
         {
             static void *us, *sr, *cf, *rt2;
-            patch_slot("d3d9 UpdateSurface",   *device, SLOT_DEV9_UPDATESURFACE,
+            if (watch_write_path) patch_slot("d3d9 UpdateSurface",   *device, SLOT_DEV9_UPDATESURFACE,
                        (void *)my_UpdateSurface, &us);
             patch_slot("d3d9 StretchRect",     *device, SLOT_DEV9_STRETCHRECT,
                        (void *)my_StretchRect,   &sr);
-            patch_slot("d3d9 ColorFill",       *device, SLOT_DEV9_COLORFILL,
+            if (watch_write_path) patch_slot("d3d9 ColorFill",       *device, SLOT_DEV9_COLORFILL,
                        (void *)my_ColorFill,     &cf);
-            patch_slot("d3d9 SetRenderTarget", *device, SLOT_DEV9_SETRT,
+            if (watch_write_path) patch_slot("d3d9 SetRenderTarget", *device, SLOT_DEV9_SETRT,
                        (void *)my_SetRenderTarget, &rt2);
             real_UpdateSurface = (HRESULT (WINAPI *)(void *, void *, const void *, void *, const void *))us;
             real_StretchRect = (HRESULT (WINAPI *)(void *, void *, const void *, void *, const void *, DWORD))sr;
             real_ColorFill = (HRESULT (WINAPI *)(void *, void *, const void *, DWORD))cf;
             real_SetRenderTarget = (HRESULT (WINAPI *)(void *, DWORD, void *))rt2;
+            d3d9_device = *device;
+            real_GetRenderTargetData = (HRESULT (WINAPI *)(void *, void *, void *))
+                (*(void ***)*device)[SLOT_DEV9_GETRTDATA];
         }
         {
             static void *pr;
@@ -1636,8 +2063,8 @@ static HRESULT WINAPI my_CreateDevice(void *self, UINT adapter, DWORD type, HWND
             void **vt = *(void ***)*device;
             real_Present = (HRESULT (WINAPI *)(void *, const void *, const void *,
                                                HWND, const void *))vt[SLOT_DEV9_PRESENT];
-            if (!patch_slot("d3d9 Present", *device, SLOT_DEV9_PRESENT,
-                            (void *)my_Present, &pr))
+            if (!watch_write_path || !patch_slot("d3d9 Present", *device,
+                    SLOT_DEV9_PRESENT, (void *)my_Present, &pr))
                 real_Present = NULL;
         }
     }
@@ -1715,12 +2142,15 @@ static DWORD WINAPI worker(LPVOID unused)
                 { *(void **)&real_Direct3DCreate9 = was; got++; }
             if ((was = hook_import("d3d9.dll", "Direct3DCreate9Ex", (void *)my_Direct3DCreate9Ex)))
                 { *(void **)&real_Direct3DCreate9Ex = was; got++; }
+            if ((was = hook_import("d3d11.dll", "D3D11CreateDevice", (void *)my_D3D11CreateDevice)))
+                { *(void **)&real_D3D11CreateDevice = was; got++; }
         }
         logf_("import table: %d of %d Media Foundation and D3D9 entries hooked "
               "(0 here means this game resolves them some other way)",
               got, (int)(sizeof(hooks) / sizeof(hooks[0])) + 2);
     }
 
+    logf_("---- write-path hooks %s ----", watch_write_path ? "ON" : "off");
     logf_("---- armed: D3D manager %s from the MFT | NV12 relabel %s | "
           "MFCreateDXGIDeviceManager %s ----",
           withhold_d3d_from_mft ? "WITHHELD" : "passed",
