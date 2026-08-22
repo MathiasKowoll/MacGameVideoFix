@@ -6,3 +6,4 @@ app/MortalShell2MacFix.app/
 # Proxy build output — runtime/libogg_64.dll is the tracked, shipped copy
 runtime/build/
 diagnostics/build/
+__pycache__/

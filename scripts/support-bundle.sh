@@ -5,6 +5,7 @@
 #   scripts/support-bundle.sh "<game folder>"   collect for that title
 #   scripts/support-bundle.sh                   collect what needs no folder
 #   scripts/support-bundle.sh --names           append the bottle number -> name key
+#   scripts/support-bundle.sh --title <key>     override the inference (see below)
 #   scripts/support-bundle.sh --help            this
 #
 # Plain text, to stdout and to a file, for pasting into the GitHub issue form
@@ -15,7 +16,10 @@
 # data/pd, DWORIGINS.exe, or <Proj>/Binaries/Win64/<Proj>-Win64-Shipping.exe
 # under an Unreal root. That inference IS the routing table: it picks the
 # installer to query, the log to read, the backend to compare against and the
-# executable name the log is scoped by.
+# executable name the log is scoped by. --title is its escape hatch: with no
+# escape hatch, a folder the inference does not recognise skips section 3 and
+# reports "not determined" with no way for the user to say what it actually is,
+# and the report cannot tell them they named the wrong folder.
 #
 # WHAT THIS DOES NOT DO, and why:
 #
@@ -40,8 +44,39 @@
 #     <bundle>/bin/wine --version was observed to start a Preview GUI, take over
 #     a live wineserver and re-stamp the Fonts key in every Preview-enabled
 #     bottle -- destroying the evidence section 4 collects. Info.plist is a file.
-#   * It never runs uname -a, cxgetsysinfo or a raw df: all three print the
-#     hostname or every mounted volume by name, which the /Users filter misses.
+#   * It never runs uname -a, cxgetsysinfo, or df with no path: all three print
+#     the hostname or every mounted volume by name, which the /Users filter
+#     misses. df of ONE named directory, awk-filtered to two numbers, is fine.
+#   * The log DISCOVERY table names only this title's own logs. Each basename
+#     maps 1:1 to a game family, so a table of all eight is a library inventory
+#     in a report about one title; the rest collapse into one counted row, which
+#     still answers what the table is for -- a bottle running only a legacy or
+#     probe build. All eight are still searched for.
+#
+# CUT when this replaced its 2200-line ancestor, so a later diff can tell a
+# deliberate cut from an accident:
+#
+#   * The interactive question flow and its --game/--symptom flags -- symptom,
+#     what it was compared against, which engine was used, whether Steam was
+#     quit, the anti-cheat self-certification, what was already tried, the
+#     crash-dialog text. The GitHub form asks all seven verbatim and the reader
+#     has it open; a second place to answer them is a second place to get them
+#     wrong. Only anti-cheat is still enforced here, as a refusal to collect.
+#   * The static "vocabulary: installed | broken | half | absent" row and its
+#     footnote that install-dwo-bridge.sh has no half branch. FALSE POSITIVE 2
+#     demonstrates that gap on the actual folder instead of asserting it.
+#
+# SHAPED DIFFERENTLY, same facts: the GStreamer registry cache prints grouped
+# `registered:` / `absent:` rows rather than nine name/yes-no rows per arch.
+#
+# ON LENGTH: the brief asked for 350-500 lines. This is ~1640 -- about 1150
+# code, 405 comment, 80 blank -- and the gap is not slack. The fact collection
+# alone is roughly the target on its own; on top of it sit the standing prose
+# that turns a fact into a diagnosis and the WHY behind each collector, and
+# both are the deliverable. A triager can stop after the VERDICT only because
+# the lines under it say what they mean, and every comment here is a bug
+# somebody already paid for. Strip both and the target is reachable; keep
+# either and it is not. The target was revised, deliberately, not missed.
 #
 # Read-only throughout. The only things executed are this repo's own --status
 # flags, which read and print one word.
@@ -83,12 +118,38 @@ KNOWN_LOGS=(ue5-media-fix.log ue5-runtime-fix.log ue5-vpx-cpupath.log
             electra-h264-fix.log electra-probe.log mf-observe.log
             dwo-video-bridge.log p5s-video-bridge.log)
 
+# Each basename belongs to one family (install-runtime-fix.sh:34-45,
+# install-p5s-bridge.sh:35-36, install-dwo-bridge.sh:36). A log basename IS a
+# game title, so DISCOVERY may name only this family's -- see the header.
+log_family() {
+  case "$1" in
+    ue5-media-fix.log|ue5-runtime-fix.log|ue5-vpx-cpupath.log|electra-h264-fix.log|electra-probe.log)
+       printf ue5 ;;
+    p5s-video-bridge.log|mf-observe.log) printf p5s ;;
+    dwo-video-bridge.log) printf dwo ;;
+  esac
+}
+
 SHOW_NAMES=no
 GAME_FOLDER=""
-usage() { sed -n '3,8p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-1}"; }
+FORCED_KEY=""
+TITLE_KEYS="ms2 beast iris chronos ue5 dwo p5s"
+
+# Anchored on the text, not on line numbers: the ancestor's `sed -n '3,11p'`
+# silently started printing the wrong six lines the first time anything was
+# inserted above them, and --help is the one output nobody re-reads.
+usage() {
+  sed -n '/^#   scripts\/support-bundle/,/^#$/p' "$0" | sed 's/^# \{0,1\}//'
+  echo "--title keys: $TITLE_KEYS"
+  exit "${1:-1}"
+}
 while [ $# -gt 0 ]; do
   case "$1" in
     --names)   SHOW_NAMES=yes; shift ;;
+    --title)   [ $# -ge 2 ] || { echo "--title needs a key" >&2; usage 1; }
+               case " $TITLE_KEYS " in *" $2 "*) ;;
+                 *) echo "unknown --title key: $2" >&2; usage 1 ;; esac
+               FORCED_KEY="$2"; shift 2 ;;
     -h|--help) usage 0 ;;
     -*)        echo "unknown option: $1" >&2; usage 1 ;;
     *) [ -z "$GAME_FOLDER" ] || { echo "unexpected argument: $1" >&2; usage 1; }
@@ -99,6 +160,10 @@ done
 # Before any probe, not after: an unwritable output file used to be discovered
 # only once the whole report had been collected and thrown away, while the
 # script still printed "saved to" and exited 0.
+# Before the probe, because the probe creates the file: the anti-cheat refusal
+# deletes an empty OUTFILE on the way out, and deleted a pre-existing one too.
+OUTFILE_PREEXISTING=no
+[ -e "$OUTFILE" ] && OUTFILE_PREEXISTING=yes
 if ! : 2>/dev/null >> "$OUTFILE"; then
   echo "cannot write the report to: $OUTFILE" >&2
   echo "Set SUPPORT_BUNDLE_OUT to a writable path." >&2
@@ -132,6 +197,13 @@ redact() {  # filter: stdin -> stdout
 # starting an absolute path is cut to end of line, because a path may contain
 # spaces and there is no way to know where it stops. Used on every piece of text
 # this script did not write itself.
+#
+# The / is recognised after ANY non-path character, not just after whitespace:
+# anchored on whitespace, six of seven realistic stderr shapes walked through
+# ("can't open file '/Volumes/...'", grep's quoted form, "at=/Volumes/..."), and
+# redact() rescues only the /Users spellings. `>` is the one exclusion, because
+# every replacement written here ends in one and the tail after it is a path
+# whose secret half has just been substituted.
 scrub_paths() {  # scrub_paths <replacement> <prefix>...
   local repl="$1"; shift
   local prog="" pfx
@@ -139,12 +211,20 @@ scrub_paths() {  # scrub_paths <replacement> <prefix>...
     [ -n "$pfx" ] || continue
     prog="${prog}s#$(sed_lit "$pfx")#${repl}#g;"
   done
-  sed -E "${prog}s#(^|[[:space:]])/[^[:space:]].*#\\1<path>#"
+  sed -E "${prog}"'s#(^|[^[:alnum:]_./\\>-])/[^[:space:]].*#\1<path>#'
 }
 scrub() { scrub_paths '<game folder>' "$GAME_ROOT" "$GAME_FOLDER" "$OGG_DIR"; }
 
 
 # -------------------------------------------------------------- utilities ---
+
+# Count NULs, not lines: `find -print | grep -c .` overcounts for a filename
+# containing a newline, and two call sites feed a number whose job is to be
+# falsified by a short count -- a miscount there is a wrong verdict.
+count0() {  # count0 <dir> <find args...>
+  local d="$1"; shift
+  find "$d" "$@" -print0 2>/dev/null | tr -dc '\0' | wc -c | tr -d ' '
+}
 
 sha_short() { [ -f "$1" ] && shasum -a 256 "$1" 2>/dev/null | cut -c1-16; }
 size_of()   { [ -e "$1" ] && wc -c < "$1" 2>/dev/null | tr -d ' '; }
@@ -222,10 +302,19 @@ elif [ -n "${cfg_bp:-}" ]; then
   BOTTLES_NOTE="CrossOver.conf sets BottlePath to a directory that is not there; searched the default"
 fi
 
+# -H because BSD find will not descend into a starting point that is itself a
+# symlink, and symlinking Bottles/ onto an external drive is the ordinary way to
+# move bottles: without it a fully populated Mac produced a report byte-identical
+# to one where CrossOver was never installed. Sorted because the numbering was
+# readdir order, and the documented workflow is two-step -- post the report, then
+# re-run with --names -- so any bottle added or renamed in between mapped the
+# wrong names onto numbers already in a public issue.
+BOTTLES_PRESENT=no
+[ -d "$BOTTLES" ] && BOTTLES_PRESENT=yes
 BOTTLE_DIRS=()
 while IFS= read -r -d '' d; do
   [ -f "$d/cxbottle.conf" ] && BOTTLE_DIRS+=("$d")
-done < <(find "$BOTTLES" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
+done < <(find -H "$BOTTLES" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null | sort -z)
 
 bottle_index() {  # bottle_index <dir> -> 1-based index
   local i
@@ -236,9 +325,10 @@ bottle_index() {  # bottle_index <dir> -> 1-based index
 }
 bottle_dir() { echo "${BOTTLE_DIRS[$(( $1 - 1 ))]:-}"; }
 
-# A SET, deliberately: no names, no numbers, no count, so it discloses nothing
-# about the library while still answering "is the value this title needs set
-# anywhere at all". Used only when our own logs identified no bottle.
+# A SET, deliberately: no names and no numbers. Not "no count" -- N distinct
+# values is a floor of N bottles, which is why only the set is printed and never
+# its size. It answers one question: is the value this title needs set anywhere
+# at all. Used only when our own logs identified no bottle.
 backend_values_seen() {
   local b v out=""
   for b in ${BOTTLE_DIRS[@]+"${BOTTLE_DIRS[@]}"}; do
@@ -324,7 +414,33 @@ if [ -n "$GAME_FOLDER" ]; then
   [ -d "$GAME_FOLDER" ] && FOLDER_STATE=ok || FOLDER_STATE="the folder given does not exist"
 fi
 
-if [ "$FOLDER_STATE" = ok ]; then
+# --title asserts the answer; the inference is then asked only for the Unreal
+# root, which the UE5 keys still need. It turns "no supported title identified
+# in that folder" into "the title you named is not in this folder".
+if [ -n "$FORCED_KEY" ] && [ "$FOLDER_STATE" = ok ]; then
+  GAME_KEY="$FORCED_KEY"; IDENT_NOTE="--title $FORCED_KEY (asserted, not inferred)"
+  case "$FORCED_KEY" in
+    ms2) GAME_PROJ=MortalShell2 ;;  beast) GAME_PROJ=BeastOfReincarnation ;;
+    iris) GAME_PROJ=Iris ;;         chronos) GAME_PROJ=Chronos ;;
+  esac
+  [ -n "$GAME_PROJ" ] && GAME_EXE="$GAME_PROJ-Win64-Shipping.exe"
+  case "$FORCED_KEY" in ms2|beast|iris|chronos|ue5)
+    probe="$GAME_FOLDER"
+    for _ in 1 2 3 4 5; do
+      [ -d "$probe/Engine/Binaries/ThirdParty/Ogg/Win64" ] && { GAME_ROOT="$probe"; break; }
+      probe="$(dirname "$probe")"
+    done
+    if [ -z "$GAME_ROOT" ]; then
+      IDENT_NOTE="$IDENT_NOTE -- but no Engine/Binaries/ThirdParty/Ogg/Win64 above that folder"
+    elif [ -n "$GAME_EXE" ] && [ ! -f "$GAME_ROOT/$GAME_PROJ/Binaries/Win64/$GAME_EXE" ]; then
+      IDENT_NOTE="$IDENT_NOTE -- but $GAME_EXE is NOT under that Unreal root: WRONG FOLDER"
+    fi ;;
+  dwo) [ -f "$GAME_FOLDER/DWORIGINS.exe" ] || \
+       IDENT_NOTE="$IDENT_NOTE -- but there is no DWORIGINS.exe in it: WRONG FOLDER" ;;
+  p5s) [ -f "$GAME_FOLDER/game.exe" ] || \
+       IDENT_NOTE="$IDENT_NOTE -- but there is no game.exe in it: WRONG FOLDER" ;;
+  esac
+elif [ "$FOLDER_STATE" = ok ]; then
   # game.exe is generic enough to match unrelated titles, so it is gated on the
   # sibling data/pd -- how the app identifies Persona 5 Strikers.
   if [ -f "$GAME_FOLDER/game.exe" ] && [ -d "$GAME_FOLDER/data/pd" ]; then
@@ -394,13 +510,17 @@ esac
 # level down. Preferring the directory with a live libogg_64.dll and falling back
 # to one holding only a saved original stops a half-install reading as "this game
 # ships no libogg".
+#
+# The SAME glob install-runtime-fix.sh:84 uses, so the two cannot pick different
+# directories: with a find here and a glob there, two VS20xx folders made the
+# report say "state installed" and "markers: none, no proxy live" at once.
 if [ "$GAME_FAMILY" = ue5 ] && [ -n "$GAME_ROOT" ]; then
-  while IFS= read -r -d '' d; do
+  for d in "$GAME_ROOT"/Engine/Binaries/ThirdParty/Ogg/Win64/*/; do
+    [ -d "$d" ] || continue          # an unmatched glob expands to itself
     d="${d%/}"
     [ -f "$d/libogg_64.dll" ] && { OGG_DIR="$d"; break; }
     { [ -f "$d/libogg_64_real.dll" ] || [ -f "$d/libogg_real.dll" ]; } && OGG_DIR="$d"
-  done < <(find "$GAME_ROOT/Engine/Binaries/ThirdParty/Ogg/Win64" \
-                -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
+  done
 fi
 # Every section-3 probe resolves its carrier from here, once.
 case "$GAME_FAMILY" in
@@ -449,7 +569,7 @@ No bundle was collected and nothing was read from your bottles. If you
 believe these files belong to something else in that folder, say so in the
 issue rather than re-running this with the check bypassed.
 EOF
-  [ -s "$OUTFILE" ] || rm -f "$OUTFILE"
+  { [ -s "$OUTFILE" ] || [ "$OUTFILE_PREEXISTING" = yes ]; } || rm -f "$OUTFILE"
   exit 2
 fi
 
@@ -470,6 +590,19 @@ if [ -n "$GAME_INSTALLER" ] && [ "$FOLDER_STATE" = ok ] && [ -x "$RUNTIME/$GAME_
   INSTALL_ERR="$(scrub < "$TMPDIR_RUN/status.err")"
 fi
 
+# The VERDICT is the one line a triager may stop after, so its state field has to
+# survive having no state. Reusing $FOLDER_STATE as prose printed the literal
+# "state not checked (ok)" for a folder with no supported title in it -- the
+# commonest way to run this wrong -- and for an installer that printed nothing.
+state_word() {
+  if [ -n "$INSTALL_STATE" ];  then printf '%s' "$INSTALL_STATE"
+  elif [ "$FOLDER_STATE" != ok ]; then printf 'not checked (%s)' "$FOLDER_STATE"
+  elif [ -z "$GAME_INSTALLER" ]; then printf 'not checked (no supported title in that folder)'
+  elif [ ! -x "$RUNTIME/$GAME_INSTALLER" ]; then printf 'not checked (%s is not beside this script)' "$GAME_INSTALLER"
+  else printf 'unknown (%s printed nothing, rc=%s)' "$GAME_INSTALLER" "${INSTALL_RC:-?}"
+  fi
+}
+
 
 # ----------------------------------------------- where our logs actually are ---
 #
@@ -482,7 +615,7 @@ for name in "${KNOWN_LOGS[@]}"; do
   while IFS= read -r -d '' f; do
     idx="$(bottle_index "$(dirname "$(dirname "$f")")")" || idx="?"
     LOG_PATHS+=("$f"); LOG_NAMES+=("$name"); LOG_BIDX+=("$idx")
-  done < <(find "$BOTTLES" -maxdepth 3 -type f -name "$name" -print0 2>/dev/null)
+  done < <(find -H "$BOTTLES" -maxdepth 3 -type f -name "$name" -print0 2>/dev/null | sort -z)
 done
 
 # NEWEST by mtime, not first in find order: two bottles carrying the same log
@@ -520,11 +653,18 @@ if [ -n "$TARGET_LOG" ] && [ -n "$GAME_EXE" ] && [ "$GAME_FAMILY" != dwo ]; then
   fi
 fi
 
-# Where a run cannot be scoped -- generic UE5 mode, no exe name known -- the
-# [<exe>] prefix in an excerpted line IS the disclosure, and it names a title the
-# user did not name. Rewrite it.
+# Where a run cannot be scoped -- generic UE5 mode, or a scoped grep that matched
+# nothing -- the [<exe>] prefix IS the disclosure, and it names a title the user
+# did not. Rewrite it, and take the movie filename with it: the final filter's
+# rule 1 deliberately keeps the basename of MFCreateSourceReaderFromURL, which on
+# a shared log is another game's cutscene ("Chronos_Intro_4K.mp4" under an
+# anonymised prefix published exactly what the rewrite was there to hide).
+# Collapsing it here means rule 1 only sees lines provably this title's.
 anon_prefix() {
-  if [ "$SCOPED_LOG" = "$TARGET_LOG" ]; then sed -E 's#^\[[^]]*\]#[<title>]#'; else cat; fi
+  if [ "$SCOPED_LOG" = "$TARGET_LOG" ]; then
+    sed -E -e 's#^\[[^]]*\]#[<title>]#' \
+           -e 's#(MFCreateSourceReaderFromURL\().*#\1<path>)#'
+  else cat; fi
 }
 
 # One shape for every "grep the log, show the last few matching lines" fact,
@@ -572,7 +712,7 @@ else
 fi
 printf 'VERDICT: %s | state %s | log %s | backend %s (needs %s) | gstreamer %s\n' \
   "${GAME_LABEL:-(no title given)}" \
-  "${INSTALL_STATE:-not checked ($FOLDER_STATE)}" \
+  "$(state_word)" \
   "$([ -n "$TARGET_LOG" ] && echo "present in bottle #$TARGET_BIDX" || echo absent)" \
   "$live_backend" "${GAME_BACKEND:-?}" "$gst"
 # Two facts this bundle already held, never before put side by side: "not
@@ -588,7 +728,7 @@ echo
 hr; echo "SECTION 1 - VERDICT BLOCK"; echo "(a reader should be able to stop here)"; hr
 echo "1. TITLE + REQUIRED BACKEND"
 kv title "${GAME_LABEL:-(not determined)}"
-kv "identified by" "${IDENT_NOTE:-nothing -- no folder given}"
+kv "identified by" "${IDENT_NOTE:-nothing -- $FOLDER_STATE}"
 if [ -n "$GAME_BACKEND" ]; then
   kv requires "CX_GRAPHICS_BACKEND = $GAME_BACKEND"
   note "dxmt and d3dmetal cannot share a bottle; Persona 5 Strikers is the dxmt one."
@@ -644,10 +784,15 @@ elif [ -n "$TARGET_LOG" ]; then
            "another game in this bottle and for this one was never mapped."
   fi
 elif [ ${#BOTTLE_DIRS[@]} -eq 0 ]; then
-  kv "$GAME_LOG" "no file -- AND NO BOTTLE WAS FOUND EITHER"
+  # The log name goes in the VALUE, not the label: as a %-17s label
+  # "ue5-media-fix.log" is exactly 17 characters and printed against its colon.
+  kv log "$GAME_LOG: no file -- AND NO BOTTLE WAS FOUND EITHER"
   note "So this report is blank on purpose and says nothing about whether the proxy loaded."
+  kv "Bottles directory" "$([ "$BOTTLES_PRESENT" = yes ] \
+        && echo "present, but no cxbottle.conf under it" \
+        || echo "NOT THERE -- CrossOver has never made a bottle, or it lives elsewhere")"
 else
-  kv "$GAME_LOG" "NO FILE AT ALL"
+  kv log "$GAME_LOG: NO FILE AT ALL"
   note "The proxy was never mapped, so nothing downstream is worth reading."
 fi
 [ -n "$BOTTLES_NOTE" ] && note "$BOTTLES_NOTE"
@@ -672,7 +817,9 @@ else
   seen="$(backend_values_seen)"
   if [ -n "$seen" ]; then
     kv "values in use" "$seen"
-    note "(the distinct values on this Mac -- no names, no numbers, no count)"
+    # Not "no count": N distinct values is a floor of N bottles, so the claim
+    # the row used to make about itself was one it could not keep.
+    note "(the distinct values on this Mac -- no bottle names, no bottle numbers)"
     [ -n "$GAME_BACKEND" ] && case " $seen " in
       *" $GAME_BACKEND "*) note "At least one bottle is set to \"$GAME_BACKEND\", which this title needs." ;;
       *) note "NO bottle on this Mac is set to \"$GAME_BACKEND\". That alone explains the report." ;;
@@ -742,7 +889,7 @@ else
   kv observed "$(printf '%s' "${h:-<no halves line for this title>}" | anon_prefix)"
   kv "expected here" "$HALVES_EXPECTED"
   w="$(cnt 'not a title this build knows -- arming everything')"
-  kv "unknown-title warning" "$(ynum "$w")"
+  kv "unknown-title warn" "$(ynum "$w")"
   [ "${w:-0}" -gt 0 ] && [ "$GAME_KEY" != ue5 ] && \
     note "On a named title that means an older DLL whose policy table predates it."
   note "A halves line not matching the title means a renamed exe, or the wrong game patched."
@@ -763,13 +910,26 @@ echo "DISCOVERY, by exact basename, across all bottles:"
 if [ ${#LOG_PATHS[@]} -eq 0 ]; then
   p3 "none of the eight known log names exists in any bottle"
 else
+  # Named rows for this family only; the rest is one counted row. All eight are
+  # still searched for -- that is what stops a bottle running only a legacy or
+  # probe build leaving this report blank -- but a foreign basename names a game.
+  others=0; others_newest=0
   for i in "${!LOG_PATHS[@]}"; do
-    printf '   %-22s bottle #%-3s %8s bytes  %s\n' "${LOG_NAMES[$i]}" "${LOG_BIDX[$i]}" \
-      "$(size_of "${LOG_PATHS[$i]}")" "$(mtime_of "${LOG_PATHS[$i]}")"
+    if [ -n "$GAME_FAMILY" ] && [ "$(log_family "${LOG_NAMES[$i]}")" = "$GAME_FAMILY" ]; then
+      printf '   %-22s bottle #%-3s %8s bytes  %s\n' "${LOG_NAMES[$i]}" "${LOG_BIDX[$i]}" \
+        "$(size_of "${LOG_PATHS[$i]}")" "$(mtime_of "${LOG_PATHS[$i]}")"
+    else
+      others=$((others + 1))
+      m="$(stat -f %m "${LOG_PATHS[$i]}" 2>/dev/null)"
+      [ "${m:-0}" -gt "$others_newest" ] 2>/dev/null && others_newest="$m"
+    fi
   done
+  [ "$others" -gt 0 ] && p3 "$others other MacGameVideoFix log(s) present, newest $(date -r "$others_newest" '+%Y-%m-%d %H:%M' 2>/dev/null)" \
+                            "(names withheld: each one names a game)"
+  [ -z "$GAME_FAMILY" ] && p3 "(no title was determined, so every log found is a foreign one)"
 fi
-p3 "(All eight names are collected: a bottle where only a legacy or probe build ran" \
-   " would otherwise leave this report blank.)"
+p3 "(All eight names are searched for, including the legacy and probe ones: a" \
+   " bottle where only such a build ran would otherwise leave this report blank.)"
 echo
 if [ -n "$TARGET_LOG" ] && [ "$GAME_FAMILY" != dwo ]; then
   case "$GAME_FAMILY" in
@@ -803,7 +963,11 @@ if [ "$GAME_FAMILY" = ue5 ] && [ -n "$SCOPED_LOG" ]; then
   echo "The facts below are read from: $SCOPE_NOTE"; echo
   echo "MEDIA FOUNDATION REACHED AT ALL"
   ev 2 'Media Foundation IS in play' "no MFStartup line."
-  ev 5 'GetProcAddress.*MF'
+  # Its own heading: "was MF reached" and "which entry points resolved" are two
+  # facts. Alternation, not 'GetProcAddress.*MF', so a line naming the module
+  # first is shown rather than dropping silently out of the report.
+  p3 'GetProcAddress("MF*"):'
+  ev 5 'GetProcAddress.*MF\|MF.*GetProcAddress' "no GetProcAddress line naming an MF entry point"
   p3 "These titles delay-load MF: a cutscene attempted with no MFStartup line means" \
      "the game plays video by another path and the MF half is irrelevant."
   echo
@@ -834,7 +998,10 @@ if [ "$GAME_FAMILY" = ue5 ] && [ -n "$SCOPED_LOG" ]; then
   echo
   echo "NODE GUARD, two separate facts"
   ev 2 'node guard:' "| no \"node guard:\" line"
-  kv "a node was refused" "$(ynum "$(cnt 'does not exist -- refused')")"
+  # The COUNT, in the shape "NOTHING can decode" uses: one stray adapter walk and
+  # a game hammering the guard are different reports.
+  ref="$(cnt 'does not exist -- refused')"
+  kv "a node was refused" "$([ "${ref:-0}" -gt 0 ] && echo "YES x${ref}" || echo no)"
   p3 "\"armed\" says only that the imports were hooked. No refusal line means the game" \
      "never made the adapter-node walk, so a freeze is something else entirely."
   echo
@@ -895,10 +1062,21 @@ else
   # proxy beside only the legacy libogg_real.dll reports "installed" and cannot
   # resolve. Nothing else in the toolkit catches that.
   echo "FALSE POSITIVE 1 - forwarder vs saved name"
-  fw=""; [ -n "$CARRIER_DIR" ] && fw="$(forwarder_of "$CARRIER_DIR/$GAME_CARRIER")"
+  fw=""; ours=none
+  if [ -n "$CARRIER_DIR" ]; then
+    fw="$(forwarder_of "$CARRIER_DIR/$GAME_CARRIER")"
+    ours="$(markers_in "$CARRIER_DIR/$GAME_CARRIER")"
+  fi
+  # All three families, not just UE5: on Persona 5 Strikers this caught a real
+  # broken forwarder the UE5-only version called "n/a". The markers gate is the
+  # price -- forwarder_of is a raw byte scan for <stem>_real., so a vendor DLL
+  # carrying that string would otherwise read as a proxy with a broken forwarder.
   if [ -z "${fw:-}" ]; then p3 "n/a: no proxy live"
   elif [ -f "$CARRIER_DIR/${fw}.dll" ]; then
     p3 "ok: the live proxy forwards to ${fw}.dll and that file is present"
+  elif [ "$ours" = none ]; then
+    p3 "n/a: the live $GAME_CARRIER carries none of our markers, so the \"${fw}\" string" \
+       "in it is the vendor's own and says nothing about a forwarder. See FALSE POSITIVE 4."
   else
     p3 "MISMATCH: the live proxy forwards to ${fw}.dll, which is NOT there."
     for alt in "$GAME_REAL" "$GAME_LEGACY"; do
@@ -950,8 +1128,15 @@ else
   # Read each side separately and check both succeeded. Piping pe.py into comm
   # hides a failure: comm -23 with an unreadable left side reports nothing
   # missing, printing "everything is forwarded" beside "exports: 0".
+  # command -v, never an executed python3: with no Xcode Command Line Tools
+  # /usr/bin/python3 is a stub that opens a modal dialog and BLOCKS, and this
+  # script's audience is that population. Testing it apart from the chain below
+  # also stops a missing python3 being reported as a damaged game carrier.
   if [ -z "$orig" ] || [ ! -f "$proxy" ] || [ ! -f "$RUNTIME/pe.py" ]; then
     p3 "not run: no untouched carrier found to compare against"
+  elif ! command -v python3 >/dev/null 2>&1; then
+    p3 "not run: no python3 on this Mac, so the export table could not be read."
+    p3 "(Nothing is wrong with the game files -- this gate simply did not run.)"
   elif ! orig_exports="$(python3 "$RUNTIME/pe.py" exports "$orig" 2>&1)"; then
     p3 "GATE NOT RUN: the game's carrier could not be read (damaged, or not a PE)."
     printf '%s\n' "$orig_exports" | scrub | sed 's/^/     /'
@@ -1007,7 +1192,7 @@ else
     while IFS= read -r -d '' j; do n=$((n + 1)); done < <(
       find "$content/Paks" -maxdepth 1 -type f -name '.*.hidden-videos.json' -print0 2>/dev/null)
     if [ -d "$content/Movies_VP9_backup" ]; then
-      bk="present, $(find "$content/Movies_VP9_backup" -maxdepth 1 -type f -print 2>/dev/null | grep -c .) entries"
+      bk="present, $(count0 "$content/Movies_VP9_backup" -maxdepth 1 -type f) entries"
     else
       bk=absent
     fi
@@ -1064,7 +1249,10 @@ else
   for a in "${CX_APPS[@]}"; do
     out="$(MGVF_STATUS_ONLY=1 bash "$CROSSOVER_DIR/install-node-guard.sh" "$a" --status \
            2>"$TMPDIR_RUN/ng.err")"; rc=$?
-    if [ "$rc" = 0 ]; then p3 "${out%% *}  $(cx_name "$a") in $(cx_where "$a")"; else
+    # First word of the first line, with a placeholder when there is none:
+    # ${out%% *} on empty or multi-line output printed a blank state word.
+    word="$(printf '%s\n' "$out" | sed -n 1p | awk '{ print $1 }')"
+    if [ "$rc" = 0 ]; then p3 "${word:-<printed nothing>}  $(cx_name "$a") in $(cx_where "$a")"; else
       p3 "rc=$rc  $(cx_name "$a") in $(cx_where "$a")"
       # Its error branch prints the bundle path, which in ~/Applications is a
       # user-renamed string out of the home directory.
@@ -1152,6 +1340,21 @@ else
      "UNCONFIRMED: that Preview=1 means \"created by Preview\", and which operations" \
      "rewrite the Fonts key -- merely running the GUI was observed to."
 fi
+echo
+echo "BOTTLE STORAGE"
+# df of ONE named directory, awk-filtered to two numbers: a raw df names every
+# mounted volume, which the /Users filter misses; this names none. Restored
+# because "staging did not finish" and a log that stops mid-write, both flagged
+# elsewhere, have a full disk as their commonest cause.
+if [ "$BOTTLES_PRESENT" = yes ]; then
+  kv "Bottles directory" "present"
+  df -k "$BOTTLES" 2>/dev/null | tail -1 \
+    | awk '{ printf "   %-17s: %.1f GB available, %s used\n", "free space", $4/1048576, $5 }'
+else
+  kv "Bottles directory" "NOT THERE at the location searched"
+  note "Nothing below section 1 fact 3 can be read, and the blankness of this" \
+       "report is that, not evidence about the fix."
+fi
 # No totals in this section: a bottle is a game prefix and its name is usually a
 # game title, so a count of bottles is a count of the installed library.
 [ -n "$BOTTLES_NOTE" ] && p3 "$BOTTLES_NOTE"
@@ -1195,7 +1398,7 @@ else
       && p5 "libgstlibav.dylib : $(size_of "$plug") bytes  sha256 $(sha_short "$plug")" \
       || p5 "libgstlibav.dylib : MISSING -- staging did not finish"
     # A short count means staging did not finish, which nothing else reports.
-    p5 "copied dylibs=$(find "$ad" -type f -name '*.dylib' -print 2>/dev/null | grep -c .)  symlinks=$(find "$ad" -type l -print 2>/dev/null | grep -c .)  (expect ~7 and ~7)"
+    p5 "copied dylibs=$(count0 "$ad" -type f -name '*.dylib')  symlinks=$(count0 "$ad" -type l)  (expect ~7 and ~7)"
     dang=0
     while IFS= read -r -d '' l; do
       [ -e "$l" ] && continue
@@ -1218,7 +1421,11 @@ else
     one="$(find "$ad/lib" -type l -print0 2>/dev/null | { IFS= read -r -d '' l && readlink "$l"; })"
     if [ -n "${one:-}" ]; then
       case "$one" in
-        */*.app/*) p5 "staged against    : $(printf '%s' "$one" | sed -E 's#^(.*/[^/]*\.app)/.*#\1#')" ;;
+        # The BUNDLE, not its path: the .app filename is user-renamed
+        # ("Crossover_patched.app" was the real case) and redact() knows only the
+        # /Users spelling. cx_name/cx_where enforce this everywhere else.
+        */*.app/*) app="$(printf '%s' "$one" | sed -E 's#^(.*/[^/]*\.app)/.*#\1#')"
+                   p5 "staged against    : $(cx_name "$app") in $(cx_where "$app")" ;;
         *)         p5 "staged against    : <not inside a CrossOver bundle>" ;;
       esac
       p5 "                    (rename or move that CrossOver and every link breaks" \
@@ -1241,7 +1448,15 @@ if [ ${#RELEVANT[@]} -eq 0 ]; then p3 "no relevant bottle identified"; else
     v="$(conf_get "$conf" GST_PLUGIN_PATH)"
     p3 "bottle #$idx$(settings_caveat "$b")"
     if [ -z "$v" ]; then p5 "GST_PLUGIN_PATH  : <unset>"; else
-      p5 "GST_PLUGIN_PATH  : \"$v\""
+      # Classified, never verbatim: it reads as redacted only because the tooling
+      # stages under $HOME, and a hand-edited value on an external volume walks
+      # through redact(). The two checks below are the row's whole value anyway.
+      # Prefix removal, not a case pattern: STAGE_ROOT is under $HOME and a
+      # bracket or star in the user's home directory would be read as a glob.
+      tail_v="${v#"$STAGE_ROOT"/}"
+      [ "$tail_v" != "$v" ] \
+        && p5 "GST_PLUGIN_PATH  : <staged path>/$tail_v" \
+        || p5 "GST_PLUGIN_PATH  : <a path outside the staging root>"
       # Both checks are needed. Codecs.configure() skips any conf whose text
       # already contains the string, so a path left over from a deleted or
       # re-staged directory is never rewritten and never warned about; and
@@ -1317,9 +1532,12 @@ if [ "$GAME_FAMILY" = dwo ]; then
 fi
 
 hr; echo "NOTES FOR THE READER"; hr
-if [ "$FOLDER_STATE" = ok ]; then
+if [ -n "$FORCED_KEY" ]; then
+  echo " * The title above was ASSERTED with --title $FORCED_KEY, not inferred. If fact 1"
+  echo "   says WRONG FOLDER, that is this report telling you the two disagree."
+elif [ "$FOLDER_STATE" = ok ]; then
   echo " * The title above was INFERRED from the folder, by exact filename. If it is"
-  echo "   wrong, say so: everything downstream routes off it."
+  echo "   wrong, re-run with --title <key> (see --help): everything routes off it."
 else
   echo " * No game folder was given, so every folder-scoped fact above is blank."
 fi
@@ -1353,7 +1571,7 @@ fi
 
 # MFCreateSourceReaderFromURL logs the movie's FULL Windows path -- a Steam
 # library path such as Z:\Volumes\<drive>\steamapps\common\<Game>\... Confirmed
-# in ue5-media-fix.c:1020, electra-h264-fix.c:1010, p5s-video-bridge.c:1097.
+# in ue5-media-fix.c:1175, electra-h264-fix.c:1010, p5s-video-bridge.c:1097.
 # This filter must never be dropped.
 #
 # Rule 1 is anchored on the logged call's own tail (") -> 0x"), not the first ")"
@@ -1362,6 +1580,10 @@ fi
 # path in the bundle. Rule 2 is the fail-closed half: any such line rule 1 did
 # not reduce loses its whole argument rather than passing through. Rule 3 does
 # the same for any other line still naming a Steam library.
+#
+# Rule 1 keeps the basename only because anon_prefix() has already collapsed the
+# argument on every line not scoped to this title -- on a shared log a movie
+# filename names a game. Do not relax one without the other.
 #
 # Then ONE final redaction pass over the assembled text. Per-command redaction
 # lets things slip through the seams.
