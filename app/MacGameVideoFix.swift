@@ -3161,83 +3161,78 @@ struct ContentView: View {
     }
 
     private var bottlesSheet: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             Text("Bottles and CrossOver")
                 .font(.system(size: 17, weight: .semibold))
+
+            // No list. Every bottle on the machine was shown with a picker each,
+            // which made a page of rows out of a decision about one game -- and
+            // squeezed the buttons that do the work into an unreadable strip.
+            // The bottle being configured says its own state; the rest are not
+            // this sheet's business.
             Text("A bottle runs under the CrossOver that last opened it, and needs the "
-                 + "codec staged for that same CrossOver. Automatic keeps the two "
-                 + "together. Choose a CrossOver yourself only if you know the bottle "
-                 + "runs under it — a bottle that has been opened by a newer CrossOver "
-                 + "records that one, so if you have gone back to an older install, say "
-                 + "so here rather than leaving it on Automatic.")
+                 + "codec staged for that same one. Pick a CrossOver here only if you "
+                 + "know the bottle runs under it — one opened by a newer CrossOver "
+                 + "records that newer one.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             if runner.codecs.isEmpty {
                 Text("No bottles in ~/Library/Application Support/CrossOver/Bottles.")
                     .font(.callout).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 24)
+                    .padding(.vertical, 20)
             } else {
-                ScrollView {
-                    VStack(spacing: 0) {
-                        ForEach(runner.codecs) { bottle in
-                            bottleRow(bottle)
-                            Divider()
+                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
+                    GridRow {
+                        Text("Bottle").font(.callout)
+                        Picker("", selection: $pickedBottle) {
+                            Text("Choose…").tag(String?.none)
+                            ForEach(runner.codecs) { b in
+                                Text(b.name).tag(String?.some(b.name))
+                            }
                         }
+                        .labelsHidden()
+                        .disabled(runner.busy)
+                    }
+                    GridRow {
+                        Text("CrossOver").font(.callout)
+                        Picker("", selection: $pickedEngine) {
+                            Text("Choose…").tag(String?.none)
+                            ForEach(engineVersions, id: \.self) { v in
+                                Text(Codecs.label(v)).tag(String?.some(v))
+                            }
+                        }
+                        .labelsHidden()
+                        .disabled(runner.busy || engineVersions.isEmpty)
                     }
                 }
-                .frame(minHeight: 200, maxHeight: 340)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.03)))
+                .frame(maxWidth: 440)
+
+                // The one bottle's state, where the list used to be. Removing
+                // the list must not remove the answer to "what is it now".
+                if let picked {
+                    HStack(spacing: 8) {
+                        Image(systemName: picked.state.isCorrect
+                              ? "checkmark.seal.fill" : "minus.circle")
+                            .foregroundStyle(picked.state.isCorrect ? .green : .secondary)
+                        Text(rowCaption(picked))
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
 
+            Divider()
+
             HStack(spacing: 12) {
-                // Safe here in a way it is not in the main window: a sheet is
-                // its own key context, so Return means this and nothing else.
-                Button(repairTitle) { runner.repairDrifted() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(runner.busy || driftRows.isEmpty)
-
-                // One bottle, one CrossOver, named the way the system names it.
-                // This replaced a sweep across every bottle at once. That sweep
-                // moved bottles which were correct at the time -- a bottle still
-                // on the other CrossOver came out of it pointing somewhere it
-                // must not be opened from -- and it asked the user to reason
-                // about the whole machine to fix one game.
-                Picker("Bottle", selection: $pickedBottle) {
-                    Text("Choose…").tag(String?.none)
-                    ForEach(runner.codecs) { b in
-                        Text(b.name).tag(String?.some(b.name))
-                    }
-                }
-                .frame(width: 190)
-                .disabled(runner.busy || runner.codecs.isEmpty)
-
-                Picker("CrossOver", selection: $pickedEngine) {
-                    Text("Choose…").tag(String?.none)
-                    ForEach(engineVersions, id: \.self) { v in
-                        Text(Codecs.label(v)).tag(String?.some(v))
-                    }
-                }
-                .frame(width: 280)
-                .disabled(runner.busy || engineVersions.isEmpty)
-
                 Button("Apply") {
-                    guard let name = pickedBottle, let engine = pickedEngine,
-                          let bottle = runner.codecs.first(where: { $0.name == name })
-                    else { return }
-                    runner.selectEngine(engine, forBottle: bottle)
+                    guard let picked, let engine = pickedEngine else { return }
+                    runner.selectEngine(engine, forBottle: picked)
                 }
-                .disabled(runner.busy || pickedBottle == nil || pickedEngine == nil)
-
-                Spacer()
+                .keyboardShortcut(.defaultAction)
+                .disabled(runner.busy || picked == nil || pickedEngine == nil)
 
                 if runner.busy {
-                    // The main window's progress bar is behind the sheet, so
-                    // the status line and the way out have to be repeated here.
-                    Text(runner.status)
-                        .font(.caption).foregroundStyle(.secondary)
-                        .lineLimit(1).truncationMode(.tail)
                     Button("Stop") { runner.stopCodecs() }
                         .help("Stops now. A codec that was still being staged is left "
                               + "unfinished, and no further bottle is changed.")
@@ -3245,19 +3240,18 @@ struct ContentView: View {
                     Button("Check again") { runner.refreshCodecs() }
                         .help("Re-reads every bottle's configuration.")
                 }
-                // Never disabled, for the same reason leaving bulk mode stays
-                // reachable during a scan: a run that hangs must not be able to
-                // trap someone in a sheet.
+
+                Spacer()
+
+                // Never disabled: a run that hangs must not trap anyone in here.
                 Button("Done") { showingBottles = false }
             }
 
-            // What just happened, kept on screen. This used to be inside the
-            // busy branch above, so it disappeared at the instant it had
-            // something to report -- and the restart instruction went only to
-            // a log behind the sheet, which is the wrong place for the one
-            // thing standing between a correct configuration and a user who
-            // thinks the fix did not work.
-            if !runner.busy, !runner.codecStatus.isEmpty {
+            if runner.busy {
+                Text(runner.status)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.tail)
+            } else if !runner.codecStatus.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(runner.codecStatus).font(.caption)
                     if !runner.codecAdvice.isEmpty {
@@ -3269,9 +3263,15 @@ struct ContentView: View {
             }
         }
         .padding(20)
-        .frame(width: 700)
+        .frame(width: 560)
         .onChange(of: runner.busy) { _, busy in if !busy { pending = nil } }
     }
+
+    /// The bottle the pickers currently name.
+    private var picked: Codecs.BottleState? {
+        pickedBottle.flatMap { name in runner.codecs.first { $0.name == name } }
+    }
+
 
     /// The pair the user is assembling: one bottle, one CrossOver. Held here
     /// rather than derived, because a half-made choice is a real state — they
@@ -3280,36 +3280,6 @@ struct ContentView: View {
     @State private var pickedBottle: String?
     @State private var pickedEngine: String?
 
-    private func bottleRow(_ bottle: Codecs.BottleState) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: rowSymbol(bottle.state))
-                .foregroundStyle(rowTint(bottle.state))
-                .help(rowTooltip(bottle.state))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(bottle.name).font(.callout)
-                Text(rowCaption(bottle))
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 12)
-            Picker("", selection: Binding(
-                get: { shownChoice(bottle) },
-                set: { engine in
-                    pending = PendingPick(name: bottle.name, engine: engine)
-                    runner.selectEngine(engine, forBottle: bottle)
-                })) {
-                Text(automaticLabel(bottle)).tag(String?.none)
-                ForEach(engineVersions, id: \.self) { v in
-                    Text(Codecs.label(v)).tag(String?.some(v))
-                }
-            }
-            .labelsHidden()
-            .frame(width: 250)
-            .disabled(runner.busy)
-        }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 10)
-    }
 
     /// The selection the user just made, held until the work applying it ends.
     ///
