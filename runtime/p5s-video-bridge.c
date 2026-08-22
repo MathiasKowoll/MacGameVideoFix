@@ -1263,10 +1263,14 @@ static void *hook_import(const char *dll, const char *func, void *replacement)
  * story that has been wrong three times today, so it gets measured.
  *
  * IDirect3D9:      CreateDevice 16
+ * IDirect3D9Ex:    CreateDeviceEx 20 -- IDirect3D9's 17 methods, then
+ *                  GetAdapterModeCountEx, EnumAdapterModesEx,
+ *                  GetAdapterDisplayModeEx, CreateDeviceEx.
  * IDirect3DDevice9: CreateTexture 23, CreateRenderTarget 28,
  *                   CreateOffscreenPlainSurface 36
  */
-#define SLOT_D3D9_CREATE_DEVICE   16
+#define SLOT_D3D9_CREATE_DEVICE    16
+#define SLOT_D3D9_CREATE_DEVICE_EX 20
 #define SLOT_DEV_CREATE_TEXTURE   23
 #define SLOT_DEV_CREATE_RT        28
 #define SLOT_DEV_CREATE_OFFSCREEN 36
@@ -1274,6 +1278,7 @@ static void *hook_import(const char *dll, const char *func, void *replacement)
 static void *(WINAPI *real_Direct3DCreate9)(UINT);
 static HRESULT (WINAPI *real_Direct3DCreate9Ex)(UINT, void **);
 static HRESULT (WINAPI *real_CreateDevice)(void *, UINT, DWORD, HWND, DWORD, void *, void **);
+static HRESULT (WINAPI *real_CreateDeviceEx)(void *, UINT, DWORD, HWND, DWORD, void *, void *, void **);
 static HRESULT (WINAPI *real_CreateTexture)(void *, UINT, UINT, UINT, DWORD, DWORD, DWORD, void **, HANDLE *);
 static HRESULT (WINAPI *real_CreateRenderTarget)(void *, UINT, UINT, DWORD, DWORD, DWORD, BOOL, void **, HANDLE *);
 static HRESULT (WINAPI *real_CreateOffscreen)(void *, UINT, UINT, DWORD, DWORD, void **, HANDLE *);
@@ -2169,12 +2174,12 @@ static HRESULT WINAPI my_SurfUnlock(void *self)
     return hr;
 }
 
-static HRESULT WINAPI my_CreateDevice(void *self, UINT adapter, DWORD type, HWND focus,
-                                      DWORD flags, void *params, void **device)
+/* IDirect3DDevice9Ex only appends methods to IDirect3DDevice9, so every slot
+ * this arms sits at the same index in both and one routine serves the two
+ * creation paths. */
+static void arm_d3d9_device(void *dev)
 {
-    HRESULT hr = real_CreateDevice(self, adapter, type, focus, flags, params, device);
-    logf_("IDirect3D9::CreateDevice -> 0x%08lx", hr);
-    if (SUCCEEDED(hr) && device && *device)
+    void **device = &dev;
     {
         static void *ct, *rt, *op;
         patch_slot("d3d9 CreateTexture",      *device, SLOT_DEV_CREATE_TEXTURE,
@@ -2216,23 +2221,51 @@ static HRESULT WINAPI my_CreateDevice(void *self, UINT adapter, DWORD type, HWND
                 real_Present = NULL;
         }
     }
+}
+
+static HRESULT WINAPI my_CreateDevice(void *self, UINT adapter, DWORD type, HWND focus,
+                                      DWORD flags, void *params, void **device)
+{
+    HRESULT hr = real_CreateDevice(self, adapter, type, focus, flags, params, device);
+    logf_("IDirect3D9::CreateDevice -> 0x%08lx", hr);
+    if (SUCCEEDED(hr) && device && *device) arm_d3d9_device(*device);
     return hr;
 }
 
-static void watch_d3d9_object(void *d3d9)
+/* Nioh never calls CreateDevice. It creates its device through CreateDeviceEx,
+ * and a bridge watching only slot 16 sits there arming nothing while the
+ * cutscene fails -- which is exactly what the first Nioh run logged. */
+static HRESULT WINAPI my_CreateDeviceEx(void *self, UINT adapter, DWORD type, HWND focus,
+                                        DWORD flags, void *params, void *fullscreen,
+                                        void **device)
 {
-    static void *cd;
+    HRESULT hr = real_CreateDeviceEx(self, adapter, type, focus, flags, params,
+                                     fullscreen, device);
+    logf_("IDirect3D9Ex::CreateDeviceEx -> 0x%08lx", hr);
+    if (SUCCEEDED(hr) && device && *device) arm_d3d9_device(*device);
+    return hr;
+}
+
+/* is_ex has to come from the caller: slot 20 exists only on IDirect3D9Ex, and
+ * writing it on a plain IDirect3D9 would be a write past the end of its
+ * vtable. */
+static void watch_d3d9_object(void *d3d9, BOOL is_ex)
+{
+    static void *cd, *cdx;
     if (!d3d9) return;
     if (patch_slot("d3d9 CreateDevice", d3d9, SLOT_D3D9_CREATE_DEVICE,
                    (void *)my_CreateDevice, &cd))
         real_CreateDevice = (HRESULT (WINAPI *)(void *, UINT, DWORD, HWND, DWORD, void *, void **))cd;
+    if (is_ex && patch_slot("d3d9 CreateDeviceEx", d3d9, SLOT_D3D9_CREATE_DEVICE_EX,
+                            (void *)my_CreateDeviceEx, &cdx))
+        real_CreateDeviceEx = (HRESULT (WINAPI *)(void *, UINT, DWORD, HWND, DWORD, void *, void *, void **))cdx;
 }
 
 static void *WINAPI my_Direct3DCreate9(UINT sdk)
 {
     void *d3d9 = real_Direct3DCreate9(sdk);
     logf_("Direct3DCreate9 -> %p", d3d9);
-    watch_d3d9_object(d3d9);
+    watch_d3d9_object(d3d9, FALSE);
     return d3d9;
 }
 
@@ -2240,7 +2273,7 @@ static HRESULT WINAPI my_Direct3DCreate9Ex(UINT sdk, void **out)
 {
     HRESULT hr = real_Direct3DCreate9Ex(sdk, out);
     logf_("Direct3DCreate9Ex -> 0x%08lx", hr);
-    if (SUCCEEDED(hr) && out) watch_d3d9_object(*out);
+    if (SUCCEEDED(hr) && out) watch_d3d9_object(*out, TRUE);
     return hr;
 }
 
