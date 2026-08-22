@@ -203,6 +203,10 @@ static BOOL d3d12_bridge_armed;
 struct stub_object { void **vtbl; LONG refcount; };
 
 static struct stub_object stub_video_device, stub_video_context;
+
+/* Offer the video device even with no D3D12 behind it. Diagnostic only: it is
+ * how a title is asked what it would do with one. */
+static BOOL force_video_device;
 static struct stub_object stub_vp_enumerator, stub_vp_processor;
 static struct stub_object stub_vp_input_view, stub_vp_output_view;
 static struct stub_object stub_dxgi_buffer;
@@ -216,12 +220,31 @@ static UINT texture_width, texture_height;
 
 static void *vd_vtbl[], *vc_vtbl[], *vpe_vtbl[], *vp_vtbl[], *vpiv_vtbl[], *vpov_vtbl[];
 static void *dxgibuf_vtbl[];
+static HRESULT (WINAPI *real_create_texture2d)(void *, const void *, const void *, void **);
 static void *input_view_resource, *output_view_resource;
+/* The converted frame waiting to be uploaded, and what it cost. */
+static BYTE *pending_bgra;
+static size_t pending_size;
+static UINT pending_w, pending_h;
+static LONGLONG convert_ticks, upload_ticks;
+static LONG converted, uploaded;
 static D3D11_VIDEO_PROCESSOR_CONTENT_DESC vp_content_desc;
 
 /* The generated vtables report which method was reached; a shipping build has
  * no use for that, and the file is generated so it is not edited to suit. */
-#define stub_called(what) ((void)0)
+/*
+ * Which stub methods a game actually drives.
+ *
+ * Compiled out until now, which made the bridge silent about the one thing
+ * only it can see: whether a title uses the D3D11 video processor to present
+ * its frames, and which calls it makes. Bounded, so a per-frame call cannot
+ * fill the log.
+ */
+static void stub_called(const char *what)
+{
+    static LONG told;
+    if (InterlockedIncrement(&told) <= 32) logf_("STUB  %s", what);
+}
 
 static const char *dxgi_format_name(UINT f) { (void)f; return ""; }
 
@@ -281,6 +304,7 @@ static HRESULT WINAPI vd_CreateVideoProcessorInputView(void *self, void *resourc
 {
     (void)self; (void)enumerator; (void)desc;
     input_view_resource = resource;
+    stub_called("ID3D11VideoDevice::CreateVideoProcessorInputView");
     if (!out) return E_INVALIDARG;
     InterlockedIncrement(&stub_vp_input_view.refcount);
     *out = &stub_vp_input_view;
@@ -366,11 +390,162 @@ static HRESULT WINAPI vpov_GetResource(void *self, void **resource)
  * the copies that would belong here would move megabytes a frame between
  * textures nothing reads. The call still has to succeed.
  */
+/*
+ * What a texture actually is, read from its own GetDesc.
+ *
+ * ID3D11Texture2D::GetDesc is slot 10: three IUnknown, four ID3D11DeviceChild,
+ * three ID3D11Resource, then GetDesc.
+ */
+static void describe_texture(const char *label, void *tex)
+{
+    UINT d[11] = {0};
+    void (WINAPI *get_desc)(void *, void *);
+    if (!tex) { logf_("  %s: (none)", label); return; }
+    get_desc = (void (WINAPI *)(void *, void *))(*(void ***)tex)[10];
+    get_desc(tex, d);
+    logf_("  %s: %ux%u format=%u usage=%u bind=0x%x cpu=0x%x misc=0x%x",
+          label, d[0], d[1], d[4], d[7], d[8], d[9], d[10]);
+}
+
 static HRESULT WINAPI vc_VideoProcessorBlt(void *self, void *processor, void *output_view,
                                            UINT frame, UINT stream_count, const void *streams)
 {
     (void)self; (void)processor; (void)output_view;
     (void)frame; (void)stream_count; (void)streams;
+
+    /*
+     * Do the blit, which for this shape is a copy.
+     *
+     * A game presenting through the video processor expects this call to put
+     * the decoded frame into its own target. Returning S_OK without doing so
+     * is a black screen on a title whose frames are all correct -- NieR
+     * Replicant decodes over three hundred samples, none of them empty, and
+     * shows nothing.
+     *
+     * No colour conversion is needed here and that is worth stating, because
+     * the obvious assumption is wrong: both surfaces arrive as
+     * B8G8R8A8_UNORM at the same size. Media Foundation delivered NV12 and the
+     * game had already uploaded it as BGRA, so what the processor was being
+     * asked for was the copy and the rectangle handling, not the colour
+     * space. A conversion here would corrupt already-correct pixels.
+     *
+     * The destination rectangle is ignored: the two textures match exactly, so
+     * every scaling case this could face is the identity. A title that
+     * presents into a differently sized target needs CopySubresourceRegion and
+     * a real scale, and would have to be measured before it is written.
+     *
+     * ID3D11DeviceContext slot 47 is CopyResource -- 46 is
+     * CopySubresourceRegion, 48 UpdateSubresource.
+     */
+    /*
+     * Geometry, taken from the target rather than from the media type.
+     *
+     * The type the game set carried no frame size -- it logged 0x0 -- so
+     * nothing downstream had dimensions to work with. The output texture is
+     * unambiguous and is right there.
+     */
+    if (!d3d12_bridge_armed && !frame_width && output_view_resource)
+    {
+        UINT d[11] = {0};
+        void (WINAPI *get_desc)(void *, void *) =
+            (void (WINAPI *)(void *, void *))(*(void ***)output_view_resource)[10];
+        get_desc(output_view_resource, d);
+        if (d[0] && d[1])
+        {
+            frame_width = d[0]; frame_height = d[1];
+            logf_("  geometry taken from the target: %ux%u", d[0], d[1]);
+        }
+    }
+
+    /*
+     * Only the D3D11-only titles are served here.
+     *
+     * Where the D3D12 bridge is armed this call did nothing before and must go
+     * on doing nothing: those titles have their frames presented by the bridge
+     * itself, and an extra copy into a surface it also writes would be at best
+     * redundant and at worst a race. Scoping this to the absence of a D3D12
+     * device keeps DYNASTY WARRIORS and Nioh 3 on exactly the path they were
+     * measured on.
+     */
+    if (!d3d12_bridge_armed && video_context && output_view_resource)
+    {
+        EnterCriticalSection(&frame_lock);
+        /*
+         * Upload on every blit, not only when the frame changed.
+         *
+         * Uploading only on new frames looked like the obvious saving and was
+         * measured wrong: the upload costs 0.27 ms where the conversion costs
+         * 4.51, so what it saved was nothing, and it left the target holding
+         * whatever the game put there between video frames -- a 25 fps clip on
+         * a 54 Hz display, alternating with anything the game drew. The
+         * conversion still runs once per decoded frame, which is the cost that
+         * actually matters.
+         */
+        if (pending_bgra && pending_w && pending_h)
+        {
+            void (WINAPI *update)(void *, void *, UINT, const void *,
+                                  const void *, UINT, UINT) =
+                (void (WINAPI *)(void *, void *, UINT, const void *,
+                                 const void *, UINT, UINT))
+                (*(void ***)video_context)[48];   /* UpdateSubresource */
+            LARGE_INTEGER a_, b_;
+            QueryPerformanceCounter(&a_);
+            update(video_context, output_view_resource, 0, NULL, pending_bgra,
+                   pending_w * 4, 0);
+            QueryPerformanceCounter(&b_);
+            upload_ticks += b_.QuadPart - a_.QuadPart;
+            ++uploaded;
+            {
+                /* Each cost against its own count. Dividing both by the blit
+                 * count once made the conversion look cheaper than it is:
+                 * blits run at display rate, conversions once per decoded
+                 * frame, and those are not the same number. */
+                if (uploaded == 200)
+                {
+                    LARGE_INTEGER f;
+                    QueryPerformanceFrequency(&f);
+                    logf_("%ld frames in %ld blits: convert %.2f ms each, upload %.2f ms each",
+                          converted, uploaded,
+                          converted ? (double)convert_ticks * 1000.0 / f.QuadPart / converted : 0.0,
+                          (double)upload_ticks * 1000.0 / f.QuadPart / uploaded);
+                }
+            }
+        }
+        LeaveCriticalSection(&frame_lock);
+    }
+
+    /*
+     * The one call that would put the picture on screen, and today it returns
+     * success having done nothing -- which is the whole of the black screen on
+     * a title that decodes its frames correctly. Report what it was given, so
+     * the conversion can be written against real formats rather than assumed
+     * ones. Once, because this is per-frame.
+     */
+    {
+        /*
+         * The first Blt carried no input, so logging only it said nothing: the
+         * input surface travels inside the stream description rather than
+         * arriving through the create call, and the opening frame appears to be
+         * a clear. Report the first few, and stop once one has actually shown
+         * an input -- that is the frame the conversion has to be written for.
+         *
+         * D3D11_VIDEO_PROCESSOR_STREAM: BOOL Enable, then four UINTs, then
+         * ppPastSurfaces and pInputSurface -- pointer-aligned, so +24 and +32.
+         */
+        static LONG told; static BOOL seen_input;
+        if (!seen_input && InterlockedIncrement(&told) <= 6)
+        {
+            const BYTE *st = streams;
+            void *input_surface = st ? *(void **)(st + 32) : NULL;
+            BOOL enabled = st ? *(const BOOL *)st : FALSE;
+            logf_("STUB  VideoProcessorBlt [#%ld] streams=%u enable=%d surface=%p%s",
+                  told, stream_count, enabled, input_surface,
+                  input_surface == (void *)&stub_vp_input_view ? " (ours)" : "");
+            describe_texture("input  (from the decoder)", input_view_resource);
+            if (told == 1) describe_texture("output (the game's target)", output_view_resource);
+            if (input_view_resource) seen_input = TRUE;
+        }
+    }
     return S_OK;
 }
 
@@ -690,6 +865,50 @@ static void upload_frame(IMFSample *sample)
                 frame_texture = NULL;
         }
         bridge_upload_frame(data, stride, frame_width, frame_height);
+        /*
+         * The D3D11-only path.
+         *
+         * bridge_upload_frame carries the frame to D3D12, which a title
+         * without a D3D12 device never reaches. NieR Replicant presents
+         * through the D3D11 video processor instead, and the surface it hands
+         * that processor is never filled -- measured flat, three times across
+         * a scene -- because the sample now arrives in system memory rather
+         * than as a DXGI buffer. So convert here and write the result into a
+         * texture of our own, which VideoProcessorBlt then copies into the
+         * game's target.
+         */
+        if (!d3d12_bridge_armed)
+        {
+            /*
+             * Convert here and upload later, once.
+             *
+             * The first working version went NV12 -> our texture -> the game's
+             * texture, and did the second copy inside every VideoProcessorBlt.
+             * The game blits at display rate and the video is 25 fps, so most
+             * of those eight-megabyte copies moved a frame that had not
+             * changed. Converting into a buffer and marking it dirty leaves
+             * exactly one upload per decoded frame, straight into the target,
+             * with no intermediate texture at all.
+             */
+            size_t need = (size_t)frame_width * frame_height * 4;
+            if (pending_size < need)
+            {
+                if (pending_bgra) HeapFree(GetProcessHeap(), 0, pending_bgra);
+                pending_bgra = HeapAlloc(GetProcessHeap(), 0, need);
+                pending_size = pending_bgra ? need : 0;
+            }
+            if (pending_bgra)
+            {
+                LARGE_INTEGER a_, b_;
+                QueryPerformanceCounter(&a_);
+                nv12_to_bgra(data, stride, pending_bgra, frame_width * 4,
+                             frame_width, frame_height);
+                QueryPerformanceCounter(&b_);
+                convert_ticks += b_.QuadPart - a_.QuadPart;
+                ++converted;
+                pending_w = frame_width; pending_h = frame_height;
+            }
+        }
     }
     LeaveCriticalSection(&frame_lock);
 
@@ -713,7 +932,26 @@ static HRESULT WINAPI reader_set_media_type(void *self, DWORD stream, DWORD *res
         frame_width = (UINT)(size >> 32);
         frame_height = (UINT)(size & 0xffffffff);
     }
-    return real_set_media_type(self, stream, reserved, type);
+    {
+        /* The one answer that separates "no frames were produced" from
+         * "frames were produced and went nowhere". A reader that refuses the
+         * output format the game asked for leaves it with audio and no video
+         * stream, and from outside that looks the same as a broken upload. */
+        GUID sub; static LONG told;
+        HRESULT hr = real_set_media_type(self, stream, reserved, type);
+        if (InterlockedIncrement(&told) <= 8)
+        {
+            if (type && SUCCEEDED(IMFAttributes_GetGUID((IMFAttributes *)type,
+                                                        &MF_MT_SUBTYPE, &sub)))
+                logf_("SetCurrentMediaType asked '%c%c%c%c' %ux%u -> 0x%08lx",
+                      (char)(sub.Data1 & 0xff), (char)((sub.Data1 >> 8) & 0xff),
+                      (char)((sub.Data1 >> 16) & 0xff), (char)((sub.Data1 >> 24) & 0xff),
+                      frame_width, frame_height, (unsigned long)hr);
+            else
+                logf_("SetCurrentMediaType -> 0x%08lx", (unsigned long)hr);
+        }
+        return hr;
+    }
 }
 
 /* The type the reader settles on is the authority on geometry and stride,
@@ -743,6 +981,17 @@ static HRESULT WINAPI reader_read_sample(void *self, DWORD stream, DWORD flags,
 {
     HRESULT hr = real_read_sample(self, stream, flags, actual, sample_flags,
                                   timestamp, sample);
+    {
+        static LONG reads, empty;
+        LONG n = InterlockedIncrement(&reads);
+        if (!(SUCCEEDED(hr) && sample && *sample)) InterlockedIncrement(&empty);
+        /* First few and then a milestone: enough to say whether samples are
+         * arriving at all without writing a line per frame. */
+        if (n <= 3 || n == 50 || n == 300)
+            logf_("ReadSample [#%ld] -> 0x%08lx, sample %s (%ld empty so far)",
+                  n, (unsigned long)hr,
+                  (sample && *sample) ? "delivered" : "NONE", empty);
+    }
     if (SUCCEEDED(hr) && sample && *sample) upload_frame(*sample);
     return hr;
 }
@@ -798,8 +1047,27 @@ static HRESULT WINAPI my_MFCreateSourceReaderFromByteStream(IMFByteStream *strea
 static HRESULT (WINAPI *real_device_qi)(void *, REFIID, void **);
 static HRESULT (WINAPI *real_context_qi)(void *, REFIID, void **);
 
+/*
+ * Only offer an ID3D11VideoDevice the bridge can actually back.
+ *
+ * The stub is not a courtesy: it exists so a game will drive the video
+ * processor whose output this bridge then presents through D3D12. DYNASTY
+ * WARRIORS and Nioh 3 work that way. NieR Replicant has no D3D12 at all, so
+ * that half can never engage, and answering yes there sends the game down a
+ * path whose frames nothing collects -- a black screen with sound rather than
+ * a crash.
+ *
+ * Gating on the D3D12 side being armed says exactly that, and it keeps the
+ * decision out of a per-game switch: a title with no D3D12 device is told the
+ * truth and can take its own fallback. NieR resolves MFCopyImage and
+ * MFGetStrideForBitmapInfoHeader, so it appears to have one.
+ *
+ * Ordering holds for the titles that need the stub: both create their D3D12
+ * device before anything queries for a video device.
+ */
 static HRESULT WINAPI device_qi(void *self, REFIID iid, void **out)
 {
+    if (!d3d12_bridge_armed && !force_video_device) return real_device_qi(self, iid, out);
     if (IsEqualGUID(iid, &iid_video_device))
     {
         InterlockedIncrement(&stub_video_device.refcount);
@@ -811,6 +1079,7 @@ static HRESULT WINAPI device_qi(void *self, REFIID iid, void **out)
 
 static HRESULT WINAPI context_qi(void *self, REFIID iid, void **out)
 {
+    if (!d3d12_bridge_armed && !force_video_device) return real_context_qi(self, iid, out);
     if (IsEqualGUID(iid, &iid_video_context))
     {
         InterlockedIncrement(&stub_video_context.refcount);
@@ -851,7 +1120,6 @@ static HRESULT WINAPI texture_qi(void *self, REFIID iid, void **out)
     return hr;
 }
 
-static HRESULT (WINAPI *real_create_texture2d)(void *, const void *, const void *, void **);
 
 /* The game's shared texture is the one whose handle has to work. */
 static HRESULT WINAPI device_create_texture2d(void *self, const void *desc,
@@ -860,6 +1128,23 @@ static HRESULT WINAPI device_create_texture2d(void *self, const void *desc,
     HRESULT hr = real_create_texture2d(self, desc, initial, texture);
     const UINT *d = desc;
 
+    /*
+     * Report the two cases that decide whether a video frame has anywhere to
+     * land: a refused texture, and any request for NV12 -- the format
+     * D3DMetal is documented elsewhere as unable to create. A player whose
+     * upload surface is refused runs, plays its audio and shows nothing, and
+     * from outside that is indistinguishable from a frame path that never ran
+     * at all. Bounded, because a renderer creates thousands of textures.
+     */
+    if (d)
+    {
+        static LONG told;
+        BOOL nv12 = (d[4] == 103);   /* DXGI_FORMAT_NV12 */
+        if ((FAILED(hr) || nv12) && InterlockedIncrement(&told) <= 24)
+            logf_("CreateTexture2D %ux%u format=%u bind=0x%x misc=0x%x -> 0x%08lx%s",
+                  d[0], d[1], d[4], d[8], d[10], (unsigned long)hr,
+                  nv12 ? "   << NV12" : "");
+    }
     if (SUCCEEDED(hr) && d && texture && *texture && (d[10] & 2) && !real_texture_qi)
         real_texture_qi = patch_vtable_slot(*texture, 0, texture_qi);
     return hr;
@@ -961,6 +1246,8 @@ static FARPROC WINAPI my_GetProcAddress(HMODULE module, LPCSTR name)
 static DWORD WINAPI worker(LPVOID unused)
 {
     (void)unused;
+    force_video_device = GetEnvironmentVariableA("MGVF_VIDEO_DEVICE", NULL, 0) > 0;
+    if (force_video_device) logf_("MGVF_VIDEO_DEVICE set -- offering a video device with nothing behind it");
     stub_video_device.vtbl   = vd_vtbl;
     stub_video_context.vtbl  = vc_vtbl;
     stub_vp_enumerator.vtbl  = vpe_vtbl;
