@@ -137,7 +137,7 @@ stage_one() {
   # one -- the app pointed bottles at it and the game failed on the first
   # cutscene with unresolved dependencies.
   TMP="$ROOT/$SLUG/.$ARCH.incoming.$$"
-  mkdir -p "$ROOT/$VER"
+  mkdir -p "$ROOT/$SLUG"
   find "$ROOT/$SLUG" -maxdepth 1 -name ".$ARCH.incoming.*" -exec rm -rf {} + 2>/dev/null || true
 
   echo "engine    : $ENGINE  ($VER, $ARCH)"
@@ -195,8 +195,21 @@ stage_one() {
   # a dozen support libraries are still missing.
   date -u +'%Y-%m-%dT%H:%M:%SZ' > "$TMP/.complete"
 
-  rm -rf "$OUT"
-  mv "$TMP" "$OUT"
+  # Put the new one in place before removing the old, not after. Deleting first
+  # left the path a bottle points at absent for as long as an rm -rf of thirty
+  # megabytes takes, and a game started in that window finds nothing there. Two
+  # renames instead: the gap is now the time between them.
+  OLD=""
+  if [ -d "$OUT" ]; then
+    OLD="$OUT.replaced.$$"
+    mv "$OUT" "$OLD" || { echo "error: could not move the previous staging aside" >&2; exit 1; }
+  fi
+  if ! mv "$TMP" "$OUT"; then
+    echo "error: could not put the new staging in place" >&2
+    [ -n "$OLD" ] && mv "$OLD" "$OUT"
+    exit 1
+  fi
+  [ -n "$OLD" ] && rm -rf "$OLD"
 
   # Written to the file rather than to a variable: the loop below runs in a
   # subshell, so a variable would not survive it. This engine's own line is
