@@ -1749,7 +1749,16 @@ final class Runner: ObservableObject {
             for var hit in plan {
                 let outcome = hit.outcome
                 hit = await probe(hit)
-                hit.outcome = outcome
+                // The re-probe is the authority, not the outcome we recorded a
+                // moment ago from an exit code. A row could say "Fixed" in green
+                // over an installer that no longer sees the patch -- which is
+                // the shape a silent failure takes, and the last thing a green
+                // tick should be able to survive.
+                if outcome == "Fixed" && hit.state != .applied {
+                    hit.outcome = "Did not take — see the log"
+                } else {
+                    hit.outcome = outcome
+                }
                 refreshed.append(hit)
             }
             plan = refreshed
