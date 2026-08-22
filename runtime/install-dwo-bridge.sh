@@ -67,7 +67,7 @@ status() {
 
 case "$MODE" in
 --status)
-  echo "$(status) $GAME"
+  status
   exit 0
   ;;
 

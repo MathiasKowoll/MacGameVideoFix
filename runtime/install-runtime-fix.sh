@@ -68,11 +68,29 @@ done
 }
 
 # The VS20xx subfolder name changes between engine versions.
+# Look for the game's libogg, and also for one we have already moved aside.
+#
+# Requiring libogg_64.dll to exist made a half-finished install -- the original
+# renamed, the proxy not yet copied -- indistinguishable from a game that never
+# shipped libogg at all. The app then said "this game has no libogg", which is a
+# confident lie about a game that will not launch, with its original sitting
+# right there under the other name.
 OGG=""
+HALF=""
 for d in "$ROOT"/Engine/Binaries/ThirdParty/Ogg/Win64/*/; do
-  [ -f "$d/libogg_64.dll" ] && { OGG="${d%/}"; break; }
+  if [ -f "$d/libogg_64.dll" ]; then OGG="${d%/}"; break; fi
+  if [ -f "$d/libogg_64_real.dll" ] || [ -f "$d/libogg_real.dll" ]; then HALF="${d%/}"; fi
 done
-[ -n "$OGG" ] || { echo "error: no libogg_64.dll under $ROOT/Engine/Binaries/ThirdParty/Ogg/Win64" >&2; exit 1; }
+if [ -z "$OGG" ] && [ -n "$HALF" ]; then
+  OGG="$HALF"
+  echo "warning: $(basename "$HALF") has a saved original but no live DLL." >&2
+  echo "         A previous install did not finish. --restore puts it back." >&2
+fi
+[ -n "$OGG" ] || {
+  echo "error: no libogg_64.dll under $ROOT/Engine/Binaries/ThirdParty/Ogg/Win64" >&2
+  echo "       This game ships no libogg, so the runtime fix has no way in." >&2
+  exit 1
+}
 
 LIVE="$OGG/libogg_64.dll"
 REAL="$OGG/libogg_64_real.dll"
@@ -92,13 +110,19 @@ is_ours() {
 status() {
   if is_ours "$LIVE" && { [ -f "$REAL" ] || [ -f "$LEGACY_REAL" ]; }; then echo installed
   elif is_ours "$LIVE"; then echo broken       # proxy present, original missing
+  elif [ ! -f "$LIVE" ] && { [ -f "$REAL" ] || [ -f "$LEGACY_REAL" ]; }; then
+    echo half                                  # original saved, nothing live
   else echo absent
   fi
 }
 
 case "$MODE" in
 --status)
-  echo "$(status) $OGG"
+  # The state and nothing else. This used to print the absolute path beside it,
+  # which puts someone's home directory and library layout into any log they
+  # paste into a bug report -- and the caller already knows the path, it just
+  # passed it in.
+  status
   exit 0
   ;;
 
@@ -127,7 +151,14 @@ case "$MODE" in
     exit 0
   fi
 
-  echo "[1/4] checking $(basename "$LIVE")"
+  if [ ! -f "$LIVE" ] && { [ -f "$REAL" ] || [ -f "$LEGACY_REAL" ]; }; then
+  echo "error: a previous install did not finish -- the original is saved but" >&2
+  echo "       nothing is in its place, so the game will not launch." >&2
+  echo "       Put it back first:  $0 \"$CONTENT\" --restore" >&2
+  exit 1
+fi
+
+echo "[1/4] checking $(basename "$LIVE")"
   # A game update or a Steam verification puts the stock DLL back, which means
   # any libogg_real.dll left over is stale. Refresh it from whatever is
   # genuinely original right now -- same reasoning as the movie backup.

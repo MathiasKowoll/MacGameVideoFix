@@ -45,6 +45,7 @@ case "$MODE" in
 --status)
   if is_ours "$LIVE" && [ -f "$REAL" ]; then echo installed
   elif is_ours "$LIVE"; then echo broken
+  elif [ ! -f "$LIVE" ] && [ -f "$REAL" ]; then echo half
   else echo absent; fi
   exit 0
   ;;

@@ -583,6 +583,7 @@ final class Runner: ObservableObject {
         }
         switch statusAnswer.split(separator: " ", maxSplits: 1).first.map(String.init) {
         case "installed": bridgeState = .applied
+        case "half":      bridgeState = .partial
         case "broken":    bridgeState = .partial
         default:          bridgeState = .notApplied
         }
@@ -647,6 +648,7 @@ final class Runner: ObservableObject {
         runtimeUnavailable = false
         switch statusAnswer.split(separator: " ", maxSplits: 1).first.map(String.init) {
         case "installed": runtimeState = .applied
+        case "half":      runtimeState = .partial
         case "broken":    runtimeState = .partial
         default:          runtimeState = .notApplied
         }
