@@ -8,7 +8,7 @@ Koei Tecmo, in-house engine. Cutscenes played with sound and no picture.
 | Cutscenes | 355 `.webm`, VP9 Profile 0. 42 of them 2560x1440 and up to four minutes; the rest 960x540 interface clips |
 | Played by | `IMFSourceReader` on a **separate D3D11 device**, presented by a **D3D12** renderer |
 | Was | Cutscene ran with sound and subtitles, picture black |
-| Now | Plays on `crossover-preview-arm64-20260821`. Never launched on 26.3, which ships no WebM demuxer — read from the plugin sets, not from a run; see below |
+| Now | Plays on `crossover-preview-arm64-20260821`. Crashes on 26.3 — that much was run. Why is inferred rather than measured: 26.3 ships no WebM demuxer, read from the plugin sets; see below |
 | Needs | A build whose Media Foundation can **open a WebM**, and an injected DLL. Neither alone is enough: Preview demuxes WebM and decodes the VP9 inside it; stable 26.3 decodes the same VP9 and ships no `matroska` plugin, so nothing opens the container. The measured run also had the `.webm` byte-stream handler registered — see below for whether that is needed |
 
 ## Who does what
