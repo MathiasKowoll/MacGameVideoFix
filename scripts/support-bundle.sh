@@ -1088,8 +1088,10 @@ if [ -n "$TARGET_BDIR" ]; then
     ws_start="$(bottle_wineserver_start "$TARGET_BDIR" 2>/dev/null)"
     conf_mtime="$(stat -f %m "$TARGET_BDIR/cxbottle.conf" 2>/dev/null)"
     if [ -n "${ws_start:-}" ] && [ "${ws_start:-0}" -gt 0 ] && [ -n "${conf_mtime:-}" ]; then
-      echo "     wineserver up    : $(date -r "$ws_start" '+%Y-%m-%d %H:%M' 2>/dev/null)"
-      echo "     cxbottle.conf    : $(date -r "$conf_mtime" '+%Y-%m-%d %H:%M' 2>/dev/null) (last written)"
+      # To the second: the two are compared as epoch seconds, and rounding the
+      # display to the minute made an equal-looking pair read as a contradiction.
+      echo "     wineserver up    : $(date -r "$ws_start" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+      echo "     cxbottle.conf    : $(date -r "$conf_mtime" '+%Y-%m-%d %H:%M:%S' 2>/dev/null) (last written)"
       if [ "$conf_mtime" -gt "$ws_start" ]; then
         echo "                      THE CONF WAS EDITED AFTER THIS WINESERVER STARTED."
         echo "                      The running bottle is using the OLD values, whatever"
@@ -1599,7 +1601,7 @@ else
   fi
   echo
 
-  echo "STALE RE-ENCODE LEFTOVERS (basenames and counts, never a listing)"
+  echo "STALE RE-ENCODE LEFTOVERS (counts only -- never a name, never a listing)"
   if [ "$GAME_FAMILY" = ue5 ] && [ -n "$GAME_ROOT" ] && [ -n "$GAME_PROJ" ]; then
     content="$GAME_ROOT/$GAME_PROJ/Content"
     [ -d "$content" ] || content=""

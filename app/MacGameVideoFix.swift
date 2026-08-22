@@ -1343,6 +1343,7 @@ enum Codecs {
     static func refresh() {
         cached = nil
         cachedBottles = nil
+        cachedEngines = nil
         cachedFramework = nil
         cachedStaged = nil
     }
@@ -1373,21 +1374,90 @@ enum Codecs {
 
     static let downloadPage = "https://gstreamer.freedesktop.org/data/pkg/osx/1.24.14/"
 
-    static var stagedPath: String {
+    static var stagedRoot: String {
         (NSHomeDirectory() as NSString)
-            .appendingPathComponent("Library/Application Support/MacGameVideoFix/gst-codecs/x86_64/gstreamer-1.0")
+            .appendingPathComponent("Library/Application Support/MacGameVideoFix/gst-codecs")
+    }
+
+    /// One staged directory per engine, keyed by the CFBundleVersion that engine
+    /// declares. The support libraries inside are symlinks into that engine's
+    /// own bundle, so a directory is bound to the engine it was built for:
+    /// pointing a bottle at another one gives dyld two GStreamer cores and a
+    /// crash, which is the failure this whole arrangement exists to avoid.
+    static func stagedPath(forEngine version: String) -> String {
+        ((stagedRoot as NSString).appendingPathComponent(version) as NSString)
+            .appendingPathComponent("x86_64/gstreamer-1.0")
+    }
+
+    static func staged(forEngine version: String) -> Bool {
+        FileManager.default.fileExists(
+            atPath: (stagedPath(forEngine: version) as NSString)
+                .appendingPathComponent("libgstlibav.dylib"))
+    }
+
+    private static var cachedEngines: [String: URL]?
+
+    /// Every CrossOver on this Mac, keyed by CFBundleVersion.
+    ///
+    /// Found by what the bundle declares rather than by what it is called. One
+    /// of the installs this was fixed on is a Preview build living in
+    /// Crossover_patched.app, which no search for "CrossOver Preview.app" would
+    /// ever have seen -- and staging against the wrong engine does not warn,
+    /// it crashes.
+    static func installedEngines() -> [String: URL] {
+        if let c = cachedEngines { return c }
+        let fm = FileManager.default
+        var found: [String: URL] = [:]
+        for dir in ["/Applications",
+                    (NSHomeDirectory() as NSString).appendingPathComponent("Applications")] {
+            for app in (try? fm.contentsOfDirectory(
+                            at: URL(fileURLWithPath: dir),
+                            includingPropertiesForKeys: nil)) ?? [] {
+                guard app.pathExtension == "app",
+                      fm.fileExists(atPath: app.appendingPathComponent(
+                          "Contents/SharedSupport/CrossOver").path),
+                      let plist = NSDictionary(contentsOf: app.appendingPathComponent(
+                          "Contents/Info.plist")),
+                      let version = plist["CFBundleVersion"] as? String
+                else { continue }
+                found[version] = app
+            }
+        }
+        cachedEngines = found
+        return found
     }
 
     private static var cachedStaged: Bool?
 
-    /// Cached like the rest of this enum. `stageCodecs` and "Check again" both
-    /// call `refresh()`, which are the only two moments the answer changes.
+    /// True when every installed engine has a staging of its own.
+    ///
+    /// Deliberately strict: installing a second CrossOver later turns the banner
+    /// orange again, which is right, because a bottle migrated to that engine
+    /// would otherwise be pointed at a directory built for a different one.
     static var staged: Bool {
         if let c = cachedStaged { return c }
-        let found = FileManager.default.fileExists(
-            atPath: (stagedPath as NSString).appendingPathComponent("libgstlibav.dylib"))
+        let engines = installedEngines().keys
+        let found = !engines.isEmpty && engines.allSatisfy { staged(forEngine: $0) }
         cachedStaged = found
         return found
+    }
+
+    /// The engine a bottle last ran under: CrossOver stamps its own
+    /// CFBundleVersion into cxbottle.conf as "Version", and re-stamps it when
+    /// another install migrates the bottle. That makes it the right signal --
+    /// it follows the engine that actually runs the games, not the one that
+    /// created the bottle.
+    static func engineVersion(ofBottle bottle: URL) -> String? {
+        guard let text = try? String(
+            contentsOf: bottle.appendingPathComponent("cxbottle.conf"), encoding: .utf8)
+        else { return nil }
+        for line in text.split(separator: "\n") where line.hasPrefix("\"Version\"") {
+            guard let open = line.range(of: "= \""),
+                  let close = line.range(of: "\"", range: open.upperBound..<line.endIndex)
+            else { continue }
+            return String(line[open.upperBound..<close.lowerBound])
+        }
+        return nil
     }
 
     /// Bottles that already point at the staged folder.
@@ -1422,12 +1492,33 @@ enum Codecs {
         guard var text = try? String(contentsOf: conf, encoding: .utf8) else {
             return "Cannot read \(bottle.lastPathComponent)'s configuration."
         }
-        if text.contains("GST_PLUGIN_PATH") { return nil }
-        guard let range = text.range(of: "[EnvironmentVariables]") else {
-            return "\(bottle.lastPathComponent) has no [EnvironmentVariables] section."
+        guard let engine = engineVersion(ofBottle: bottle) else {
+            return "\(bottle.lastPathComponent) does not record which CrossOver it runs under."
         }
-        text.replaceSubrange(range,
-            with: "[EnvironmentVariables]\n\"GST_PLUGIN_PATH\" = \"\(stagedPath)\"")
+        guard staged(forEngine: engine) else {
+            return "\(bottle.lastPathComponent) runs under a CrossOver with no staged codec."
+        }
+        let want = stagedPath(forEngine: engine)
+
+        // An existing line is REPLACED, not left alone. It used to be left
+        // alone, which meant a bottle migrated to another CrossOver kept
+        // pointing at the previous engine's directory for good -- and that is
+        // the two-cores crash, arriving silently, months after the install.
+        if let line = text.range(of: #"^"GST_PLUGIN_PATH".*$"#,
+                                 options: [.regularExpression, .anchored]) ??
+                      text.range(of: "\n\"GST_PLUGIN_PATH\"[^\n]*",
+                                 options: .regularExpression) {
+            let replacement = (text[line].hasPrefix("\n") ? "\n" : "")
+                            + "\"GST_PLUGIN_PATH\" = \"\(want)\""
+            if text[line] == replacement { return nil }
+            text.replaceSubrange(line, with: replacement)
+        } else {
+            guard let range = text.range(of: "[EnvironmentVariables]") else {
+                return "\(bottle.lastPathComponent) has no [EnvironmentVariables] section."
+            }
+            text.replaceSubrange(range,
+                with: "[EnvironmentVariables]\n\"GST_PLUGIN_PATH\" = \"\(want)\"")
+        }
         do {
             try text.write(to: conf, atomically: true, encoding: .utf8)
             return nil

@@ -21,28 +21,52 @@
 # launcher sets only GST_PLUGIN_SYSTEM_PATH and never touches GST_PLUGIN_PATH,
 # and the bottle's environment is applied first, so it survives.
 #
-#     runtime/stage-codecs.sh [arch] [engine]
-#     runtime/stage-codecs.sh x86_64 "CrossOver Preview"
+# Every installed CrossOver gets its own staging directory, keyed by the
+# engine's CFBundleVersion. That is the same string a bottle records as its
+# "Version", so a bottle can be matched to the staging it needs without
+# guessing -- and it survives the case that broke the old code: a Preview build
+# living under an .app filename that does not say Preview.
+#
+#     runtime/stage-codecs.sh [arch] [engine version]
+#     runtime/stage-codecs.sh x86_64                   every engine installed
+#     runtime/stage-codecs.sh x86_64 26.3.0.39832      just that one
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 set -euo pipefail
 
 ARCH="${1:-x86_64}"
-ENGINE="${2:-CrossOver Preview}"
+WANT="${2:-}"
 FRAMEWORK=/Library/Frameworks/GStreamer.framework/Versions/1.0
-OUT="$HOME/Library/Application Support/MacGameVideoFix/gst-codecs/$ARCH"
+ROOT="$HOME/Library/Application Support/MacGameVideoFix/gst-codecs"
 
-APP=""
-for root in /Applications "$HOME/Applications"; do
-  [ -d "$root/$ENGINE.app" ] && APP="$root/$ENGINE.app" && break
-done
-[ -n "$APP" ] || { echo "error: no $ENGINE.app" >&2; exit 1; }
-CX="$APP/Contents/SharedSupport/CrossOver"
+# Find CrossOver by what it declares, not by what its file is called. One of
+# the installs on the machine this was fixed on is a Preview build named
+# Crossover_patched.app -- searching for "CrossOver Preview.app" would never
+# have seen it, and staging against the wrong engine is a crash, not a warning.
+plist_value() { defaults read "$1/Contents/Info.plist" "$2" 2>/dev/null; }
 
-SRC="$CX/lib/$ARCH"
-[ -d "$SRC" ] || SRC="$CX/lib64"
-[ -d "$SRC" ] || { echo "error: no $ENGINE library directory for $ARCH" >&2; exit 1; }
+ENGINES=""
+while IFS= read -r app; do
+  [ -d "$app/Contents/SharedSupport/CrossOver" ] || continue
+  ver="$(plist_value "$app" CFBundleVersion)"
+  [ -n "$ver" ] || continue
+  ENGINES="$ENGINES$ver|$app"$'\n'
+done <<EOF
+$(mdfind "kMDItemCFBundleIdentifier == 'com.codeweavers.CrossOver'" 2>/dev/null)
+$(ls -d /Applications/*.app "$HOME/Applications"/*.app 2>/dev/null)
+EOF
+
+# Spotlight can be off or stale, hence the directory listing as well; both
+# feeds are deduplicated here rather than trusted to be disjoint.
+ENGINES="$(printf '%s' "$ENGINES" | sort -u -t'|' -k1,1 | grep -v '^$' || true)"
+[ -n "$ENGINES" ] || { echo "error: no CrossOver installation found" >&2; exit 1; }
+
+if [ -n "$WANT" ]; then
+  ENGINES="$(printf '%s\n' "$ENGINES" | grep "^$WANT|" || true)"
+  [ -n "$ENGINES" ] || { echo "error: no CrossOver with version $WANT" >&2; exit 1; }
+fi
+
 [ -d "$FRAMEWORK" ] || {
   echo "error: GStreamer.framework is not installed." >&2
   echo "       Install the macOS *runtime* package, 1.24 series:" >&2
@@ -77,55 +101,91 @@ if [ -n "$gst_minor" ] && [ "$gst_minor" != "24" ]; then
   echo "            Yours may work perfectly well. Carrying on." >&2
 fi
 
-echo "engine    : $ENGINE ($ARCH)"
-echo "framework : $FRAMEWORK"
-echo "staging   : $OUT"
+# One staging directory per engine. The support libraries are symlinked INTO
+# the engine's bundle, so a directory is bound to the engine it was made for --
+# pointing a bottle at the wrong one is the two-cores crash this whole script
+# exists to avoid.
+stage_one() {
+  VER="$1"; APP="$2"
+  ENGINE="$(plist_value "$APP" CFBundleName)"
+  ENGINE="${ENGINE:-$(basename "$APP" .app)}"
+  CX="$APP/Contents/SharedSupport/CrossOver"
+  SRC="$CX/lib/$ARCH"
+  [ -d "$SRC" ] || SRC="$CX/lib64"
+  if [ ! -d "$SRC" ]; then
+    echo "  skipped   : $ENGINE ($VER) has no $ARCH libraries" >&2
+    return 0
+  fi
+  OUT="$ROOT/$VER/$ARCH"
 
-# Layout matters. GST_PLUGIN_PATH points at a directory GStreamer scans, and
-# it tries to load everything in it as a plugin -- so the support libraries go
-# one level out, in lib/, where the plugin's own @loader_path/../lib finds them
-# and the scanner never looks.
-rm -rf "$OUT"
-mkdir -p "$OUT/gstreamer-1.0" "$OUT/lib"
+  echo "engine    : $ENGINE  ($VER, $ARCH)"
+  echo "framework : $FRAMEWORK"
+  echo "staging   : $OUT"
 
-# The plugin itself, and ffmpeg, which is the whole point of taking it.
-cp "$FRAMEWORK/lib/gstreamer-1.0/libgstlibav.dylib" "$OUT/gstreamer-1.0/"
+  # Layout matters. GST_PLUGIN_PATH points at a directory GStreamer scans, and
+  # it tries to load everything in it as a plugin -- so the support libraries go
+  # one level out, in lib/, where the plugin's own @loader_path/../lib finds them
+  # and the scanner never looks.
+  rm -rf "$OUT"
+  mkdir -p "$OUT/gstreamer-1.0" "$OUT/lib"
 
-# Everything the plugin and ffmpeg need. Names beginning libgst, libglib,
-# libgobject and friends must come from CrossOver -- taking those from the
-# framework is exactly what produces two cores and a crash.
-from_crossover() {
-  case "$1" in
-    libgst*|libglib*|libgobject*|libgmodule*|libgthread*|libgio*|libintl*|libffi*|libpcre*) return 0;;
-    *) return 1;;
-  esac
+  # The plugin itself, and ffmpeg, which is the whole point of taking it.
+  cp "$FRAMEWORK/lib/gstreamer-1.0/libgstlibav.dylib" "$OUT/gstreamer-1.0/"
+
+  # Everything the plugin and ffmpeg need. Names beginning libgst, libglib,
+  # libgobject and friends must come from CrossOver -- taking those from the
+  # framework is exactly what produces two cores and a crash.
+  from_crossover() {
+    case "$1" in
+      libgst*|libglib*|libgobject*|libgmodule*|libgthread*|libgio*|libintl*|libffi*|libpcre*) return 0;;
+      *) return 1;;
+    esac
+  }
+
+  needed() { otool -L "$1" 2>/dev/null | grep -oE '@rpath/[^ ]+\.dylib' | sed 's|@rpath/||' | sort -u; }
+
+  pending=$(needed "$OUT/gstreamer-1.0/libgstlibav.dylib")
+  seen=""
+  while [ -n "$pending" ]; do
+    next=""
+    for lib in $pending; do
+      case " $seen " in *" $lib "*) continue;; esac
+      seen="$seen $lib"
+      if from_crossover "$lib"; then
+        [ -e "$SRC/$lib" ] && ln -sf "$SRC/$lib" "$OUT/lib/$lib"
+      elif [ -f "$FRAMEWORK/lib/$lib" ]; then
+        cp -f "$FRAMEWORK/lib/$lib" "$OUT/lib/$lib"
+        next="$next $(needed "$OUT/lib/$lib")"
+      fi
+    done
+    pending="$next"
+  done
+
+  copied=$(find "$OUT" -type f -name '*.dylib' | wc -l | tr -d ' ')
+  linked=$(find "$OUT" -type l | wc -l | tr -d ' ')
+  echo
+  echo "  ffmpeg and friends copied : $copied"
+  echo "  CrossOver libraries linked: $linked"
+  echo
+
+  # Appended straight to the file rather than to a variable: the loop below
+  # runs in a subshell, so a variable would not survive it.
+  printf '%s|%s|%s\n' "$VER" "$ENGINE" "$OUT/gstreamer-1.0" >> "$ROOT/.map"
 }
 
-needed() { otool -L "$1" 2>/dev/null | grep -oE '@rpath/[^ ]+\.dylib' | sed 's|@rpath/||' | sort -u; }
-
-pending=$(needed "$OUT/gstreamer-1.0/libgstlibav.dylib")
-seen=""
-while [ -n "$pending" ]; do
-  next=""
-  for lib in $pending; do
-    case " $seen " in *" $lib "*) continue;; esac
-    seen="$seen $lib"
-    if from_crossover "$lib"; then
-      [ -e "$SRC/$lib" ] && ln -sf "$SRC/$lib" "$OUT/lib/$lib"
-    elif [ -f "$FRAMEWORK/lib/$lib" ]; then
-      cp -f "$FRAMEWORK/lib/$lib" "$OUT/lib/$lib"
-      next="$next $(needed "$OUT/lib/$lib")"
-    fi
-  done
-  pending="$next"
+mkdir -p "$ROOT"
+: > "$ROOT/.map"
+printf '%s\n' "$ENGINES" | while IFS='|' read -r ver app; do
+  [ -n "$ver" ] || continue
+  echo
+  stage_one "$ver" "$app"
 done
 
-copied=$(find "$OUT" -type f -name '*.dylib' | wc -l | tr -d ' ')
-linked=$(find "$OUT" -type l | wc -l | tr -d ' ')
+# The map is what the app reads to point each bottle at its own engine: a
+# bottle's cxbottle.conf records the CFBundleVersion that last updated it, and
+# that is the first field here.
 echo
-echo "  ffmpeg and friends copied : $copied"
-echo "  CrossOver libraries linked: $linked"
-echo
-echo "Add this to the bottle's cxbottle.conf, under [EnvironmentVariables]:"
-echo
-echo "  \"GST_PLUGIN_PATH\" = \"$OUT/gstreamer-1.0\""
+echo "staged per engine:"
+grep -v '^$' "$ROOT/.map" 2>/dev/null | while IFS='|' read -r ver name path; do
+  printf '  %-16s %-20s %s\n' "$ver" "$name" "$path"
+done
