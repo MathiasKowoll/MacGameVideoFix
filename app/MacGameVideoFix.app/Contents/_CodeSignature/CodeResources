@@ -8,6 +8,10 @@
 		<data>
 		LajWBiZ1zvJoBMjYyVtzzaUkg50=
 		</data>
+		<key>Resources/GfeSDK.dll</key>
+		<data>
+		wG5rSxkutVSq2WB/fBdimJEzF9g=
+		</data>
 		<key>Resources/amd_ags_x64.dll</key>
 		<data>
 		o3nwm4CJdsXGHC1OrA/m2Ci1pbc=
@@ -15,6 +19,10 @@
 		<key>Resources/install-dwo-bridge.sh</key>
 		<data>
 		myKVV0a/j4mBCsa/PJ+YWpPoAnw=
+		</data>
+		<key>Resources/install-nioh-bridge.sh</key>
+		<data>
+		bDZu2A7Fyif1yftwkA/AsUrsBkY=
 		</data>
 		<key>Resources/install-p5s-bridge.sh</key>
 		<data>
@@ -42,7 +50,7 @@
 		</data>
 		<key>Resources/stage-codecs.sh</key>
 		<data>
-		MDm0uEhpvLQ2/YIZUnUJrcaB3cI=
+		n0fgZzGk7YdmUh0QYpPgJ71ZUjg=
 		</data>
 		<key>Resources/transcode-movies.sh</key>
 		<data>
@@ -58,6 +66,13 @@
 			xCCIocTDQ9fWW0k6sKTaG5uEXQf8xLF4FOv+3/oYXDg=
 			</data>
 		</dict>
+		<key>Resources/GfeSDK.dll</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			63LET2v0N+nUBn1FwRcI1fxKiZv4b6F7zHS4aeN2tC4=
+			</data>
+		</dict>
 		<key>Resources/amd_ags_x64.dll</key>
 		<dict>
 			<key>hash2</key>
@@ -70,6 +85,13 @@
 			<key>hash2</key>
 			<data>
 			l3s+nTyrnGIjHZZh+MwIJSmGA/LfNox9cIWpxGtus7Q=
+			</data>
+		</dict>
+		<key>Resources/install-nioh-bridge.sh</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			ni2Y8ohSrTpN8KXJQGen0ibj9pNJaumw/FR6btI+5Mg=
 			</data>
 		</dict>
 		<key>Resources/install-p5s-bridge.sh</key>
@@ -118,7 +140,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			Uhgd6XRNmQPac83FgIQ5bXRj4BSRs2WyREO+Pj3vWH4=
+			3+o1p3UI55jY7vj9vsYAozs4GbFUB1eM3WSbh51jLe8=
 			</data>
 		</dict>
 		<key>Resources/transcode-movies.sh</key>

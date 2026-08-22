@@ -124,14 +124,15 @@ private final class ProcessBox: @unchecked Sendable {
 /// warning about something irrelevant is worse than not warning at all: it
 /// sends people to install something that will not change their problem.
 ///
-/// Persona 5 Strikers does need a VC-1 decoder CrossOver does not ship, and
-/// that is said on its own row rather than as a blanket requirement.
+/// Three titles do need a decoder CrossOver does not ship -- VC-1 for Persona 5
+/// Strikers, WMV3 for the two Nioh games -- and that is said on their own rows
+/// rather than as a blanket requirement.
 enum Requirements {
     static var note: String {
         // Most, not all: five of these were validated on Preview, which decodes
-        // their formats itself. Persona 5 Strikers stages its own decoder and
-        // so depends on no engine in particular -- it is the one measured on a
-        // stable build too.
+        // their formats itself. Three stage their own decoder and so depend on
+        // no engine in particular -- Persona 5 Strikers is the one of those
+        // measured on a stable build too.
         "CrossOver 26.2 or later on Apple Silicon. Nothing else, for most games."
     }
 }
@@ -151,6 +152,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
     case unrealOther
     case dynastyWarriors
     case personaStrikers
+    case nioh
+    case nioh2
 
     var id: String { rawValue }
 
@@ -163,6 +166,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .unrealOther:       return "Another Unreal Engine 5 title"
         case .dynastyWarriors:   return "DYNASTY WARRIORS: ORIGINS"
         case .personaStrikers:   return "Persona 5 Strikers"
+        case .nioh:              return "Nioh"
+        case .nioh2:             return "Nioh 2"
         }
     }
 
@@ -175,6 +180,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .unrealOther:       return "Crash on the first cutscene, or a freeze after a while"
         case .dynastyWarriors:   return "Cutscene plays with sound, picture black"
         case .personaStrikers:   return "Video never starts; sound only"
+        case .nioh, .nioh2:      return "Cutscene refuses to play, then crashes"
         }
     }
 
@@ -190,6 +196,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .unrealOther:       return nil
         case .dynastyWarriors:   return "DWORIGINS.exe"
         case .personaStrikers:   return "game.exe"
+        case .nioh:              return "nioh.exe"
+        case .nioh2:             return "nioh2.exe"
         }
     }
 
@@ -210,39 +218,45 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .unrealOther:       return "…/steamapps/common/<Game>"
         case .dynastyWarriors:   return "…/steamapps/common/DWORIGINS"
         case .personaStrikers:   return "…/steamapps/common/P5S"
+        case .nioh:              return "…/steamapps/common/Nioh"
+        case .nioh2:             return "…/steamapps/common/Nioh2"
         }
     }
 
     var modes: [Mode] {
         switch self {
-        case .dynastyWarriors, .personaStrikers: return [.videoBridge]
+        case .dynastyWarriors, .personaStrikers,
+             .nioh, .nioh2:                      return [.videoBridge]
         default:                                 return [.runtime]
         }
     }
 
     /// The script that installs this game's fix.
     ///
-    /// Three of them now, and which one a game needs is a property of the game
-    /// rather than of the mode: DYNASTY WARRIORS and Persona 5 Strikers both
-    /// ride a bridge, on different carrier DLLs and with different code.
+    /// Four of them now, and which one a game needs is a property of the game
+    /// rather than of the mode: DYNASTY WARRIORS, Persona 5 Strikers and the
+    /// two Nioh titles all ride a bridge, on different carrier DLLs. The Nioh
+    /// pair share one installer because they share a carrier and a fault; the
+    /// others do not.
     var installer: String {
         switch self {
         case .dynastyWarriors: return "install-dwo-bridge.sh"
         case .personaStrikers: return "install-p5s-bridge.sh"
+        case .nioh, .nioh2:    return "install-nioh-bridge.sh"
         default:               return "install-runtime-fix.sh"
         }
     }
 
     /// Said on a row that installs cleanly and still will not play.
     ///
-    /// Persona 5 Strikers is the only game here needing a codec CrossOver does
-    /// not ship. The bridge goes in either way; without the codec there is
-    /// nothing for it to carry.
+    /// Three games here need a codec CrossOver does not ship. The bridge goes
+    /// in either way; without the codec there is nothing for it to carry.
     var extraRequirement: String? {
-        if case .personaStrikers = self {
-            return "Also needs the VC-1 codec staged."
+        switch self {
+        case .personaStrikers: return "Also needs the VC-1 codec staged."
+        case .nioh, .nioh2:    return "Also needs the WMV3 codec staged."
+        default:               return nil
         }
-        return nil
     }
 
     /// Said when the folder is not the one this game needs. Naming the thing
@@ -286,6 +300,20 @@ enum SupportedGame: String, CaseIterable, Identifiable {
             for c in candidates
             where fm.fileExists(atPath: c.appendingPathComponent("DWORIGINS.exe").path) {
                 return .bridgeGame(c, .dynastyWarriors)
+            }
+            return nil
+        }
+        // nioh.exe and nioh2.exe are distinct names, so the wrong one of the
+        // pair fails to match rather than being accepted as the other.
+        if self == .nioh || self == .nioh2 {
+            guard let exe = executable else { return nil }
+            var candidates = [url]
+            if let subs = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
+                candidates += subs
+            }
+            for c in candidates
+            where fm.fileExists(atPath: c.appendingPathComponent(exe).path) {
+                return .bridgeGame(c, self)
             }
             return nil
         }
@@ -340,6 +368,12 @@ enum Title {
         where fm.fileExists(atPath: c.appendingPathComponent("game.exe").path)
            && fm.fileExists(atPath: c.appendingPathComponent("data/pd").path) {
             return .bridgeGame(c, .personaStrikers)
+        }
+        for c in candidates where fm.fileExists(atPath: c.appendingPathComponent("nioh.exe").path) {
+            return .bridgeGame(c, .nioh)
+        }
+        for c in candidates where fm.fileExists(atPath: c.appendingPathComponent("nioh2.exe").path) {
+            return .bridgeGame(c, .nioh2)
         }
         if let g = GameFolder.locate(from: url) { return .unrealVP9(g) }
         return nil
@@ -2757,7 +2791,7 @@ extension SupportedGame {
         /// folder itself. Persona 5 Strikers was missing from every scan
         /// because it was being looked for in the Unreal place.
         switch self {
-        case .dynastyWarriors, .personaStrikers:
+        case .dynastyWarriors, .personaStrikers, .nioh, .nioh2:
             return FileManager.default.fileExists(
                 atPath: folder.appendingPathComponent(exe).path)
         default:

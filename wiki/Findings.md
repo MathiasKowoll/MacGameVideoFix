@@ -292,11 +292,17 @@ D3DMetal has none to build on: `GetSharedHandle` appears 17 times in DXMT's
 DXMT and on nothing else, and why a game in DYNASTY WARRIORS' position may work
 under a different backend instead — untested here.
 
-## The same bridge, a second game
+## The same bridge, three games
 
-Nioh was fixed by the Persona 5 Strikers bridge with no change to what the
-bridge does. That is the strongest evidence so far that these repairs are
-general and only the carrier is not.
+Nioh and Nioh 2 were both fixed by the Persona 5 Strikers bridge with no change
+to what the bridge does. That is the strongest evidence so far that these
+repairs are general and only the carrier is not.
+
+The three do not even reach the video the same way. Strikers and Nioh 2 go
+through Media Foundation; Nioh builds a DirectShow graph. What they share is
+one line further down, where a shared D3D9 surface is asked for and the handle
+comes back null -- and that is the line the bridge watches, which is why the
+player above it can differ without mattering.
 
 **The gap, stated exactly.** The game asks D3D9 for a shared render target.
 Wine's `d3d9` creates it, returns `S_OK`, and hands back a share handle of zero.
@@ -334,7 +340,16 @@ could have taken part. One line in it reads like a failure and is not.
 `Direct3DCreate9Ex -> 0x00000000` looks like a null return; that function
 returns an `HRESULT`, so the value is `S_OK`.
 
-**What is not measured.** Nioh has run only on Preview and only on DXMT. Whether
+**And it held for a third.** Nioh 2 needed no code change at all -- same
+carrier, exporting the identical 16 symbols, so even the built proxy was reused.
+It exercised more of the bridge than Nioh had: four of six import hooks landed
+rather than two, `MFCreateSourceReaderFromByteStream` accepted the ASF, and the
+frames arrived as NV12 with a 1920 pitch where Nioh's had been a four-byte
+format at 7680. The NV12-to-BGRA converter that came across from DYNASTY
+WARRIORS absorbed that difference without being told.
+
+**What is not measured.** Neither Nioh title has run anywhere but Preview and
+DXMT. Whether
 the bridge works under D3DMetal is not open in the same way -- the sidecar needs
 `GetSharedHandle`, which is `E_NOTIMPL` there -- but it has not been tried, and
 26.3 has not been tried at all.

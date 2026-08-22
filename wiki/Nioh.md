@@ -77,8 +77,8 @@ Measured on Preview and on DXMT only. 26.3 has not been tried. Under D3DMetal th
 sidecar has nothing to build on — `GetSharedHandle` is `E_NOTIMPL` there — so it
 is not expected to work, but that has not been run either.
 
-Nioh 2 is described by winevideo as using the same path. It has not been tried
-here.
+[Nioh 2](Nioh-2.md) turned out to use the same path and is fixed by the same
+bridge, with no code change and even the same built proxy.
 
 ## What it cost
 
