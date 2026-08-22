@@ -15,18 +15,11 @@ the list, drop its folder on it, press Apply.
 | [**DYNASTY WARRIORS: ORIGINS**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Dynasty-Warriors-Origins) | Cutscene plays with sound, picture black | Preview — never launched on 26.3 |
 
 "Preview" in that column, and everywhere else in this file, means
-`crossover-preview-arm64-20260821`. Everything runs on it. Two are confirmed on
-stable 26.3 as well. Three qualifications belong with that column, because it
-says which builds a title was measured on rather than which it might work on:
-
-- **Both Life is Strange titles crash on 26.3.** That is our defect, and it is
-  open and unexplained. Use Preview for those two.
-- **Persona 5 Strikers has not been tried on stable.** It stages its own
-  decoder, so what CrossOver ships stops mattering, and it is expected to work
-  there. That is a prediction from how it was fixed, not a measurement.
-- **DYNASTY WARRIORS has never been launched on stable at all.** Stable 26.3
-  ships nothing that can open a WebM, which is what its 355 cutscenes are. That
-  is read from the two installs' plugin sets, not from a run.
+`crossover-preview-arm64-20260821`. The column says which builds a title was
+measured on, never which it might work on. Everything runs on that Preview and
+two are confirmed on stable 26.3 as well — but both Life is Strange titles
+crash on 26.3. That crash is ours, it is open and unexplained, and until it is
+settled those two want Preview.
 
 Each row links to a page in the
 [wiki](https://github.com/MathiasKowoll/MacGameVideoFix/wiki) with that game's
@@ -62,6 +55,18 @@ executable to check against, so it is taken at its word — and no claim that th
 fix works applies to it. An untried title is best tried on Preview.
 
 **Revert** puts everything back.
+
+### CrossOver and bottles
+
+The **CrossOver and bottles…** button opens the two things that live outside
+the game folder. **Stage codec** borrows the VC-1 decoder Persona 5 Strikers
+needs from your own GStreamer install, once per installed CrossOver. The list
+under it says which CrossOver each bottle runs under and which staging it points
+at, repairs a bottle whose CrossOver has changed since it was last configured,
+and lets you name the CrossOver a bottle uses when the automatic answer is
+wrong.
+
+The other five titles need nothing from that sheet.
 
 ### All your games at once
 
@@ -120,7 +125,9 @@ The app backs everything up first and has a **Revert** button. It shows a
 progress bar and streams the underlying scripts' output live, so you can see
 which file it is working on rather than staring at a frozen window.
 
-Once the fix is applied, **Apply Fix** is disabled until you revert.
+Once the fix is applied, **Apply Fix** is disabled until you revert. Applying
+twice would move the proxy DLL aside as though it were the game's own and lose
+the original.
 
 Because the app is signed ad-hoc rather than notarised, macOS will refuse the
 first launch. Right click it and choose **Open**, then confirm.
@@ -144,147 +151,47 @@ first launch. Right click it and choose **Open**, then confirm.
 
 ## What goes in the bottle
 
-Two settings live in the bottle rather than beside the game, and one of them
-divides these titles into two groups that cannot share a bottle.
+Two settings live in `cxbottle.conf` rather than beside the game.
 
-### The graphics backend, and the one conflict
-
-`CX_GRAPHICS_BACKEND` in `cxbottle.conf`:
+`CX_GRAPHICS_BACKEND` is a requirement rather than a preference, and it divides
+these titles into two groups that cannot share a bottle:
 
 | Backend | Games |
 | --- | --- |
 | `d3dmetal` | Mortal Shell 2, both Life is Strange, Beast of Reincarnation, DYNASTY WARRIORS: ORIGINS |
 | `dxmt` | **Persona 5 Strikers**, and only it |
 
-This is a requirement rather than a preference: Persona 5 Strikers needs a
-shared D3D9 surface handle, and DXMT implements the sharing that neither Wine's
-D3D9 nor D3DMetal has. The measurements behind that are on
+So Persona 5 Strikers wants a bottle of its own. Steam libraries are shared
+between bottles, so a second bottle sees the same installed games without
+re-downloading anything. Why nothing but DXMT will do is on
 [the title's page](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Persona-5-Strikers).
 
-**So Persona 5 Strikers wants a bottle of its own.** Steam libraries are shared
-between bottles, so a second bottle sees the same installed games without
-re-downloading anything. Switching the backend back and forth in one bottle
-works, but means remembering to switch it, and forgetting looks exactly like the
-fix having stopped working.
-
-### The codec path
-
-`GST_PLUGIN_PATH`, also in `cxbottle.conf`, points at the staged VC-1 decoder.
-**The app writes this for you**, and where it points is not a free choice: the
-staged decoder's support libraries are symlinks into one CrossOver's own bundle,
-so a staged directory belongs to that CrossOver and no other. Using it under a
-different one gives dyld two GStreamer cores and a crash.
-
-So there is one staged directory per installed CrossOver, named for the version
-that engine declares:
+`GST_PLUGIN_PATH` points at the staged VC-1 decoder, and **the app writes it for
+you**:
 
 ```
-"GST_PLUGIN_PATH" = "…/MacGameVideoFix/gst-codecs/<CrossOver version>/x86_64/gstreamer-1.0"
+"GST_PLUGIN_PATH" = "…/MacGameVideoFix/gst-codecs/<CrossOver engine version>/x86_64/gstreamer-1.0"
 ```
 
-That version is the same string a bottle records as its own `"Version"`, which is
-how the app knows which one a bottle needs — and how it notices when a bottle is
-opened with a different CrossOver and needs re-pointing. It offers to repair that
-itself; there is nothing to edit by hand.
+The middle component is the `CFBundleVersion` of the CrossOver that bottle runs
+under — the same string the bottle records as its own `"Version"` — and a
+staging built for one engine is not usable under another. So the app writes the
+line only into the bottle the title runs in, takes it back out of bottles that
+have no use for it, and re-points a bottle whose CrossOver has changed. There is
+nothing to edit by hand. Why the staging is per engine is in
+[Findings](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Findings#the-staged-codecs-and-where-they-come-from).
 
-Only Persona 5 Strikers needs the decoder, so the line is written only into
-bottles where that game has run, or one you pick yourself. Earlier versions wrote
-it into every bottle on the machine and later ones take it back out again.
+Both settings are read when the bottle starts, and a live `wineserver` keeps the
+old copy — so **close Steam completely**, not just the game. A setting that has
+not taken looks identical to a setting that did not work.
 
-### Changing either one
+## Working from a clone
 
-Both are read when the bottle starts, and a live `wineserver` keeps the old copy
-— so **close Steam completely**, not just the game. A setting that has not taken
-looks identical to a setting that did not work, which is worth knowing before
-spending an evening on it.
-
-## Using the scripts directly
-
-The app runs these; each also works on its own. The installers take `--status`
-to report and `--restore` to undo. `stage-codecs.sh` is the exception: it only
-builds a staging directory of its own and modifies neither CrossOver nor the
-game, so there is nothing for it to reverse.
-
-**These paths are in the source repository.** The app download carries the
-installers, the prebuilt DLLs and the two undo scripts inside its own bundle,
-but not `runtime/build-proxy.sh`, not `crossover/`, and not `app/build-app.sh`.
-Clone the repository, or take the source tarball from
-[Releases](../../releases), to run the commands below as written.
-
-### Unreal titles: the runtime patch
-
-Mortal Shell 2, both Life is Strange titles, Beast of Reincarnation.
-
-```bash
-runtime/install-runtime-fix.sh "/path/to/<Game>/Content"            # install
-runtime/install-runtime-fix.sh "/path/to/<Game>/Content" --status   # report
-runtime/install-runtime-fix.sh "/path/to/<Game>/Content" --restore  # remove
-```
-
-It expects `libogg_64.dll` and `pe.py` beside it. The release ships that DLL
-prebuilt; building your own is under [Building](#building).
-
-### DYNASTY WARRIORS: ORIGINS
-
-```bash
-runtime/install-dwo-bridge.sh "/path/to/steamapps/common/DWORIGINS"            # install
-runtime/install-dwo-bridge.sh "/path/to/steamapps/common/DWORIGINS" --status   # report
-runtime/install-dwo-bridge.sh "/path/to/steamapps/common/DWORIGINS" --restore  # remove
-```
-
-It expects `libxess.dll` and `pe.py` beside it.
-
-### Persona 5 Strikers
-
-Two steps, and the bridge alone will not make the picture appear — without the
-codec there is nothing for it to carry.
-
-```bash
-runtime/stage-codecs.sh x86_64                                 # stage the VC-1 decoder
-runtime/install-p5s-bridge.sh "/path/to/steamapps/common/P5S"  # install the bridge
-```
-
-`stage-codecs.sh` takes an architecture; `x86_64` is what a `WineArch=win64`
-Steam bottle selects. Its optional second argument narrows the work to a single
-CrossOver install — the script's own usage header says what that argument is in
-the copy you have, since it changed between the release and the current source.
-
-Remember the backend: this title runs on `dxmt` and nothing else.
-
-### The CrossOver-wide node guard
-
-The freeze both Life is Strange titles hit is in Unreal's D3D12 renderer rather
-than in either game, so the same guard can be installed once into a CrossOver
-build instead of once per game.
-
-```bash
-crossover/install-node-guard.sh "/Applications/CrossOver.app"            # install
-crossover/install-node-guard.sh "/Applications/CrossOver.app" --status   # report
-crossover/install-node-guard.sh "/Applications/CrossOver.app" --restore  # remove
-```
-
-It replaces Apple's `dxgi.dll` with a proxy that handles all seven exports and
-corrects one call. It affects every game in every bottle using that CrossOver,
-which is the point of it and also the risk, and modifying the bundle invalidates
-its code signature as any CrossOver patch does. Point it at a copy if you would
-rather not touch the build you rely on. The per-game fix remains the default;
-the trade between them is in
-[Findings](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Findings#the-adapter-node-walk-and-where-the-guard-can-live).
-
-### Undoing an older release's re-encode
-
-Only for a copy an earlier version transcoded. That mode has been removed.
-
-```bash
-scripts/pak-hide-videos.py ".../Content/Paks/pakchunk0-Windows.pak" --restore
-scripts/transcode-movies.sh "/path/to/<Game>/Content" --restore
-```
-
-Neither is a no-op on a game that never had the re-encode applied: both refuse
-and change nothing, `pak-hide-videos.py` with "no record of a previous patch for
-this pak" and `transcode-movies.sh` with an error naming the folder or backup it
-could not find. What the pak patch did, and why undoing it is a truncate, is in
-[Findings](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Findings#what-the-pak-patch-did).
+The app carries the installers and the prebuilt DLLs inside its bundle and
+runs them itself. Reproducing a fix by hand, or building a proxy for a title
+that has none, is a maintainer's job rather than a user's, and it is written
+up in
+[Running the scripts directly](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Running-the-scripts).
 
 ## Troubleshooting
 
@@ -294,16 +201,11 @@ again.
 
 **Still crashing in `AllocateBuffer`** — the proxy is not being loaded. Check
 what the app reports, and look for `C:\ue5-media-fix.log` in the bottle's
-`drive_c`: if it does not exist, the DLL never ran. Releases before the three
-halves were merged wrote `C:\ue5-runtime-fix.log`, which is the name to look for
-in an old log.
+`drive_c`: if it does not exist, the DLL never ran.
 
-**Still freezing after a while** — check the same log. The node guard writes one
-line the first time it refuses a node that does not exist, and that line
-appearing is what says the fix took effect. If the log has the Electra lines but
-not that one, the game is not making the adapter-node walk and the freeze is
-something else; the
-[wiki](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Diagnosing-a-new-game)
+**Still freezing after a while** — check the same log for the node guard's
+refusal line. If it is not there, the freeze is something else, and
+[Diagnosing a new game](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Diagnosing-a-new-game)
 covers how to look.
 
 **Persona 5 Strikers installs cleanly and still shows nothing** — check the two
@@ -348,7 +250,7 @@ is the game's own untouched carrier DLL: its export table is read from it so the
 forwarder list matches exactly.
 
 ```bash
-runtime/build-proxy.sh "/path/to/<Game>/Engine/Binaries/ThirdParty/Ogg/Win64/libogg_64.dll" ue5-media-fix.c
+runtime/build-proxy.sh "/path/to/<Game>/Engine/Binaries/ThirdParty/Ogg/Win64/<VS20xx>/libogg_64.dll" ue5-media-fix.c
 runtime/build-proxy.sh "/path/to/DWORIGINS/libxess.dll" dwo-video-bridge.c
 runtime/build-proxy.sh "/path/to/P5S/amd_ags_x64.dll" p5s-video-bridge.c
 ```
@@ -367,13 +269,13 @@ between engine versions, so check what your copy has rather than assuming.
   installation you already have, never redistributed here.
 - **[winevideo](https://github.com/Jfishin/winevideo) by Jfishin.** None of this
   would exist without it. Its patches are where these faults were first
-  identified, and the idea of importing codecs from the user's own official
-  GStreamer install rather than shipping any is winevideo's too. This project
-  reaches several of the same places from inside the game process instead of by
-  patching Wine, which is a different trade-off, not a better one — and it is
-  only possible because winevideo had already worked out what was wrong. Where
-  the two differ most: winevideo works outside the game, so it reaches titles
-  protected against tampering, which nothing here can.
+  identified: that Electra will accept NV12 and nothing else, that CrossOver
+  censors that format on macOS, that Electra decides in software by asking its
+  own platform handle, and that a D3D9 surface has to be bridged rather than
+  shared. The idea of importing codecs from the user's own official GStreamer
+  install rather than shipping any is winevideo's too. How the two projects
+  differ, and what each reaches that the other cannot, is in
+  [Findings](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Findings#the-staged-codecs-and-where-they-come-from).
 - [DXMT](https://github.com/3Shain/dxmt) and
   [vkd3d-proton](https://github.com/HansKristian-Work/vkd3d-proton), whose
   source made the root cause legible.
@@ -384,7 +286,18 @@ between engine versions, so check what your copy has rather than assuming.
 DXMT are free software that can be read and modified — copyleft keeps any
 derivative of this work equally available.
 
-## Why this targets CrossOver Preview
+## Disclaimer
+
+Unofficial community tooling, provided as-is. It modifies files in your game
+installation; everything is backed up and reversible, but back up anything you
+care about first. Not affiliated with or endorsed by CodeWeavers, Apple, or any
+of the publishers or developers of the games listed here.
+
+**Do not use any of this on a game with anti-cheat.** It patches a running
+process, which is exactly the behaviour anti-cheat exists to stop. Everything
+here is for single-player titles whose cutscenes do not play.
+
+### Why this targets CrossOver Preview
 
 This project targets `crossover-preview-arm64-20260821`. That is the build every
 measurement here was taken against, and it is named rather than called "Preview"
@@ -401,19 +314,7 @@ one: only it can open a WebM. DYNASTY WARRIORS ships 355 `.webm` cutscenes and
 cannot get as far as a decoder on stable, while Mortal Shell 2 ships the same
 codec in `.mp4`, which `isomp4` handles on both, and works on stable.
 
-Preview's native media support being ahead of the stable line's is why the work
-was done there, and the comparison above says exactly where that lead is: in
-what the build can open, not in what it can decode. It is not a recommendation
-about which build to run generally, and two titles here are confirmed on stable
-26.3.
+That lead is in what the build can open, not in what it can decode. It is not a
+recommendation about which build to run generally, and two titles here are
+confirmed on stable 26.3.
 
-## Disclaimer
-
-Unofficial community tooling, provided as-is. It modifies files in your game
-installation; everything is backed up and reversible, but back up anything you
-care about first. Not affiliated with or endorsed by CodeWeavers, Apple, or any
-of the publishers or developers of the games listed here.
-
-**Do not use any of this on a game with anti-cheat.** It patches a running
-process, which is exactly the behaviour anti-cheat exists to stop. Everything
-here is for single-player titles whose cutscenes do not play.

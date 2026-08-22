@@ -54,7 +54,7 @@ touched, and nobody selects a folder.
 `dxgi.dll` tolerates being renamed to `dxgi_real.dll` and loading behind a
 proxy. D3DMetal's `d3d12.dll` refuses to initialise under any other module
 name, giving `ERROR_DLL_INIT_FAILED` — see *A proxy `d3d12.dll`* in
-[docs/how-it-works.md](how-it-works.md#things-that-do-not-work). Whether the
+[Findings](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Findings#things-that-do-not-work). Whether the
 same refusal blocks a proxy that exports `D3D12CreateDevice` itself has not
 been tried. It is the first thing to find out, because if it does, this section
 is worth less than it looks.
@@ -94,7 +94,7 @@ Two ways to close that, and they are not the same kind of work — stage
 `libgstmatroska.dylib` from the official GStreamer.framework beside the bottle,
 the move `runtime/stage-codecs.sh` already makes for VC-1, or ask for
 `matroska` in a stable build. The first needs nothing of anyone else. See
-[the container, not the codec](how-it-works.md#the-container-not-the-codec).
+[the container, not the codec](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Findings#the-container-not-the-codec).
 
 ## Also worth telling them
 

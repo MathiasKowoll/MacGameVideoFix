@@ -1,6 +1,7 @@
 # What winevideo is still for, on CrossOver Preview
 
-Measured on an M4 Max against CrossOver Preview 20260821 (27.0.0.40921).
+Measured on an M4 Max against `crossover-preview-arm64-20260821`
+(CFBundleVersion 27.0.0.40921).
 Claims are marked **[RUN]** where something was executed and **[READ]** where
 only a binary was inspected, because the difference decided several of these.
 
@@ -29,7 +30,7 @@ VP9/WebM, are dead weight **on Preview**. On stable 26.3 the second of them is
 the whole dependency: that build ships no `matroska` plugin, so a `.webm` never
 opens there whatever can decode what is inside it. That is the finding this
 page's framing predates — see
-[the container, not the codec](how-it-works.md#the-container-not-the-codec).
+[the container, not the codec](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Findings#the-container-not-the-codec).
 
 ## Importing the codecs that are missing
 
@@ -103,7 +104,8 @@ Where it actually stops is a Media Foundation gate.
 inside winegstreamer, which is a change to the engine and so a change this
 project cannot make. The full account, including a DirectStorage detour that
 had nothing to do with video, is in
-[docs/ninja-gaiden-4.md](ninja-gaiden-4.md).
+[docs/ninja-gaiden-4.md](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/ninja-gaiden-4.md),
+which is a repository file and is not in any release.
 
 Anti-tamper is a real limit, but a narrower one: it defeats the fixes that
 write into a game's own code, as Beast of Reincarnation's did. It does not

@@ -67,9 +67,9 @@ as a possibility. It is not Sofdec.
 CrossOver ships no VP9 decoder MFT. winevideo adds one, inside winegstreamer
 (its patch 0003), which is exactly the kind of change this project cannot make.
 
-But the capability is there: CrossOver Preview decodes VP9 profile 0 and 2 on
-its own through `vp9parse → vtdec_hw`. What is missing is the declaration, not
-the decoder — nothing in the registry says an MFT exists.
+But the capability is there: `crossover-preview-arm64-20260821` decodes VP9
+profile 0 and 2 on its own through `vp9parse → vtdec_hw`. What is missing is
+the declaration, not the decoder — nothing in the registry says an MFT exists.
 
 So the open question is whether gate 1 is a capability check the game makes
 before using a path that does not involve that MFT at all. If it is, answering
@@ -182,9 +182,9 @@ Written down in full because the wrong turn is as instructive as the finding.
 Gate 1 was described above from the registry's side: no VP9 decoder is
 registered. The stronger version is that there is nothing to register.
 `MFVideoFormat_VP90` — the GUID `30395056-0000-0010-8000-00AA00389B71` — does
-not appear anywhere inside CrossOver Preview's `winegstreamer.so`. The `VP90`
-that turns up in its strings is one entry in a table of fourcc names, beside
-`qVP10`, `qY210` and the rest.
+not appear anywhere inside `crossover-preview-arm64-20260821`'s
+`winegstreamer.so`. The `VP90` that turns up in its strings is one entry in a
+table of fourcc names, beside `qVP10`, `qY210` and the rest.
 
 So this is not a missing registration. The decoder does not exist in the
 build, and no amount of registry work conjures one. Host GStreamer decodes VP9

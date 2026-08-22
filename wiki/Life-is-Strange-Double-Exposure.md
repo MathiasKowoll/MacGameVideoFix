@@ -9,7 +9,7 @@ the same fix.
 | Cause | `IDXGIAdapter3::QueryVideoMemoryInfo` succeeds for node indices the adapter does not have |
 | Fix | Refuse them — the same DLL Reunion uses |
 | winevideo | Not required — the fault is in DXGI, not in video. Not separately measured here; the DLL and the finding are shared with [Reunion](Life-is-Strange-Reunion.md) |
-| CrossOver | Preview build 20260821. **Crashes on 26.3** — our defect, open, shared with Reunion |
+| CrossOver | `crossover-preview-arm64-20260821`. **Crashes on 26.3** — our defect, open and unexplained, shared with Reunion |
 | Status | Fixed — the guard was confirmed to arm in play. The freeze itself was never reproduced on this title, so what is confirmed is that the fix takes hold, not that a freeze was cured |
 
 ## What was actually checked
@@ -35,15 +35,11 @@ recorded. The static match and the armed guard are what there is.
 
 ## On stable CrossOver
 
-Preview build 20260821 is where the confirmation above was made. On 26.3 this
-title crashes, as Reunion does, and the two share a DLL and a policy row: the
-table arms the node guard for `Chronos-Win64-Shipping.exe` and nothing else, so
-the H.264 half that DLL also carries is present in the file and inert here. The
-suspicion is the same one Reunion's page sets out — the Media Foundation hooks
-are installed for every title whether or not the half that uses them is armed.
-It is a suspicion and not a finding. The defect is ours and it is open; the
-account of it is on [Reunion's page](Life-is-Strange-Reunion.md). Use Preview
-until it is closed.
+`crossover-preview-arm64-20260821` is where the confirmation above was made. On
+26.3 this title crashes, as Reunion does, and the two share a DLL and a policy
+row. The defect is ours and it is open and unexplained; the account of it, and
+of what is still only suspected, is in [Findings](Findings.md), under *The open
+defect on 26.3*. Use Preview until it is closed.
 
 ## Caveats
 
@@ -58,4 +54,4 @@ until it is closed.
 
 ---
 
-Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md) · [How the fixes work](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/how-it-works.md), the shared mechanism behind all six
+Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md) · [Findings](Findings.md), what the six have in common

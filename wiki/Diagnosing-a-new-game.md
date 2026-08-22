@@ -131,8 +131,9 @@ WARRIORS it found in one second what four launches of guesswork had not — two
 diagnostics/launch-and-capture.sh <bottle> [engine]
 ```
 
-Keeps the stderr a Steam or CrossOver-interface launch throws away. Wine,
-D3DMetal and DXMT write their diagnostics there, and for a game that hangs on a
+**Repository only — this one is not in any release.** It keeps the stderr a
+Steam or CrossOver-interface launch throws away. Wine, D3DMetal and DXMT write
+their diagnostics there, and for a game that hangs on a
 black screen with no crash report that is often the only statement of what is
 wrong. One trap worth knowing before trusting a quiet capture: launching Steam
 captures nothing, because Steam forks and returns, so the command finishes
@@ -152,5 +153,4 @@ single-player titles whose cutscenes do not play.
 ---
 
 Back to [the games table](Games.md) ·
-[How the fixes work](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/how-it-works.md),
-the shared mechanism behind all six
+[Findings](Findings.md), what the six have in common

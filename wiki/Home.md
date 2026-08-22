@@ -42,10 +42,12 @@ diagnostics/survey-games.sh "/path/to/steamapps/common/<Game>"
 
 Reading the output:
 
-- **VP9 + Unreal** — likely the crash, but confirm it before patching. Scan the
-  executable for Electra's `12000` version check as described in
-  [Diagnosing a new game](Diagnosing-a-new-game.md); a count of zero means this
-  bug is not present in that build, whatever else may be wrong.
+- **VP9 + Unreal** — likely the crash, but confirm it before patching. No
+  static scanner for Electra's `12000` version check ships here: the code that
+  knows the pattern is the runtime patch itself, which reports how many sites
+  it found once it is installed. A count of zero means this bug is not present
+  in that build, whatever else may be wrong. See
+  [Diagnosing a new game](Diagnosing-a-new-game.md).
 - **VP9 + anything else** — possible, but a different mechanism each time.
 - **Bink (`.bik` / `.bk2`)** — Bink ships its own decoder and never touches
   Media Foundation or D3D video. Not affected by any of this.
@@ -71,14 +73,14 @@ videos".
 
 <!-- games:begin -->
 
-| Game | Engine | Symptom | Fix | Backend | DX | Status |
-| --- | --- | --- | --- | --- | --- | --- |
-| [Mortal Shell 2](Mortal-Shell-2.md) | Unreal Engine 5.6.1 | Crash on the first cutscene | Runtime patch, 4 sites | D3DMetal | 12 | Fixed |
-| [Life is Strange: Reunion](Life-is-Strange-Reunion.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard | D3DMetal | 12 | Fixed |
-| [Life is Strange: Double Exposure](Life-is-Strange-Double-Exposure.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard, same DLL | D3DMetal | 12 | Fixed |
-| [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | Video bridge, D3D11 to D3D12 | D3DMetal | 12 | Fixed |
-| [Beast of Reincarnation](Beast-of-Reincarnation.md) | Unreal Engine 5 | Startup video plays with sound, no picture | NV12 restored, Electra forced to software | D3DMetal | 12 | Fixed |
-| [Persona 5 Strikers](Persona-5-Strikers.md) | Koei Tecmo, in-house | Video never starts; sound only | Staged VC-1 codec, and a D3D9 to D3D11 bridge | **DXMT** | 11 | Fixed |
+| Game | Engine | Symptom | Fix | Backend | DX | CrossOver | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| [Mortal Shell 2](Mortal-Shell-2.md) | Unreal Engine 5.6.1 | Crash on the first cutscene | Runtime patch, 4 sites | D3DMetal | 12 | 26.3 · Preview | Fixed |
+| [Life is Strange: Reunion](Life-is-Strange-Reunion.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard | D3DMetal | 12 | Preview -- 26.3 crashes | Fixed |
+| [Life is Strange: Double Exposure](Life-is-Strange-Double-Exposure.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard, same DLL | D3DMetal | 12 | Preview -- 26.3 crashes | Fixed |
+| [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | Video bridge, D3D11 to D3D12 | D3DMetal | 12 | Preview -- 26.3 never launched | Fixed |
+| [Beast of Reincarnation](Beast-of-Reincarnation.md) | Unreal Engine 5 | Startup video plays with sound, no picture | NV12 restored, Electra forced to software | D3DMetal | 12 | 26.3 · Preview | Fixed |
+| [Persona 5 Strikers](Persona-5-Strikers.md) | Koei Tecmo, in-house | Video never starts; sound only | Staged VC-1 codec, and a D3D9 to D3D11 bridge | **DXMT** | 11 | Preview -- 26.3 not tried | Fixed |
 
 **Backend and DX are not preferences, they are requirements.** Persona 5
 Strikers only works on DXMT: it needs a shared D3D9 surface handle, and DXMT
@@ -87,14 +89,30 @@ D3DMetal with the D3D12 renderer, which is also what keeps PSO precompilation
 -- `-dx11` dodges some of these faults and costs permanent shader-compilation
 stutter.
 
-**None of these games needs CrossOver patched, on a build that already decodes
-VP9.** That was not true when this project started, and it is the single biggest
-thing that changed: CrossOver Preview decodes VP9 profile 0 and 2, H.264 and AAC
-on its own. The engine dependency that remains is a container one: only
-Preview ships the `matroska` plugin, so DYNASTY WARRIORS' 355 `.webm` cutscenes
-cannot be opened on stable 26.3 -- not for want of a VP9 decoder, which both
-builds have through VideoToolbox, but for want of anything that can demux WebM. Persona 5 Strikers needs a VC-1 decoder no CrossOver
-ships, and that is staged beside it rather than patched into it.
+**Which CrossOver, and what "Preview" means.** Every measurement here was taken
+against CrossOver 26.3 and `crossover-preview-arm64-20260821`, and the CrossOver
+column says which of the two a title was measured on rather than which it might
+work on. Everything runs on that Preview. Two are confirmed on 26.3 as well.
+Both Life is Strange titles crash on 26.3, which is our defect and is open and
+unexplained. Persona 5 Strikers has not been tried on stable and is expected to
+work there, because it depends on no decoder of CrossOver's. DYNASTY WARRIORS
+has never been launched on stable at all; what is claimed about it there is read
+from the two installs' plugin sets.
+
+**None of these games needs CrossOver patched, wherever the container can be
+opened.** That was not true when this project started, and it is the single
+biggest thing that changed. The qualifier is the whole of what remains, and it
+is a container question rather than a codec one.
+
+Both builds decode VP9 the same way; what only Preview can do is open a WebM,
+which is the whole of the difference. DYNASTY WARRIORS ships 355 `.webm`
+cutscenes and cannot get as far as decoding on stable, while Mortal Shell 2
+ships the same codec in `.mp4`, which both builds handle. The plugin-by-plugin
+comparison the conclusion rests on is in [Findings](Findings.md), under *The
+container, not the codec*.
+
+Persona 5 Strikers is the one title needing a codec no CrossOver ships -- VC-1 --
+and that is staged beside it rather than patched into it.
 
 None of these fixes decodes anything. The frames existed all along; they were
 being crashed on, mislabelled, or thrown away.
@@ -111,7 +129,10 @@ Each row links to a page with the findings and the fix for that title.
 - [Games](Games.md) — the table above, what each fix needs from CrossOver, and
   how a row gets added
 - [Diagnosing a new game](Diagnosing-a-new-game.md) — the tools, and what each one answers
-- [How the fixes work](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/how-it-works.md) —
-  the technical companion in the repository: root causes, the vtable slots each
-  hook takes, the carrier DLLs, and what was tried and did not work. These
-  pages hold the per-title findings; that one holds the shared mechanism.
+- [Findings](Findings.md) — what the six have in common: root causes, the
+  vtable slots each hook takes, the carrier DLLs, the container-versus-codec
+  comparison, the open defect on 26.3, and what was tried and did not work.
+  These pages hold the per-title findings; that one holds what is shared.
+- [Running the scripts directly](Running-the-scripts.md) — for working from a
+  clone: reproducing a fix by hand, or building a proxy for a title that has none.
+  Nothing here is needed to use a release.

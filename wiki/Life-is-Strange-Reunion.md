@@ -8,7 +8,7 @@ Unreal Engine 5. Runs, then freezes.
 | Cause | `IDXGIAdapter3::QueryVideoMemoryInfo` succeeds for node indices the adapter does not have |
 | Fix | Refuse them, which is what Windows does |
 | winevideo | Not required — the fault is in DXGI, nowhere near video. No paired with-and-without run was made on this title; the controlled comparison is [Mortal Shell 2](Mortal-Shell-2.md)'s |
-| CrossOver | Preview build 20260821. **Crashes on 26.3** — our defect, open; see below |
+| CrossOver | `crossover-preview-arm64-20260821`. **Crashes on 26.3** — our defect, open and unexplained; see below |
 
 **It is not a deadlock.** A spindump taken while it was stuck shows the
 GameThread burning 1.27 seconds of CPU across 128 samples while RenderThread 0
@@ -73,23 +73,13 @@ to make it. Two have been scanned and both have it; that is the whole sample.
 ## On stable CrossOver: this one crashes, and it is ours
 
 Measured on CrossOver 26.3: the game crashes. The freeze fix itself is nowhere
-near video — but the DLL that carries it carries two other repairs as well, and
-it is worth being exact about which of them this title actually runs.
+near video, and the defect is ours rather than the engine's. It is open and
+unexplained.
 
-Its policy table arms the node guard for `Iris-Win64-Shipping.exe` and nothing
-else. The H.264 half described on the
-[Beast of Reincarnation](Beast-of-Reincarnation.md) page — the one that puts
-NV12 back on the decoder's menu after CrossOver removes it on macOS — is in the
-file and switched off in the process, so it cannot be crashing this title by
-changing a format.
-
-What is not switched off is the survey instrumentation. The Media Foundation
-hooks are installed for every title the DLL runs in, armed or not: the entry
-points are interposed and the decoder's vtable slots are patched when one is
-created. That is the standing suspicion, and it is a suspicion — no measurement
-names it yet, and the test that would, running these two on 26.3 with those
-hooks compiled out, has not been made. The defect is ours rather than the
-engine's, it is open, and until it is settled these two titles want Preview.
+Which halves of the shared DLL this title actually runs, what remains suspected,
+and why that is a suspicion rather than a finding, is in
+[Findings](Findings.md), under *The open defect on 26.3*. Until it is settled,
+these two titles want Preview.
 
 ## Also affects
 
@@ -110,4 +100,4 @@ the same loop, and the same DLL fixes it — including the 26.3 crash above.
 
 ---
 
-Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md) · [How the fixes work](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/how-it-works.md), the shared mechanism behind all six
+Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md) · [Findings](Findings.md), what the six have in common

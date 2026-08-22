@@ -15,36 +15,40 @@ import pathlib
 import re
 import sys
 
-# game, engine, symptom, fix, backend, dx, status, page
+# game, engine, symptom, fix, backend, dx, crossover, status, page
+#
+# The CrossOver cell is what a title was measured on, never what it might work
+# on. "Preview" throughout is crossover-preview-arm64-20260821, which is the
+# build every measurement here was taken against.
 GAMES = [
     ("Mortal Shell 2", "Unreal Engine 5.6.1",
      "Crash on the first cutscene", "Runtime patch, 4 sites",
-     "D3DMetal", "12",
+     "D3DMetal", "12", "26.3 · Preview",
      "Fixed", "Mortal-Shell-2"),
     ("Life is Strange: Reunion", "Unreal Engine 5",
      "Freezes after a while, anywhere", "DXGI node guard",
-     "D3DMetal", "12",
+     "D3DMetal", "12", "Preview -- 26.3 crashes",
      "Fixed", "Life-is-Strange-Reunion"),
     ("Life is Strange: Double Exposure", "Unreal Engine 5",
      "Freezes after a while, anywhere", "DXGI node guard, same DLL",
-     "D3DMetal", "12",
+     "D3DMetal", "12", "Preview -- 26.3 crashes",
      "Fixed", "Life-is-Strange-Double-Exposure"),
     ("DYNASTY WARRIORS: ORIGINS", "Koei Tecmo, in-house",
      "Cutscene runs with sound, picture black", "Video bridge, D3D11 to D3D12",
-     "D3DMetal", "12",
+     "D3DMetal", "12", "Preview -- 26.3 never launched",
      "Fixed", "Dynasty-Warriors-Origins"),
     ("Beast of Reincarnation", "Unreal Engine 5",
      "Startup video plays with sound, no picture", "NV12 restored, Electra forced to software",
-     "D3DMetal", "12",
+     "D3DMetal", "12", "26.3 · Preview",
      "Fixed", "Beast-of-Reincarnation"),
     ("Persona 5 Strikers", "Koei Tecmo, in-house",
      "Video never starts; sound only", "Staged VC-1 codec, and a D3D9 to D3D11 bridge",
-     "**DXMT**", "11",
+     "**DXMT**", "11", "Preview -- 26.3 not tried",
      "Fixed", "Persona-5-Strikers"),
 ]
 
-HEAD = ("| Game | Engine | Symptom | Fix | Backend | DX | Status |\n"
-        "| --- | --- | --- | --- | --- | --- | --- |\n")
+HEAD = ("| Game | Engine | Symptom | Fix | Backend | DX | CrossOver | Status |\n"
+        "| --- | --- | --- | --- | --- | --- | --- | --- |\n")
 
 NOTE = """
 **Backend and DX are not preferences, they are requirements.** Persona 5
@@ -54,18 +58,27 @@ D3DMetal with the D3D12 renderer, which is also what keeps PSO precompilation
 -- `-dx11` dodges some of these faults and costs permanent shader-compilation
 stutter.
 
-**None of these games needs CrossOver patched.** That was not true when this
-project started, and it is the single biggest thing that changed.
+**Which CrossOver, and what "Preview" means.** Every measurement here was taken
+against CrossOver 26.3 and `crossover-preview-arm64-20260821`, and the CrossOver
+column says which of the two a title was measured on rather than which it might
+work on. Everything runs on that Preview. Two are confirmed on 26.3 as well.
+Both Life is Strange titles crash on 26.3, which is our defect and is open and
+unexplained. Persona 5 Strikers has not been tried on stable and is expected to
+work there, because it depends on no decoder of CrossOver's. DYNASTY WARRIORS
+has never been launched on stable at all; what is claimed about it there is read
+from the two installs' plugin sets.
 
-What each build gives them is narrower than "decodes VP9", and the distinction
-took a while to arrive at. Both CrossOver 26.3 and Preview decode VP9 the same
-way, through `applemedia` and VideoToolbox; neither ships `libgstvpx` or
-`libgstlibav`. Comparing the two installs plugin by plugin, stable carries 17
-GStreamer plugins and Preview 19, and the two Preview has to itself are
-`matroska` and `osxaudio`. So the engine dependency that remains is a
-*container* one: only Preview can open a WebM. DYNASTY WARRIORS ships 355
-`.webm` cutscenes and cannot get as far as decoding on stable, while Mortal
-Shell 2 ships the same codec in `.mp4`, which `isomp4` handles on both.
+**None of these games needs CrossOver patched, wherever the container can be
+opened.** That was not true when this project started, and it is the single
+biggest thing that changed. The qualifier is the whole of what remains, and it
+is a container question rather than a codec one.
+
+Both builds decode VP9 the same way; what only Preview can do is open a WebM,
+which is the whole of the difference. DYNASTY WARRIORS ships 355 `.webm`
+cutscenes and cannot get as far as decoding on stable, while Mortal Shell 2
+ships the same codec in `.mp4`, which both builds handle. The plugin-by-plugin
+comparison the conclusion rests on is in [Findings](Findings.md), under *The
+container, not the codec*.
 
 Persona 5 Strikers is the one title needing a codec no CrossOver ships -- VC-1 --
 and that is staged beside it rather than patched into it.
@@ -82,8 +95,8 @@ BEGIN, END = "<!-- games:begin -->", "<!-- games:end -->"
 
 def table():
     rows = "".join(
-        f"| [{g}]({page}.md) | {engine} | {sym} | {fix} | {backend} | {dx} | {status} |\n"
-        for g, engine, sym, fix, backend, dx, status, page in GAMES)
+        f"| [{g}]({page}.md) | {engine} | {sym} | {fix} | {backend} | {dx} | {cx} | {status} |\n"
+        for g, engine, sym, fix, backend, dx, cx, status, page in GAMES)
     return f"{BEGIN}\n\n{HEAD}{rows}{NOTE}\n{END}"
 
 

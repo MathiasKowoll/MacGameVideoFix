@@ -10,7 +10,7 @@ and no error anywhere.
 | Symptom | Sound plays, the picture never appears |
 | Fix | Stage a VC-1 decoder, then bridge D3D9 to D3D11 |
 | Backend | **DXMT only.** D3DMetal cannot produce a shared handle at all |
-| CrossOver | Measured on Preview. 26.3 expected but not yet tried |
+| CrossOver | Measured on `crossover-preview-arm64-20260821`. 26.3 expected but not yet tried |
 
 ## The one that should not need Preview
 
@@ -30,9 +30,12 @@ The obvious guess, and wrong. All five `data/pd/movie*.bin` archives carry ASF
 headers with VC-1 inside — measured in the first 64 MB of each, where the
 headers live, and consistent across every one.
 
-That matters because CrossOver Preview decodes VP9, H.264 and AAC on its own,
-and has **no VC-1 decoder at all**. This is the only game here that genuinely
-needs a codec CrossOver does not ship.
+That matters because **no CrossOver ships a VC-1 decoder** — not the stable line
+and not Preview, so this is the one requirement here that does not turn on which
+build you run. Measured codec by codec in
+[docs/winevideo-on-preview.md](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/winevideo-on-preview.md).
+This is the only game here that genuinely needs a codec CrossOver does not
+ship.
 
 ## Staging the codec, without patching CrossOver
 
@@ -139,4 +142,4 @@ the converter.
 
 ---
 
-Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md) · [How the fixes work](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/how-it-works.md), the shared mechanism behind all six
+Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md) · [Findings](Findings.md), what the six have in common

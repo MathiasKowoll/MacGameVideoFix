@@ -8,10 +8,10 @@ Koei Tecmo, in-house engine. Cutscenes played with sound and no picture.
 | Cutscenes | 355 `.webm`, VP9 Profile 0. 42 of them 2560x1440 and up to four minutes; the rest 960x540 interface clips |
 | Played by | `IMFSourceReader` on a **separate D3D11 device**, presented by a **D3D12** renderer |
 | Was | Cutscene ran with sound and subtitles, picture black |
-| Now | Plays on CrossOver Preview build 20260821. Not measured on 26.3, which has no way to demux WebM — see below |
+| Now | Plays on `crossover-preview-arm64-20260821`. Never launched on 26.3, which ships no WebM demuxer — read from the plugin sets, not from a run; see below |
 | Needs | A build whose Media Foundation can **open a WebM**, and an injected DLL. Neither alone is enough: Preview demuxes WebM and decodes the VP9 inside it; stable 26.3 decodes the same VP9 and ships no `matroska` plugin, so nothing opens the container. The measured run also had the `.webm` byte-stream handler registered — see below for whether that is needed |
 
-### Who does what
+## Who does what
 
 The two halves are not interchangeable, and it is worth being exact about the
 line between them.
@@ -44,32 +44,22 @@ The bridge has to live inside the game's process rather than in Wine, and not
 for convenience: the call that has to be intercepted is
 `ID3D12Device::OpenSharedHandle`, and that D3D12 is D3DMetal's, not Wine's.
 
-### On stable CrossOver: one missing demuxer
+## On stable CrossOver: one missing demuxer
 
-Measured by comparing the two installs plugin by plugin rather than by running
-anything. Stable 26.3 carries 17 GStreamer plugins, Preview 19, and the two
-Preview has to itself are `matroska` and `osxaudio`.
+Stable 26.3 ships no `matroska` plugin and nothing else it carries opens a WebM,
+so this title's 355 `.webm` cutscenes never get as far as a decoder there. Both
+builds decode the VP9 inside them identically. The plugin-by-plugin comparison
+the claim rests on, and why [Mortal Shell 2](Mortal-Shell-2.md) is not the
+control it looks like, are in [Findings](Findings.md), under *The container, not
+the codec*.
 
-`matroska` is the one that matters, and it is a demuxer, not a decoder. Both
-builds decode VP9 through `applemedia` and VideoToolbox — neither ships
-`libgstvpx` or `libgstlibav`. What stable cannot do is open the container. This
-title's 355 cutscenes are `.webm`, so on stable nothing gets as far as decoding.
-
-[Mortal Shell 2](Mortal-Shell-2.md) is not the control it is sometimes taken
-for. Its cutscenes are the same codec in a different box — 61 VP9 files in
-`.mp4` — and it plays on stable, but Electra opens and decodes those files
-in-process with its own libvpx and never asks CrossOver to open anything. So it
-shows VP9 is not the obstacle and says nothing about the demuxers. This title
-was not launched on stable at all: everything claimed about stable here is read
-from the plugin sets, not from a run.
+**This title was never launched on stable at all**: everything claimed about
+stable here is read from the plugin sets, not from a run.
 
 So the honest requirement is narrower than "needs winevideo": it needs something
-that can demux WebM. `libgstmatroska.dylib` is 756 KB, ships in the official
-GStreamer.framework, and re-homing a plugin into CrossOver's GStreamer is
-already solved here — it is what `runtime/stage-codecs.sh` does for Persona 5
-Strikers' VC-1. Not built, but a plugin to stage rather than an engine to patch.
+that can demux WebM.
 
-### Five things were wrong, in sequence
+## Five things were wrong, in sequence
 
 Each one hid the next, so each looked like the answer when it was reached.
 
@@ -103,7 +93,7 @@ its video texture with its D3D12 renderer by handle, and D3DMetal has no way
 to make one: the legacy call refuses and `IDXGIResource1`, whose
 `CreateSharedHandle` replaces it, is absent entirely.
 
-### The bridge
+## The bridge
 
 Step 5 was called blocked upstream here, wrongly, and the correction matters
 for anyone reading this as a recipe.
@@ -138,7 +128,7 @@ A copy queue rather than a direct one, deliberately: resources sit in
 no barriers are needed and nothing is assumed about the state the renderer
 expects to find. It also keeps the work off the queue the game draws with.
 
-### Reaching the D3D12 device took one more step
+## Reaching the D3D12 device took one more step
 
 The game ships **NVIDIA Streamline** and asks `sl.interposer.dll` for
 `D3D12CreateDevice` by name. It also imports the function from `d3d12.dll` by
@@ -150,7 +140,7 @@ That hook has to go in from `DllMain`. Everything else can wait for a worker
 thread, because the game does not touch Media Foundation until a cutscene
 starts; its D3D12 device is built during startup and already exists by then.
 
-### Cost, and what was done about it
+## Cost, and what was done about it
 
 Three costs a frame, two of which were for nobody once the bridge worked:
 
@@ -166,24 +156,26 @@ Three costs a frame, two of which were for nobody once the bridge worked:
   rather than six — with saturation by table lookup rather than two branches
   per channel.
 
-Still on the table if it is not enough: converting on the GPU, by uploading
-the two NV12 planes and doing the colour conversion in a compute shader.
+One idea that has not been built, if this is not enough: converting on the GPU,
+by uploading the two NV12 planes and doing the colour conversion in a compute
+shader.
 
-### Caveats
+## Caveats
 
 - **Do not use this on a game with anti-cheat.** It patches a running
   process.
 - The four abort branches in the player were nopped while the bridge did not
-  exist. Whether they are still needed is being checked; if not, the shipping
-  version never modifies the game's code at all, and the crash on skipping a
-  cutscene — the player running on half-built state — goes with them.
+  exist. They are gone: the shipping bridge modifies none of the game's code,
+  which `runtime/dwo-video-bridge.c` states and its source bears out. What has
+  not been re-measured since they were removed is the crash on skipping a
+  cutscene — the player running on half-built state — which was tied to them.
 - Steam's *verify integrity of game files* undoes the install.
 - DXMT implements `GetSharedHandle` and D3DMetal does not, so a game in this
   position may work under a different backend instead. Untested here — though
   [Persona 5 Strikers](Persona-5-Strikers.md) is the case where that backend
   difference decided the whole fix.
 
-### How it was found, since most of it was wrong turns
+## How it was found, since most of it was wrong turns
 
 Eight hypotheses were tested and discarded before the disassembler was used
 properly: a missing codec registration, the absent audio track, the container
@@ -211,4 +203,4 @@ that the bridge carried what was put in it.
 
 ---
 
-Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md) · [How the fixes work](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/how-it-works.md), the shared mechanism behind all six
+Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md) · [Findings](Findings.md), what the six have in common

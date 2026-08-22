@@ -8,7 +8,7 @@ Unreal Engine 5.6.1. Crashes on the first cutscene.
 | Played by | Electra, decoding VP9 with its own bundled libvpx |
 | Symptom | `EXCEPTION_ACCESS_VIOLATION` reading `0x0` in `FElectraMediaDecoderOutputBufferPoolBlock_DX12::AllocateBuffer` |
 | Fix | Runtime patch, **4 sites**, all four confirmed at runtime |
-| CrossOver | 26.3 and Preview build 20260821, played through on both |
+| CrossOver | 26.3 and `crossover-preview-arm64-20260821`, played through on both |
 | winevideo | Not required — see below |
 
 ## The fault
@@ -44,8 +44,8 @@ Nothing on disk changes. The original VP9 files are left exactly as they are.
 carrying no winevideo, and again on CrossOver-winevideo 26.3: the same version,
 differing only in the GStreamer plugins. The fix worked either way. That
 paired run is the controlled comparison the rest of these pages lean on, and it
-was made on this title and no other. Preview build 20260821 was measured
-separately, and also plays.
+was made on this title and no other. `crossover-preview-arm64-20260821` was
+measured separately, and also plays.
 
 That matches the mechanism. VP9 never goes through Media Foundation here —
 Electra decodes it in-process with its own libvpx, and only the *output*
@@ -63,8 +63,8 @@ on stable 26.3, while
 `.webm` and does not — but as above, this title's VP9 never reaches CrossOver's
 media stack at all, so nothing it does tests what stable can open. What it is
 evidence for is that VP9 is not the obstacle. The container finding rests on the
-plugin-set comparison instead: stable 26.3 ships no `matroska`, and nothing else
-it ships opens a WebM.
+plugin-set comparison instead, which is in [Findings](Findings.md), under *The
+container, not the codec*.
 
 ## Caveats
 
@@ -77,4 +77,4 @@ it ships opens a WebM.
 
 ---
 
-Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md) · [How the fixes work](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/how-it-works.md), the shared mechanism behind all six
+Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md) · [Findings](Findings.md), what the six have in common

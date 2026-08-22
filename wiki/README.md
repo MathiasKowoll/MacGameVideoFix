@@ -10,6 +10,12 @@ wiki/sync.sh "what changed"
 
 `README.md` stays here; the wiki does not need it.
 
+`sync.sh` strips the `.md` from a link to a bare filename, so `[Games](Games.md)`
+works both here and on the published wiki. It strips nothing when an anchor
+follows, so `[Findings](Findings.md#a-heading)` reaches the wiki unchanged and
+resolves to the raw file rather than the page. Until the expression covers that
+case, link to the page and name the section in the sentence instead.
+
 ## One part of these pages is generated
 
 Everything between the `games:begin` and `games:end` comment markers in
@@ -27,24 +33,13 @@ The rows are the `GAMES` list, the header row is `HEAD`, and the prose beneath
 the table is `NOTE`. Editing any of those three by hand in a `.md` file works
 until the next run of `games.py`, which then discards it.
 
-**`games.py` is unsafe to run until its constants are updated.** `Games.md` and
-`Home.md` are ahead of it: both carry a `CrossOver` column the generator does
-not emit, and a `NOTE` that has been corrected several times since. The
-generator still holds the withdrawn version — that DYNASTY WARRIORS: ORIGINS
-needs winevideo on a stable build, which measurement has overtaken (what stable
-lacks is a WebM demuxer, not a VP9 decoder), and that CrossOver's own VP9 and
-AAC decoding is established on stable, which it is not. `games.py --check`
-fails today for exactly that reason.
+The `CrossOver` column is generated too. Its cells say which builds a title was
+measured on, never which it might work on, and "Preview" in them means
+`crossover-preview-arm64-20260821` — the preamble on each page says so, and the
+cells stay short on purpose.
 
-The two injected blocks are byte-identical between the pages, so the repair is
-a single copy: take the block from `Games.md` between the markers, and put its
-header row into `HEAD`, its rows into `GAMES` and the prose beneath into
-`NOTE`. Two things to keep while copying — the `CrossOver` column, and the em
-dashes, since `NOTE` writes `--` where the hand-written prose around it uses
-`—` and the two render side by side on the published page. Do that before
-running `games.py`, or the run restores the withdrawn claims over the top of
-the corrected ones.
+One thing to keep when editing `NOTE`: it writes `--` where the hand-written
+prose around it uses `—`, and the two render side by side on the published page.
 
-Note also that this file is not synced to the wiki, so this warning reaches
-nobody reading the published pages. It is a note for whoever edits the
-repository.
+This file is not synced to the wiki. It is a note for whoever edits the
+repository, and nothing in it reaches a reader of the published pages.

@@ -4,21 +4,22 @@ Titles we have deliberately taken on, and what was measured on each. This is
 not an inventory of anyone's library — a game gets a row when there was a
 reason to work on it.
 
-Tested on an M4 Max, macOS 27, GPTK 4.0b2, against CrossOver 26.3 and Preview
-build 20260821. The CrossOver column says which builds each title was measured
-on. No bottle carried [winevideo](https://github.com/Jfishin/winevideo) except
-where a page below says otherwise.
+Tested on an M4 Max, macOS 27, GPTK 4.0b2, against CrossOver 26.3 and
+`crossover-preview-arm64-20260821`. The CrossOver column says which builds each
+title was measured on. No bottle carried
+[winevideo](https://github.com/Jfishin/winevideo) except where a page below says
+otherwise.
 
 <!-- games:begin -->
 
-| Game | Engine | Symptom | Fix | Backend | DX | Status |
-| --- | --- | --- | --- | --- | --- | --- |
-| [Mortal Shell 2](Mortal-Shell-2.md) | Unreal Engine 5.6.1 | Crash on the first cutscene | Runtime patch, 4 sites | D3DMetal | 12 | Fixed |
-| [Life is Strange: Reunion](Life-is-Strange-Reunion.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard | D3DMetal | 12 | Fixed |
-| [Life is Strange: Double Exposure](Life-is-Strange-Double-Exposure.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard, same DLL | D3DMetal | 12 | Fixed |
-| [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | Video bridge, D3D11 to D3D12 | D3DMetal | 12 | Fixed |
-| [Beast of Reincarnation](Beast-of-Reincarnation.md) | Unreal Engine 5 | Startup video plays with sound, no picture | NV12 restored, Electra forced to software | D3DMetal | 12 | Fixed |
-| [Persona 5 Strikers](Persona-5-Strikers.md) | Koei Tecmo, in-house | Video never starts; sound only | Staged VC-1 codec, and a D3D9 to D3D11 bridge | **DXMT** | 11 | Fixed |
+| Game | Engine | Symptom | Fix | Backend | DX | CrossOver | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| [Mortal Shell 2](Mortal-Shell-2.md) | Unreal Engine 5.6.1 | Crash on the first cutscene | Runtime patch, 4 sites | D3DMetal | 12 | 26.3 · Preview | Fixed |
+| [Life is Strange: Reunion](Life-is-Strange-Reunion.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard | D3DMetal | 12 | Preview -- 26.3 crashes | Fixed |
+| [Life is Strange: Double Exposure](Life-is-Strange-Double-Exposure.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard, same DLL | D3DMetal | 12 | Preview -- 26.3 crashes | Fixed |
+| [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | Video bridge, D3D11 to D3D12 | D3DMetal | 12 | Preview -- 26.3 never launched | Fixed |
+| [Beast of Reincarnation](Beast-of-Reincarnation.md) | Unreal Engine 5 | Startup video plays with sound, no picture | NV12 restored, Electra forced to software | D3DMetal | 12 | 26.3 · Preview | Fixed |
+| [Persona 5 Strikers](Persona-5-Strikers.md) | Koei Tecmo, in-house | Video never starts; sound only | Staged VC-1 codec, and a D3D9 to D3D11 bridge | **DXMT** | 11 | Preview -- 26.3 not tried | Fixed |
 
 **Backend and DX are not preferences, they are requirements.** Persona 5
 Strikers only works on DXMT: it needs a shared D3D9 surface handle, and DXMT
@@ -27,18 +28,27 @@ D3DMetal with the D3D12 renderer, which is also what keeps PSO precompilation
 -- `-dx11` dodges some of these faults and costs permanent shader-compilation
 stutter.
 
-**None of these games needs CrossOver patched.** That was not true when this
-project started, and it is the single biggest thing that changed.
+**Which CrossOver, and what "Preview" means.** Every measurement here was taken
+against CrossOver 26.3 and `crossover-preview-arm64-20260821`, and the CrossOver
+column says which of the two a title was measured on rather than which it might
+work on. Everything runs on that Preview. Two are confirmed on 26.3 as well.
+Both Life is Strange titles crash on 26.3, which is our defect and is open and
+unexplained. Persona 5 Strikers has not been tried on stable and is expected to
+work there, because it depends on no decoder of CrossOver's. DYNASTY WARRIORS
+has never been launched on stable at all; what is claimed about it there is read
+from the two installs' plugin sets.
 
-What each build gives them is narrower than "decodes VP9", and the distinction
-took a while to arrive at. Both CrossOver 26.3 and Preview decode VP9 the same
-way, through `applemedia` and VideoToolbox; neither ships `libgstvpx` or
-`libgstlibav`. Comparing the two installs plugin by plugin, stable carries 17
-GStreamer plugins and Preview 19, and the two Preview has to itself are
-`matroska` and `osxaudio`. So the engine dependency that remains is a
-*container* one: only Preview can open a WebM. DYNASTY WARRIORS ships 355
-`.webm` cutscenes and cannot get as far as decoding on stable, while Mortal
-Shell 2 ships the same codec in `.mp4`, which `isomp4` handles on both.
+**None of these games needs CrossOver patched, wherever the container can be
+opened.** That was not true when this project started, and it is the single
+biggest thing that changed. The qualifier is the whole of what remains, and it
+is a container question rather than a codec one.
+
+Both builds decode VP9 the same way; what only Preview can do is open a WebM,
+which is the whole of the difference. DYNASTY WARRIORS ships 355 `.webm`
+cutscenes and cannot get as far as decoding on stable, while Mortal Shell 2
+ships the same codec in `.mp4`, which both builds handle. The plugin-by-plugin
+comparison the conclusion rests on is in [Findings](Findings.md), under *The
+container, not the codec*.
 
 Persona 5 Strikers is the one title needing a codec no CrossOver ships -- VC-1 --
 and that is staged beside it rather than patched into it.
@@ -97,19 +107,16 @@ ships a WebM demuxer, which is the thing DYNASTY WARRIORS has no other way to
 get — stable 26.3 carries no `matroska` plugin, read out of the two installs.
 That is a conclusion from what each build contains, not a measurement: the
 title has never been launched on stable, with winevideo or without it, so no
-dependency on it has been measured here. Staging `libgstmatroska.dylib` from
-the official GStreamer.framework would supply the same demuxer without patching
-CrossOver — 756 KB, the move `runtime/stage-codecs.sh` already makes for
-Persona 5 Strikers' VC-1 — but that is not built either.
+dependency on it has been measured here. One unbuilt alternative, and the
+reasoning behind it, is in [Findings](Findings.md), under *The container, not
+the codec*.
 
 ## The mechanism these six share
 
 Why each hook exists, which vtable slot each one takes, how a carrier DLL is
-picked and what was tried and did not work is in
-[How the fixes work](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/how-it-works.md),
-in the repository rather than on the wiki. The division is deliberate: these
-pages carry the per-title findings and the wrong turns that came first, that
-one carries what is common to all of them.
+picked and what was tried and did not work is in [Findings](Findings.md). The
+division is deliberate: these pages carry the per-title findings and the wrong
+turns that came first, that one carries what is common to all of them.
 
 ## Adding a row
 
