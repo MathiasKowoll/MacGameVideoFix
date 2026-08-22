@@ -1109,7 +1109,7 @@ enum Codecs {
 
     static var versionIsTested: Bool { version?.hasPrefix("1.24") ?? false }
 
-    static let downloadPage = "https://gstreamer.freedesktop.org/data/pkg/osx/1.24.13/"
+    static let downloadPage = "https://gstreamer.freedesktop.org/data/pkg/osx/1.24.14/"
 
     static var stagedPath: String {
         (NSHomeDirectory() as NSString)
@@ -1676,8 +1676,9 @@ struct ContentView: View {
             return "Borrowed from your GStreamer install, and \(n) bottle(s) point at it."
         }
         guard Codecs.gstreamerInstalled else {
-            return "Install the GStreamer 1.24 macOS runtime package first — "
-                 + "winevideo specifies 1.24.13, and nothing is redistributed here."
+            return "Install the GStreamer 1.24.14 macOS runtime package first. "
+                 + "Nothing is redistributed here — the decoder is borrowed from "
+                 + "your own install."
         }
         let found = Codecs.version ?? "your install"
         let caveat = Codecs.versionIsTested ? "" : " (1.24 is the tested series)"
