@@ -8,7 +8,7 @@ Unreal Engine 5. Runs, then freezes.
 | Cause | `IDXGIAdapter3::QueryVideoMemoryInfo` succeeds for node indices the adapter does not have |
 | Fix | Refuse them, which is what Windows does |
 | winevideo | Not required — the fault is in DXGI, nowhere near video. No paired with-and-without run was made on this title; the controlled comparison is [Mortal Shell 2](Mortal-Shell-2.md)'s |
-| CrossOver | `crossover-preview-arm64-20260821`. **Crashes on 26.3** — our defect, open and unexplained; see below |
+| CrossOver | `crossover-preview-arm64-20260821`. **Freezes on 26.3**, with or without the fix — see below |
 
 **It is not a deadlock.** A spindump taken while it was stuck shows the
 GameThread burning 1.27 seconds of CPU across 128 samples while RenderThread 0
@@ -70,16 +70,27 @@ had recorded as frame 1 weeks earlier.
 than in anything either title added, so other UE5 titles on that RHI are likely
 to make it. Two have been scanned and both have it; that is the whole sample.
 
-## On stable CrossOver: this one crashes, and it is ours
+## On stable CrossOver: it freezes, and not because of us
 
-Measured on CrossOver 26.3: the game crashes. The freeze fix itself is nowhere
-near video, and the defect is ours rather than the engine's. It is open and
-unexplained.
+Measured on 26.3: the game freezes. So does the same game on the same build with
+the fix taken out entirely — restored to stock, relaunched, and it freezes again.
+That control is what settles it. The fix is not what breaks this on stable; it
+simply does not repair it there.
 
-Which halves of the shared DLL this title actually runs, what remains suspected,
-and why that is a suspicion rather than a finding, is in
-[Findings](Findings.md), under *The open defect on 26.3*. Until it is settled,
-these two titles want Preview.
+The runtime log says the same thing from the other side. On Preview the guard
+arms and, in three sessions out of nine, reports refusing a node that does not
+exist. On 26.3 it arms and then nothing: five lines against twenty-nine, and no
+node is ever walked. The freeze arrives before the code that was written for it
+gets a chance to act.
+
+What differs between the two is D3DMetal. CrossOver 26.3 carries version 3.0;
+that Preview carries 4.0b2, and ships 3.0 beside it unused. The two copies of 3.0
+are byte-identical, so "stable" and "GPTK 3" are interchangeable in any account
+of this.
+
+That is where it stands: reproduced, controlled, and not ours. What has not been
+established is why GPTK 3 freezes here, and the guard's own evidence is no help
+because the guard never runs.
 
 ## Also affects
 

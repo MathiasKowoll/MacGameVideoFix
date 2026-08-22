@@ -9,7 +9,7 @@ the same fix.
 | Cause | `IDXGIAdapter3::QueryVideoMemoryInfo` succeeds for node indices the adapter does not have |
 | Fix | Refuse them — the same DLL Reunion uses |
 | winevideo | Not required — the fault is in DXGI, not in video. Not separately measured here; the DLL and the finding are shared with [Reunion](Life-is-Strange-Reunion.md) |
-| CrossOver | `crossover-preview-arm64-20260821`. **Crashes on 26.3** — our defect, open and unexplained, shared with Reunion |
+| CrossOver | `crossover-preview-arm64-20260821`. **Freezes on 26.3**, with or without the fix — see below |
 | Status | Fixed — the guard was confirmed to arm in play. The freeze itself was never reproduced on this title, so what is confirmed is that the fix takes hold, not that a freeze was cured |
 
 ## What was actually checked
