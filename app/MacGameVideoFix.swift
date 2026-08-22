@@ -1268,47 +1268,6 @@ final class Runner: ObservableObject {
     /// Repair has nothing to do until a bottle has actually been opened under
     /// the new engine, and someone who has just switched has not opened them
     /// yet. This is the sweep for that moment.
-    func useEngineEverywhere(_ engine: String) {
-        guard !busy else { return }
-        beginCodecWork()
-        codecTask = Task {
-            defer { finishCodecWork() }
-            guard await ensureStaged(engine) else { return }
-            var skipped = 0
-            var work: [(bottle: Codecs.BottleState, engine: String, keep: Bool)] = []
-            for bottle in Codecs.survey() {
-                if case .unreadable = bottle.state {
-                    skipped += 1
-                    note("Cannot read \(bottle.name)'s configuration.")
-                    continue
-                }
-                // The one test that decides it: does the file hold a value this
-                // app wrote? A bottle nobody has wired is not one to start
-                // wiring from a button about which CrossOver to use, and a
-                // value someone else set is not ours to replace without being
-                // asked on the row that shows it.
-                guard let path = bottle.pointsAt else {
-                    skipped += 1
-                    note("\(bottle.name) has no codec set. Left alone.")
-                    continue
-                }
-                guard Codecs.isOurs(path) else {
-                    skipped += 1
-                    note("\(bottle.name) has a GST_PLUGIN_PATH this app did not set. "
-                         + "Left alone — choose a CrossOver for it to replace that value.")
-                    continue
-                }
-                work.append((bottle: bottle, engine: engine, keep: true))
-            }
-            let (done, left) = await rePoint(work)
-            if done > 0 {
-                note("")
-                note("Open them with \(Codecs.label(engine)) from now on — opening one with "
-                     + "another CrossOver gives the cutscenes two GStreamer cores and it crashes.")
-            }
-            report(done: done, left: left + skipped, bottle: nil)
-        }
-    }
 
     /// Stages the codec and points every bottle that runs a game at it.
     func stageCodecs() {
@@ -3239,17 +3198,37 @@ struct ContentView: View {
                     .keyboardShortcut(.defaultAction)
                     .disabled(runner.busy || driftRows.isEmpty)
 
-                // Asked before it runs, because this is the one action that
-                // moves bottles which are correct at this moment: a bottle
-                // still on the other CrossOver comes out of the sweep pointing
-                // somewhere it must not be opened from.
-                Menu("Use one CrossOver for every bottle") {
-                    ForEach(engineVersions, id: \.self) { v in
-                        Button(Codecs.label(v)) { sweeping = v }
+                // One bottle, one CrossOver, named the way the system names it.
+                // This replaced a sweep across every bottle at once. That sweep
+                // moved bottles which were correct at the time -- a bottle still
+                // on the other CrossOver came out of it pointing somewhere it
+                // must not be opened from -- and it asked the user to reason
+                // about the whole machine to fix one game.
+                Picker("Bottle", selection: $pickedBottle) {
+                    Text("Choose…").tag(String?.none)
+                    ForEach(runner.codecs) { b in
+                        Text(b.name).tag(String?.some(b.name))
                     }
                 }
-                .frame(width: 250)
+                .frame(width: 190)
+                .disabled(runner.busy || runner.codecs.isEmpty)
+
+                Picker("CrossOver", selection: $pickedEngine) {
+                    Text("Choose…").tag(String?.none)
+                    ForEach(engineVersions, id: \.self) { v in
+                        Text(Codecs.label(v)).tag(String?.some(v))
+                    }
+                }
+                .frame(width: 280)
                 .disabled(runner.busy || engineVersions.isEmpty)
+
+                Button("Apply") {
+                    guard let name = pickedBottle, let engine = pickedEngine,
+                          let bottle = runner.codecs.first(where: { $0.name == name })
+                    else { return }
+                    runner.selectEngine(engine, forBottle: bottle)
+                }
+                .disabled(runner.busy || pickedBottle == nil || pickedEngine == nil)
 
                 Spacer()
 
@@ -3292,33 +3271,14 @@ struct ContentView: View {
         .padding(20)
         .frame(width: 700)
         .onChange(of: runner.busy) { _, busy in if !busy { pending = nil } }
-        .alert("Point every bottle at \(Codecs.label(sweeping ?? ""))?",
-               isPresented: Binding(get: { sweeping != nil },
-                                    set: { if !$0 { sweeping = nil } })) {
-            Button("Use it everywhere") {
-                if let engine = sweeping { runner.useEngineEverywhere(engine) }
-                sweeping = nil
-            }
-            Button("Cancel", role: .cancel) { sweeping = nil }
-        } message: {
-            Text(sweepWarning)
-        }
     }
 
-    /// The engine the sweep is about to use, while its confirmation is up.
-    @State private var sweeping: String?
-
-    private var sweepWarning: String {
-        guard let sweeping else { return "" }
-        let moving = runner.codecs.filter { $0.state.isCorrect && $0.runs != sweeping }.count
-        let base = "Every bottle this app has already wired is pointed at the codec staged "
-                 + "for \(Codecs.label(sweeping)). Bottles with no codec set, and values "
-                 + "this app did not write, are left alone."
-        guard moving > 0 else { return base }
-        return base + " \(moving) of them match the CrossOver they run under today: after "
-             + "this they must be opened with \(Codecs.label(sweeping)), or they load two "
-             + "GStreamer cores and crash on the first cutscene."
-    }
+    /// The pair the user is assembling: one bottle, one CrossOver. Held here
+    /// rather than derived, because a half-made choice is a real state — they
+    /// have picked the bottle and not yet the engine — and the Apply button has
+    /// to be able to stay disabled through it.
+    @State private var pickedBottle: String?
+    @State private var pickedEngine: String?
 
     private func bottleRow(_ bottle: Codecs.BottleState) -> some View {
         HStack(alignment: .top, spacing: 10) {
