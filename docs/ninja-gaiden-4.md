@@ -76,6 +76,41 @@ before using a path that does not involve that MFT at all. If it is, answering
 `MFTEnumEx` from a proxy would be enough and the source reader would do the
 rest. That is untested.
 
+## What was tried, and what it changed
+
+**The MFT gate was answered.** When the game asks for a VP9 decoder and gets
+none, the query is repeated for H.264 -- a format that really is registered --
+and the resulting list handed back. The game only counts these; the
+disassembly shows `count > 0` leading to a single `mov byte [...], 1`, and it
+never activates them. Measured:
+
+    VP90 had no decoder; asked again for H264 and got 1
+    MFTEnumEx flags=0x3f -> 0x00000000, 1 decoder(s) offered
+
+That gate is genuinely passed now, where it returned zero before.
+
+**And the screen is still black.** `MFCreateSourceReaderFromURL` is still never
+called, so something between the gate and opening a file stops it — or the
+black screen was never about video at all.
+
+The unexamined lead is D3D12. CrossOver's console prints a line beginning
+`D3DMetal ID3DDestructionNot…` — D3DMetal reporting a query for
+`ID3DDestructionNotifier`, which it does not implement, using the GUID name
+table in GPTK's `d3d12.dll`. The game ships its own `D3D12Core.dll` (the
+Agility SDK), and that binary does contain the interface's GUID and name. That
+is the same interface behind Mortal Shell 2's crash, and winevideo implements
+it in vkd3d in its patch 0010.
+
+Whether it is fatal here is unknown. Settling it needs the full console line,
+which only exists if the bottle is launched from a terminal
+(`diagnostics/launch-and-capture.sh`) -- started from Steam or the CrossOver
+interface, that output is discarded.
+
+**A method note worth keeping.** The game was twice reported here as having
+"terminated" when it had been closed by hand. A process disappearing is not the
+same as a program giving up, and treating one as the other produced a confident
+account of two independent faults that the evidence did not support.
+
 ## Risk, since the question comes up
 
 Assessed rather than assumed. The protection is a whole-section code-encryption
