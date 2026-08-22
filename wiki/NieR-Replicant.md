@@ -6,12 +6,24 @@ two was a magenta screen.
 
 | | |
 | --- | --- |
-| Video | I420 in the game's own `.arc` archives, 1920×1080, 25 fps |
+| Video | Delivered as I420, 1920×1080, 25 fps. The source codec is not known — see below |
 | Played by | `IMFSourceReader` on Media Foundation, presented through the D3D11 video processor |
 | Symptom | Crashes when the first video starts |
 | Fix | Software decode, and the frame converted and written into the game's own target |
 | Backend | **D3DMetal**, D3D11 |
 | CrossOver | `crossover-preview-arm64-20260821`. Not tried on 26.3 |
+
+## What the source codec is, which was never established
+
+The video lives inside the game's own `.arc` archives — there are no loose
+files, and a signature scan over three gigabytes of each turned up no ASF, MP4,
+Matroska, USM or Bink header, so they are compressed or encrypted.
+
+The reader reports its stream 0 **native** type as `I420` with
+`MF_MT_COMPRESSED` at 0, which means whatever decoded it did so upstream of the
+source reader and the compressed format never became visible. So this page says
+what the frames arrive as, not what they are stored as. Nothing in the fix
+depends on the difference, but it is a gap rather than a finding.
 
 ## Two faults, and the second was made by the first
 
