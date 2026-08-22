@@ -109,6 +109,19 @@ stage_one() {
   VER="$1"; APP="$2"
   ENGINE="$(plist_value "$APP" CFBundleName)"
   ENGINE="${ENGINE:-$(basename "$APP" .app)}"
+
+  # Named for the application, not for its version.
+  #
+  # CFBundleVersion changes every time CrossOver updates. Keyed on that, an
+  # update orphaned the staged directory, re-stamped every bottle's "Version",
+  # and left the lot reading as drifted -- a screenful of repairs for something
+  # nobody did. The .app's own name does not move when it is updated in place,
+  # so the path a bottle holds stays valid across updates.
+  #
+  # It is the filename rather than CFBundleName because two installs can declare
+  # the same name -- this machine has two calling themselves "CrossOver Preview"
+  # -- and a directory shared between two engines is the two-cores crash again.
+  SLUG="$(printf '%s' "$(basename "$APP" .app)" | tr -c 'A-Za-z0-9._-' '-')"
   CX="$APP/Contents/SharedSupport/CrossOver"
   SRC="$CX/lib/$ARCH"
   [ -d "$SRC" ] || SRC="$CX/lib64"
@@ -116,16 +129,16 @@ stage_one() {
     echo "  skipped   : $ENGINE ($VER) has no $ARCH libraries" >&2
     return 0
   fi
-  OUT="$ROOT/$VER/$ARCH"
+  OUT="$ROOT/$SLUG/$ARCH"
   # Built somewhere else and moved into place in one step, because bottles point
   # at $OUT while this runs. Emptying it first meant a re-stage destroyed a live
   # staging for the length of the build, and a run that was stopped or crashed
   # left a half-built directory there that nothing could tell from a finished
   # one -- the app pointed bottles at it and the game failed on the first
   # cutscene with unresolved dependencies.
-  TMP="$ROOT/$VER/.$ARCH.incoming.$$"
+  TMP="$ROOT/$SLUG/.$ARCH.incoming.$$"
   mkdir -p "$ROOT/$VER"
-  find "$ROOT/$VER" -maxdepth 1 -name ".$ARCH.incoming.*" -exec rm -rf {} + 2>/dev/null || true
+  find "$ROOT/$SLUG" -maxdepth 1 -name ".$ARCH.incoming.*" -exec rm -rf {} + 2>/dev/null || true
 
   echo "engine    : $ENGINE  ($VER, $ARCH)"
   echo "framework : $FRAMEWORK"
@@ -193,6 +206,11 @@ stage_one() {
     grep -v "^$VER|" "$ROOT/.map" > "$ROOT/.map.new" || true
     mv "$ROOT/.map.new" "$ROOT/.map"
   fi
+  # The version it was built against. The path survives an update; the contents
+  # may not, because a new CrossOver can carry a different GStreamer core. This
+  # is what lets the app say "CrossOver has been updated, run this again"
+  # instead of waiting for a crash to say it.
+  printf '%s\n' "$VER" > "$OUT/.built-against"
   printf '%s|%s|%s\n' "$VER" "$ENGINE" "$OUT/gstreamer-1.0" >> "$ROOT/.map"
 }
 

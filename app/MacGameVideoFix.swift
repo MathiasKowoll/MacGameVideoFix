@@ -1058,8 +1058,21 @@ final class Runner: ObservableObject {
         }
         note("\(what): this is bottle")
         note("configuration, and a live wineserver keeps the old copy.")
+
+        // Said every time, not once. The staged decoder is borrowed from the
+        // GStreamer install on this Mac and re-homed onto the CrossOver that is
+        // here today; a CrossOver update replaces the core it was matched to.
+        // The path survives the update, so nothing looks wrong until a cutscene
+        // crashes -- which makes this the one thing the user cannot work out for
+        // themselves, and therefore the one thing worth repeating.
+        note("")
+        note("This is matched to the CrossOver you have now. If CrossOver "
+           + "updates, run this again — a new version can carry a different "
+           + "GStreamer, and there is no warning before the first cutscene.")
         codecAdvice = "\(what): this is bottle configuration, and a live "
-                    + "wineserver keeps the old copy."
+                    + "wineserver keeps the old copy. It is matched to the "
+                    + "CrossOver installed today — run this again after a "
+                    + "CrossOver update."
     }
 
     /// Makes sure one engine has a staging, and says whether it now has one.
@@ -1859,9 +1872,52 @@ enum Codecs {
     /// own bundle, so a directory is bound to the engine it was built for:
     /// pointing a bottle at another one gives dyld two GStreamer cores and a
     /// crash, which is the failure this whole arrangement exists to avoid.
-    static func stagedPath(forEngine version: String) -> String {
-        ((stagedRoot as NSString).appendingPathComponent(version) as NSString)
+    /// The directory name for an engine: the application's own filename, not
+    /// its version.
+    ///
+    /// CFBundleVersion changes on every CrossOver update. Keyed on that, an
+    /// update orphaned the staged directory, re-stamped every bottle's
+    /// "Version", and left the lot reading as drifted -- a screenful of repairs
+    /// for something nobody did. A .app updated in place keeps its filename, so
+    /// the path a bottle holds survives.
+    ///
+    /// The filename rather than CFBundleName because two installs can declare
+    /// the same name -- this machine has two calling themselves "CrossOver
+    /// Preview" -- and one directory shared between two engines is the
+    /// two-cores crash again.
+    static func slug(forEngine version: String) -> String? {
+        guard let app = installedEngines()[version] else { return nil }
+        let name = app.deletingPathExtension().lastPathComponent
+        let safe = name.map { c -> Character in
+            c.isLetter || c.isNumber || c == "." || c == "_" || c == "-" ? c : "-"
+        }
+        return String(safe)
+    }
+
+    static func stagedPath(forEngine version: String) -> String? {
+        guard let slug = slug(forEngine: version) else { return nil }
+        return ((stagedRoot as NSString).appendingPathComponent(slug) as NSString)
             .appendingPathComponent("x86_64/gstreamer-1.0")
+    }
+
+    /// The engine version a staging was actually built from. The path outlives
+    /// an update; the contents may not, because a new CrossOver can carry a
+    /// different GStreamer core.
+    static func stagedAgainst(engine version: String) -> String? {
+        guard let slug = slug(forEngine: version) else { return nil }
+        let marker = ((stagedRoot as NSString).appendingPathComponent(slug) as NSString)
+            .appendingPathComponent("x86_64/.built-against")
+        return (try? String(contentsOfFile: marker, encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// True when the staging was built from a CrossOver that has since been
+    /// updated. Not a failure -- it may well still work, because GStreamer holds
+    /// its ABI across 1.x -- but it is the one thing the user cannot find out
+    /// for themselves until a cutscene crashes.
+    static func stagingIsStale(engine version: String) -> Bool {
+        guard let built = stagedAgainst(engine: version) else { return false }
+        return built != version
     }
 
     /// Where the layout before this one put the single staging there was.
@@ -1926,7 +1982,7 @@ enum Codecs {
     /// nothing at all.
     static func staged(forEngine version: String) -> Bool {
         let fm = FileManager.default
-        let dir = stagedPath(forEngine: version)
+        guard let dir = stagedPath(forEngine: version) else { return false }
         let arch = (dir as NSString).deletingLastPathComponent
         guard fm.fileExists(atPath: (arch as NSString).appendingPathComponent(".complete"))
         else { return false }
@@ -2339,7 +2395,14 @@ enum Codecs {
         guard staged(forEngine: engine) else {
             return "\(bottle.lastPathComponent) runs under a CrossOver with no staged codec."
         }
-        let want = stagedPath(forEngine: engine)
+        // Unwrapped, not interpolated. As an optional this wrote the literal
+        // text Optional("/Users/…") into the user's cxbottle.conf -- a path that
+        // resolves to nothing, in a file the app then reports as correctly
+        // configured. The compiler said so as a warning; warnings in a function
+        // that edits somebody's configuration are errors.
+        guard let want = stagedPath(forEngine: engine) else {
+            return "\(bottle.lastPathComponent) names a CrossOver that is not installed."
+        }
 
         // Every existing line is stripped and exactly one is inserted.
         //
@@ -3211,13 +3274,30 @@ struct ContentView: View {
                 // The one bottle's state, where the list used to be. Removing
                 // the list must not remove the answer to "what is it now".
                 if let picked {
-                    HStack(spacing: 8) {
-                        Image(systemName: picked.state.isCorrect
-                              ? "checkmark.seal.fill" : "minus.circle")
-                            .foregroundStyle(picked.state.isCorrect ? .green : .secondary)
-                        Text(rowCaption(picked))
-                            .font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Image(systemName: picked.state.isCorrect
+                                  ? "checkmark.seal.fill" : "minus.circle")
+                                .foregroundStyle(picked.state.isCorrect ? .green : .secondary)
+                            Text(rowCaption(picked))
+                                .font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        // The staging outlives a CrossOver update because it is
+                        // named for the application, not its version -- which is
+                        // what stops an update reading as drift. The cost of
+                        // that is a staging that can be quietly out of date, and
+                        // nothing else on screen would ever say so.
+                        if let engine = picked.target, Codecs.stagingIsStale(engine: engine) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "clock.arrow.circlepath")
+                                    .foregroundStyle(.orange)
+                                Text("CrossOver has been updated since this codec was "
+                                   + "staged. Apply to build it again.")
+                                    .font(.caption).foregroundStyle(.orange)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
                     }
                 }
             }
