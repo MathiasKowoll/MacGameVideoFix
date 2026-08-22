@@ -130,6 +130,24 @@ stage_one() {
     return 0
   fi
   OUT="$ROOT/$SLUG/$ARCH"
+
+  # Already built, from this same engine, and finished: leave it alone.
+  #
+  # Re-staging an identical directory is not free. It replaces something bottles
+  # point at, for no gain, every time anyone presses the button -- and the safest
+  # replacement is still a replacement. The reason to rebuild is that the engine
+  # has been updated underneath it, and .built-against is what says so.
+  # FORCE=1 rebuilds regardless, which is the escape when a staging is suspect
+  # rather than merely old.
+  if [ "${FORCE:-0}" != 1 ] &&
+     [ -f "$OUT/.complete" ] &&
+     [ "$(cat "$OUT/.built-against" 2>/dev/null)" = "$VER" ]; then
+    echo
+    echo "engine    : $ENGINE  ($VER, $ARCH)"
+    echo "staging   : already built from this CrossOver, left untouched"
+    printf '%s|%s|%s\n' "$VER" "$ENGINE" "$OUT/gstreamer-1.0" >> "$ROOT/.map"
+    return 0
+  fi
   # Built somewhere else and moved into place in one step, because bottles point
   # at $OUT while this runs. Emptying it first meant a re-stage destroyed a live
   # staging for the length of the build, and a run that was stopped or crashed
