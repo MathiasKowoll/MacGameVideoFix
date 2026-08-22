@@ -10,7 +10,7 @@ and no error anywhere.
 | Symptom | Sound plays, the picture never appears |
 | Fix | Stage a VC-1 decoder, then bridge D3D9 to D3D11 |
 | Backend | **DXMT only.** D3DMetal cannot produce a shared handle at all |
-| CrossOver | Measured on `crossover-preview-arm64-20260821`. 26.3 expected but not yet tried |
+| CrossOver | `crossover-preview-arm64-20260821`. **Does not work on 26.3** — measured, and unexplained |
 
 ## The one that should not need Preview
 
@@ -19,10 +19,18 @@ CrossOver's own media stack can open and decode. This one depends on none of
 it: the VC-1 decoder is staged beside the game out of the official GStreamer
 framework, so what CrossOver ships stops mattering.
 
-So it ought to play on a stable build as well as on Preview. That is a
-prediction from how it was fixed, not a measurement — it has only been tried on
-Preview so far, and this page will say so until it has been. The backend
-requirement is unchanged either way: DXMT, for the shared handle.
+It ought to follow that this one plays on a stable build too. It does not: tried
+on 26.3, it does not work. The prediction was reasonable and it was wrong, which
+is the reason it was written down as a prediction rather than as a fact.
+
+Why is not established, and two candidates that would have explained it are ruled
+out by comparison rather than by argument. Both builds ship DXMT under
+`lib/dxmt/x86_64-windows/`, so the backend is not missing. And both expose
+`GetSharedHandle` seventeen times in that `d3d11.dll` — different builds, 4.77 MB
+against 4.55 MB, different hashes, but the same shared-handle surface. The thing
+this title actually needs is present in each.
+
+The backend requirement is unchanged either way: DXMT, for the shared handle.
 
 ## Not VP9
 

@@ -43,7 +43,7 @@ GAMES = [
      "Fixed", "Beast-of-Reincarnation"),
     ("Persona 5 Strikers", "Koei Tecmo, in-house",
      "Video never starts; sound only", "Staged VC-1 codec, and a D3D9 to D3D11 bridge",
-     "**DXMT**", "11", "Preview -- 26.3 not tried",
+     "**DXMT**", "11", "Preview -- does not work on 26.3",
      "Fixed", "Persona-5-Strikers"),
 ]
 
@@ -63,10 +63,11 @@ against CrossOver 26.3 and `crossover-preview-arm64-20260821`, and the CrossOver
 column says which of the two a title was measured on rather than which it might
 work on. Everything runs on that Preview. Two are confirmed on 26.3 as well.
 Both Life is Strange titles crash on 26.3, which is our defect and is open and
-unexplained. Persona 5 Strikers has not been tried on stable and is expected to
-work there, because it depends on no decoder of CrossOver's. DYNASTY WARRIORS
-has never been launched on stable at all; what is claimed about it there is read
-from the two installs' plugin sets.
+unexplained. Persona 5 Strikers does not work on 26.3 either, which
+was not the expectation -- it depends on no decoder of CrossOver's, so it looked
+like the one that would carry over. It did not, and why is not established.
+DYNASTY WARRIORS crashes there too; that much was run, while the reason given for
+it is read from the two installs' plugin sets rather than from watching it fail.
 
 **None of these games needs CrossOver patched, wherever the container can be
 opened.** That was not true when this project started, and it is the single
