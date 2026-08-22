@@ -2,6 +2,13 @@ Cutscenes that crash, or stay black, in Windows games running under CrossOver
 on Apple Silicon — what causes it, which games are affected, and how to find
 out about a game that is not listed yet.
 
+> ### This is for CrossOver Preview
+>
+> Specifically **`crossover-preview-arm64-20260821`**. That is where every title
+> here is measured, and it is the only configuration this project supports.
+> Three of the six also run on stable 26.3; treat that as a bonus rather than a
+> promise.
+
 The tooling lives in [MacGameVideoFix](https://github.com/MathiasKowoll/MacGameVideoFix).
 
 ## The two failure modes

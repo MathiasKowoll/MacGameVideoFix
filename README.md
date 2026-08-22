@@ -2,6 +2,16 @@
 
 Makes Windows games show their cutscenes under CrossOver on Apple Silicon.
 
+> ### This is for CrossOver Preview
+>
+> Specifically **`crossover-preview-arm64-20260821`**. That is where every title
+> here is measured, and it is the only configuration this project supports.
+>
+> Three of the six also run on stable CrossOver 26.3 and the table says which.
+> Treat that as a bonus: stable is not tested before a release, and what stops
+> the other three is in the engine rather than in anything installed beside the
+> game.
+
 Six games so far. They install the same way: open the app, pick the game from
 the list, drop its folder on it, press Apply.
 
