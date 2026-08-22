@@ -32,7 +32,9 @@ on its own. The one thing that still depends on the engine is DYNASTY WARRIORS:
 ORIGINS, which decodes VP9 through Media Foundation and has nothing to present
 without it -- so on an older or stable build it still needs winevideo, and on a
 current Preview it does not. Persona 5 Strikers needs a VC-1 decoder no CrossOver
-ships, and that is staged beside it rather than patched into it.
+ships, and that is staged beside it rather than patched into it -- which also
+makes it the one title here that does not care what CrossOver decodes, and the
+one measured on a stable build (26.3) as well as on Preview.
 
 None of these fixes decodes anything. The frames existed all along; they were
 being crashed on, mislabelled, or thrown away.

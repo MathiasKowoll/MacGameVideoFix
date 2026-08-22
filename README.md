@@ -114,6 +114,13 @@ installed at `/Library/Frameworks`. 1.24.14 is the verified build. It is the
 only title here that needs a codec CrossOver does not ship (VC-1), and the
 decoder is staged out of that framework rather than patched into CrossOver.
 
+That last point has a consequence worth stating: because Strikers brings its own
+decoder, it does not depend on what CrossOver decodes natively, and it is the one
+title measured working on **stable CrossOver 26.3** as well as on Preview. The
+other five were validated on Preview, which decodes their formats on its own;
+whether they also run on a stable build has not been measured here, so it is not
+claimed.
+
 The engine matters more than it looks. Mortal Shell 2 and Life is Strange:
 Reunion were both played on the same version, differing only in the GStreamer
 plugins — and the fix worked either way.
