@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 #
-# Install the Nioh video bridge.
+# Install the Nioh video bridge. Takes Nioh or Nioh 2: the two ship the same
+# carrier, the same WMV3-in-ASF video, and the same pair of d3d9 and d3d11
+# imports. They reach the video differently -- Nioh builds a DirectShow graph,
+# Nioh 2 goes through Media Foundation -- and the bridge does not need to know
+# which, since it watches the shared surface rather than the player.
 #
 #     install-nioh-bridge.sh <game folder>            install
 #     install-nioh-bridge.sh <game folder> --status   report
@@ -18,7 +22,7 @@
 
 set -euo pipefail
 
-usage() { sed -n '3,18p' "$0" >&2; exit 1; }
+usage() { sed -n '3,21p' "$0" >&2; exit 1; }
 [ $# -ge 1 ] || usage
 
 GAME="$1"
@@ -40,9 +44,15 @@ MARKER='p5s-video-bridge.log'
 
 is_ours() { [ -f "$1" ] && LC_ALL=C grep -qa "$MARKER" "$1"; }
 
-[ -f "$GAME/nioh.exe" ] || {
-  echo "error: no nioh.exe in $GAME" >&2
-  echo "       Pick the folder Nioh is installed in." >&2
+# Plain if rather than [ -f ] && assignment: under set -e a failing test as the
+# last command of the loop body would end the script here.
+GAME_EXE=""
+for e in nioh.exe nioh2.exe; do
+  if [ -f "$GAME/$e" ]; then GAME_EXE="$e"; fi
+done
+[ -n "$GAME_EXE" ] || {
+  echo "error: no nioh.exe or nioh2.exe in $GAME" >&2
+  echo "       Pick the folder Nioh or Nioh 2 is installed in." >&2
   exit 1
 }
 
@@ -125,7 +135,7 @@ cp "$PROXY" "$LIVE" || {
 }
 echo
 echo "installed"
-echo "  the video bridge is in place"
+echo "  the video bridge is in place for $GAME_EXE"
 if [ -n "${MGVF_FRONTEND:-}" ]; then
   echo "  this game also needs the WMV3 codec -- use the Stage codec button"
 else
