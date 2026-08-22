@@ -56,9 +56,35 @@
  * tell a working install from a broken one. Not a trace: a handful of lines. */
 static CRITICAL_SECTION log_lock;
 
+/*
+ * Which game wrote the line.
+ *
+ * One bottle, one log, and now more than one title on this bridge: DYNASTY
+ * WARRIORS and Nioh 3 both append here. Reading a shared runtime log as if it
+ * belonged to whichever game was just launched is a mistake this project has
+ * already made once, and the fix is to stop making it possible.
+ */
+static const char *exe_tag_(void)
+{
+    static char tag[64];
+    if (!tag[0])
+    {
+        char path[MAX_PATH];
+        const char *base = path;
+        DWORD len = GetModuleFileNameA(NULL, path, sizeof(path) - 1);
+        const char *p;
+        if (!len) return "?";
+        path[len] = 0;
+        for (p = path; *p; ++p) if (*p == '\\' || *p == '/') base = p + 1;
+        lstrcpynA(tag, base, sizeof(tag));
+    }
+    return tag;
+}
+
 static void logf_(const char *fmt, ...)
 {
     char buf[512];
+    char line[640];
     HANDLE h;
     DWORD written;
     va_list ap;
@@ -68,6 +94,11 @@ static void logf_(const char *fmt, ...)
     n = vsnprintf(buf, sizeof(buf) - 2, fmt, ap);
     va_end(ap);
     if (n < 0) return;
+    buf[n] = 0;
+    n = _snprintf(line, sizeof(line) - 2, "[%s] %s", exe_tag_(), buf);
+    if (n < 0 || n >= (int)sizeof(line) - 2) n = (int)sizeof(line) - 2;
+    lstrcpynA(buf, line, sizeof(buf) - 1);
+    n = lstrlenA(buf);
     buf[n] = '\n';
 
     EnterCriticalSection(&log_lock);
@@ -164,6 +195,10 @@ static const GUID iid_dxgi_buffer   = { 0xe7174cfa, 0x1c9e, 0x48b1,
 /* Handed to the game in place of the one D3DMetal will not make. Recognised
  * again when its D3D12 renderer brings it back. */
 #define BRIDGE_HANDLE ((HANDLE)(ULONG_PTR)0xD3D12B21D)
+
+/* Set once OpenSharedHandle is watched, so nothing hands out a handle only
+ * that hook can make sense of. */
+static BOOL d3d12_bridge_armed;
 
 struct stub_object { void **vtbl; LONG refcount; };
 
@@ -793,7 +828,17 @@ static HRESULT (WINAPI *real_texture_qi)(void *, REFIID, void **);
 static HRESULT WINAPI res_get_shared_handle(void *self, HANDLE *handle)
 {
     HRESULT hr = real_res_get_shared_handle(self, handle);
-    if (FAILED(hr) && handle) { *handle = BRIDGE_HANDLE; return S_OK; }
+    /*
+     * Only invent a handle if the side that can recognise it is armed.
+     *
+     * BRIDGE_HANDLE is meaningful to d3d12_open_shared_handle and to nothing
+     * else. Handing it out while that hook is missing turns a clean failure --
+     * the game learns it cannot share, and says so -- into a real D3D12 device
+     * dereferencing 0xD3D12B21D. Nioh 3 crashed exactly that way, because its
+     * D3D12 arrives through Streamline and the hook had not been placed there
+     * yet. Reporting the original failure is the safe answer.
+     */
+    if (FAILED(hr) && handle && d3d12_bridge_armed) { *handle = BRIDGE_HANDLE; return S_OK; }
     return hr;
 }
 
@@ -883,6 +928,7 @@ static HRESULT WINAPI my_D3D12CreateDevice(void *adapter, UINT feature_level,
     {
         /* ID3D12Device slot 32 is OpenSharedHandle. */
         real_open_shared_handle = patch_vtable_slot(*device, 32, d3d12_open_shared_handle);
+        d3d12_bridge_armed = TRUE;
         logf_("D3D12 device reached, bridge armed");
     }
     return hr;
@@ -926,6 +972,35 @@ static DWORD WINAPI worker(LPVOID unused)
 
     real_D3D11CreateDevice = hook_import("d3d11.dll", "D3D11CreateDevice",
                                          my_D3D11CreateDevice);
+    /*
+     * And through Streamline, for a game that never names d3d11 itself.
+     *
+     * Nioh 3 ships NVIDIA Streamline and imports D3D11CreateDevice from
+     * sl.interposer.dll, which is a drop-in replacement exporting the same
+     * name. Against "d3d11.dll" the hook finds nothing and the bridge reports
+     * "d3d11 not imported" while the game goes on to create its device through
+     * the interposer, unwatched. DYNASTY WARRIORS imports d3d11 directly, so
+     * this only ever mattered for the second game to need this bridge.
+     */
+    if (!real_D3D11CreateDevice)
+        real_D3D11CreateDevice = hook_import("sl.interposer.dll", "D3D11CreateDevice",
+                                             my_D3D11CreateDevice);
+    /*
+     * D3D12 through the interposer too, and this half is not optional.
+     *
+     * The D3D12 hook exists to recognise BRIDGE_HANDLE coming back through
+     * OpenSharedHandle. Without it the bridge still hands the game that
+     * invented handle from GetSharedHandle, and the game passes it to a real
+     * D3D12 device that has never heard of it -- 0xC0000005, which is exactly
+     * what Nioh 3 did when only the D3D11 half was hooked here. Either both
+     * halves are in place or neither may be.
+     */
+    if (!real_D3D12CreateDevice)
+    {
+        void *was = hook_import("sl.interposer.dll", "D3D12CreateDevice",
+                                (void *)my_D3D12CreateDevice);
+        if (was) real_D3D12CreateDevice = (HRESULT (WINAPI *)(void *, UINT, REFIID, void **))was;
+    }
     /* MFCreateAttributes is called, not intercepted, so take its address --
      * hooking it with NULL would have replaced the game's own import with a
      * null pointer. */
@@ -938,8 +1013,9 @@ static DWORD WINAPI worker(LPVOID unused)
         hook_import("MFReadWrite.dll", "MFCreateSourceReaderFromByteStream",
                     my_MFCreateSourceReaderFromByteStream);
 
-    logf_("dwo-video-bridge: d3d11 %s, source reader %s",
+    logf_("dwo-video-bridge: d3d11 %s, d3d12 %s, source reader %s",
           real_D3D11CreateDevice ? "hooked" : "not imported",
+          real_D3D12CreateDevice ? "hooked at startup" : "waiting for GetProcAddress",
           real_MFCreateSourceReaderFromByteStream ? "hooked" : "not imported");
     return 0;
 }
