@@ -1180,10 +1180,47 @@ static HRESULT WINAPI my_MFCreateSourceReaderFromByteStream(void *stream, void *
     return hr;
 }
 
+/*
+ * Resolve by content when resolving by extension fails.
+ *
+ * MFCreateSourceReaderFromURL picks a handler from the registry by file
+ * extension. MFCreateSourceReaderFromByteStream picks one by looking at the
+ * bytes. That difference is the whole reason DYNASTY WARRIORS plays in a
+ * bottle where this title does not: one asks what the file is called, the
+ * other asks what it is.
+ *
+ * A failure here is fatal to this game -- it calls exit(-1) and leaves a black
+ * screen with no crash report -- so the retry is worth having even where the
+ * registry mapping is present. It also covers the one file out of four hundred
+ * that is not a WebM at all: an .msd holding H.264 in MP4, whose extension no
+ * handler claims either, and which could otherwise turn a working fix into a
+ * hard exit on one cutscene.
+ *
+ * Written as a fallback rather than a replacement: the real call goes first
+ * and its result is kept whenever it succeeds, so this can only add outcomes.
+ */
+static HRESULT (WINAPI *real_MFCreateFile)(DWORD, DWORD, DWORD, LPCWSTR, void **);
+
 static HRESULT WINAPI my_MFCreateSourceReaderFromURL(LPCWSTR url, void *attrs, void **reader)
 {
     HRESULT hr = real_MFCreateSourceReaderFromURL(url, attrs, reader);
     logf_("MFCreateSourceReaderFromURL(%ls) -> 0x%08lx", url ? url : L"(null)", hr);
+
+    if (FAILED(hr) && url && reader
+        && real_MFCreateFile && real_MFCreateSourceReaderFromByteStream)
+    {
+        void *stream = NULL;
+        /* MF_ACCESSMODE_READ, MF_OPENMODE_FAIL_IF_NOT_EXIST, MF_FILEFLAGS_NONE */
+        HRESULT open = real_MFCreateFile(1, 0, 0, url, &stream);
+        logf_("  by extension refused; opening it ourselves -> 0x%08lx", open);
+        if (SUCCEEDED(open) && stream)
+        {
+            HRESULT again = real_MFCreateSourceReaderFromByteStream(stream, attrs, reader);
+            logf_("  resolved by content -> 0x%08lx", again);
+            IUnknown_Release((IUnknown *)stream);
+            if (SUCCEEDED(again)) return again;
+        }
+    }
     return hr;
 }
 
@@ -3075,6 +3112,21 @@ static DWORD WINAPI worker(LPVOID unused)
         if (GetEnvironmentVariableA("P5S_REAL_FRAMES", v, sizeof(v)) && v[0] == '1')
             paint_magenta = FALSE;
     }
+    /*
+     * MFCreateFile is called, never intercepted, so what matters is having its
+     * address rather than having hooked it. Taken straight out of mfplat,
+     * because this game resolves nearly everything through GetProcAddress and
+     * an import-table lookup would leave it null -- which is how the same
+     * pointer was silently missing in another title's bridge and cost a run.
+     */
+    {
+        HMODULE mfplat_ = LoadLibraryA("mfplat.dll");
+        if (mfplat_)
+            *(void **)&real_MFCreateFile = (void *)GetProcAddress(mfplat_, "MFCreateFile");
+        logf_("MFCreateFile (direct): %s",
+              real_MFCreateFile ? "resolved" : "NOT FOUND -- the content retry cannot run");
+    }
+
     /* Hook the import table as well as GetProcAddress.
      *
      * The version of this probe that found Beast of Reincarnation's faults only
