@@ -2249,18 +2249,40 @@ enum Codecs {
         return found
     }
 
-    /// Has Persona 5 Strikers ever run in this bottle? Its save folder is the
-    /// signal, the same one Bottle.candidates uses. A game that has never been
-    /// launched leaves nothing, which is correct: there is nothing to configure
-    /// yet, and the sheet is where someone says "put it here anyway".
+    /// Has a game that needs the staged codec ever run in this bottle?
+    ///
+    /// Three of the nine do: Persona 5 Strikers wants VC-1, Nioh and Nioh 2 want
+    /// WMV3. Nioh 3 deliberately does not -- despite the name it is D3D12 on
+    /// D3DMetal and is served by the DYNASTY WARRIORS bridge, so a bottle that
+    /// has only ever run Nioh 3 needs nothing here and must not be written to.
+    ///
+    /// The save folder is the signal, the same one Bottle.candidates uses. A
+    /// game that has never been launched leaves nothing, which is correct: there
+    /// is nothing to configure yet, and the sheet is where someone says "put it
+    /// here anyway".
     private static func hostsProject(_ bottle: URL) -> Bool {
         let fm = FileManager.default
         let users = bottle.appendingPathComponent("drive_c/users")
         for person in (try? fm.contentsOfDirectory(at: users,
                                                    includingPropertiesForKeys: nil)) ?? [] {
             var isDir: ObjCBool = false
-            if fm.fileExists(atPath: person.appendingPathComponent("AppData/Local/P5S").path,
+            let local = person.appendingPathComponent("AppData/Local")
+            if fm.fileExists(atPath: local.appendingPathComponent("P5S").path,
                              isDirectory: &isDir), isDir.boolValue { return true }
+
+            // Matched by prefix rather than by two exact names, because the only
+            // one of these three seen on a real machine here is NIOH3 -- the one
+            // that must NOT match. Excluding it explicitly is a fact; spelling
+            // the other two exactly would be a guess.
+            let koei = local.appendingPathComponent("KoeiTecmo")
+            for entry in (try? fm.contentsOfDirectory(at: koei,
+                                                      includingPropertiesForKeys: nil)) ?? [] {
+                let name = entry.lastPathComponent.uppercased()
+                guard name.hasPrefix("NIOH"), name != "NIOH3" else { continue }
+                if fm.fileExists(atPath: entry.path, isDirectory: &isDir), isDir.boolValue {
+                    return true
+                }
+            }
         }
         return false
     }

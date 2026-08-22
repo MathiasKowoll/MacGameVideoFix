@@ -6,7 +6,7 @@ out about a game that is not listed yet.
 >
 > Specifically **`crossover-preview-arm64-20260821`**. That is where every title
 > here is measured, and it is the only configuration this project supports.
-> Three of the six also run on stable 26.3; treat that as a bonus rather than a
+> Three of the nine also run on stable 26.3; treat that as a bonus rather than a
 > promise.
 
 The tooling lives in [MacGameVideoFix](https://github.com/MathiasKowoll/MacGameVideoFix).
@@ -159,7 +159,7 @@ Each row links to a page with the findings and the fix for that title.
 - [Games](Games.md) — the table above, what each fix needs from CrossOver, and
   how a row gets added
 - [Diagnosing a new game](Diagnosing-a-new-game.md) — the tools, and what each one answers
-- [Findings](Findings.md) — what the six have in common: root causes, the
+- [Findings](Findings.md) — what the nine have in common: root causes, the
   vtable slots each hook takes, the carrier DLLs, the container-versus-codec
   comparison, the open defect on 26.3, and what was tried and did not work.
   These pages hold the per-title findings; that one holds what is shared.

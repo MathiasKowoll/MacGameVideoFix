@@ -7,12 +7,12 @@ Makes Windows games show their cutscenes under CrossOver on Apple Silicon.
 > Specifically **`crossover-preview-arm64-20260821`**. That is where every title
 > here is measured, and it is the only configuration this project supports.
 >
-> Three of the six also run on stable CrossOver 26.3 and the table says which.
+> Three of the nine also run on stable CrossOver 26.3 and the table says which.
 > Treat that as a bonus: stable is not tested before a release, and what stops
 > the other three is in the engine rather than in anything installed beside the
 > game.
 
-Six games so far. They install the same way: open the app, pick the game from
+Nine games so far. They install the same way: open the app, pick the game from
 the list, drop its folder on it, press Apply.
 
 | Game | Symptom | CrossOver |
@@ -56,10 +56,10 @@ Tested on an M4 Max, macOS 27, against CrossOver 26.3 and
 
 ## Quick start
 
-Read [Requirements](#requirements) first. Four of the six titles have only been
-measured on CrossOver Preview, two of those crash on stable 26.3, and one needs
-a GStreamer package installed before it can work at all. Each of those looks
-exactly like the fix not working.
+Read [Requirements](#requirements) first. Six of the nine titles have only been
+measured on CrossOver Preview, three of those crash on stable 26.3, and three
+need a GStreamer package installed before they can work at all. Each of those
+looks exactly like the fix not working.
 
 1. Download `MacGameVideoFix.app` from [Releases](../../releases), or build it
    yourself with `app/build-app.sh`.
@@ -71,7 +71,7 @@ says so on the drop zone. It also checks that the game's shipping executable is
 really under the folder you dropped, and refuses the folder if it is not, naming
 the file it could not find. There is no continue-anyway.
 
-The list carries a seventh entry, **Another Unreal Engine 5 title**, which is
+The list carries one more entry, **Another Unreal Engine 5 title**, which is
 how an untried Unreal game is attempted. It is the one entry with no shipping
 executable to check against, so it is taken at its word — and no claim that the
 fix works applies to it. An untried title is best tried on Preview.
