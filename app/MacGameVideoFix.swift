@@ -809,8 +809,9 @@ final class Runner: ObservableObject {
     func stageCodecs() {
         guard Codecs.gstreamerInstalled else {
             note("")
-            note("GStreamer is not installed. Get the runtime package from")
-            note("https://gstreamer.freedesktop.org and run this again.")
+            note("GStreamer is not installed. Get the macOS runtime package")
+            note("(1.24 series) and run this again:")
+            note("  \(Codecs.downloadPage)")
             note("Nothing is redistributed here -- the decoder is borrowed from")
             note("your own install, which is how winevideo does it too.")
             status = "GStreamer missing."
@@ -819,6 +820,10 @@ final class Runner: ObservableObject {
         busy = true
         Task {
             defer { busy = false; indeterminate = false; phaseLabel = "" }
+            if let v = Codecs.version {
+                note("GStreamer \(v) found"
+                     + (Codecs.versionIsTested ? "" : " — 1.24 is the tested series, carrying on"))
+            }
             status = "Staging the codec…"
             let script = resources.appendingPathComponent("stage-codecs.sh").path
             let ok = await run(.installingBridge, "/bin/bash", [script, "x86_64"])
@@ -1072,6 +1077,39 @@ enum Codecs {
     static var gstreamerInstalled: Bool {
         FileManager.default.fileExists(atPath: framework)
     }
+
+    /// The installed version, read from the library's compatibility number
+    /// rather than a plist -- it encodes 1.MINOR.PATCH directly.
+    ///
+    /// winevideo specifies 1.24.13 for exactly these titles. 1.24.14 is what
+    /// is measured working here, so what actually has to hold is the 1.24
+    /// series rather than the exact patch: the plugin must be ABI-compatible
+    /// with the CrossOver core it is re-homed onto, which GStreamer guarantees
+    /// across 1.x. Anything else is reported, not refused.
+    static var version: String? {
+        let lib = (framework as NSString)
+            .appendingPathComponent("Versions/1.0/lib/libgstreamer-1.0.0.dylib")
+        guard FileManager.default.fileExists(atPath: lib) else { return nil }
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/otool")
+        task.arguments = ["-L", lib]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+        guard (try? task.run()) != nil else { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        guard let text = String(data: data, encoding: .utf8),
+              let range = text.range(of: "compatibility version "),
+              let compat = Int(text[range.upperBound...].prefix(while: \.isNumber)),
+              compat > 0
+        else { return nil }
+        return "1.\(compat / 100).\(compat % 100)"
+    }
+
+    static var versionIsTested: Bool { version?.hasPrefix("1.24") ?? false }
+
+    static let downloadPage = "https://gstreamer.freedesktop.org/data/pkg/osx/1.24.13/"
 
     static var stagedPath: String {
         (NSHomeDirectory() as NSString)
@@ -1615,14 +1653,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(Codecs.staged ? "VC-1 codec staged" : "Persona 5 Strikers needs a VC-1 codec")
                     .font(.callout.weight(.medium))
-                Text(Codecs.staged
-                     ? "Borrowed from your GStreamer install and pointed at from "
-                     + "\(Codecs.bottlesConfigured().count) bottle(s)."
-                     : Codecs.gstreamerInstalled
-                       ? "CrossOver does not ship one. It can be borrowed from the "
-                       + "GStreamer you already have — nothing is redistributed."
-                       : "Install GStreamer's macOS runtime package first, from "
-                       + "gstreamer.freedesktop.org.")
+                Text(codecMessage)
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1635,6 +1666,23 @@ struct ContentView: View {
         .padding(11)
         .background(RoundedRectangle(cornerRadius: 10)
             .fill((Codecs.staged ? Color.green : Color.orange).opacity(0.08)))
+    }
+
+    /// Built as a plain string rather than inline: the compiler gave up
+    /// type-checking the nested conditionals in reasonable time.
+    private var codecMessage: String {
+        if Codecs.staged {
+            let n = Codecs.bottlesConfigured().count
+            return "Borrowed from your GStreamer install, and \(n) bottle(s) point at it."
+        }
+        guard Codecs.gstreamerInstalled else {
+            return "Install the GStreamer 1.24 macOS runtime package first — "
+                 + "winevideo specifies 1.24.13, and nothing is redistributed here."
+        }
+        let found = Codecs.version ?? "your install"
+        let caveat = Codecs.versionIsTested ? "" : " (1.24 is the tested series)"
+        return "CrossOver ships no VC-1 decoder. It can be borrowed from "
+             + "GStreamer \(found)\(caveat); nothing is redistributed."
     }
 
     private var planTable: some View {

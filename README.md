@@ -508,9 +508,20 @@ Persona 5 Strikers needs a VC-1 decoder CrossOver does not ship. **We do not
 distribute one.** `runtime/stage-codecs.sh` borrows it from the official
 GStreamer you already have installed:
 
-- **[GStreamer](https://gstreamer.freedesktop.org)** — install the *runtime*
-  package for macOS. `libgstlibav` in it carries ffmpeg, which decodes VC-1,
-  WMV3 and WMA.
+- **[GStreamer 1.24](https://gstreamer.freedesktop.org/data/pkg/osx/1.24.13/)**
+  — the macOS **runtime** package (`gstreamer-1.0-1.24.13-universal.pkg`; the
+  development package is not needed). `libgstlibav` in it carries ffmpeg, which
+  decodes VC-1, WMV3 and WMA.
+
+  **The version matters.** winevideo specifies **1.24.13** for exactly these
+  titles, and that is the version to install if you are choosing. What is
+  measured working here is **1.24.14**, so the constraint in practice is the
+  1.24 series rather than the exact patch: the plugin has to be ABI-compatible
+  with the CrossOver GStreamer core it is re-homed onto, and GStreamer
+  guarantees that across 1.x. `stage-codecs.sh` prints the version it finds and
+  says so when it is outside 1.24 — it reports rather than refuses, because
+  refusing something that might work is as unhelpful as staying quiet about
+  something that might not.
 
 The script copies that one plugin and ffmpeg into a directory of its own,
 symlinks the GStreamer core to **CrossOver's** copy, and points the bottle at

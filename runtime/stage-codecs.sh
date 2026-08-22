@@ -45,9 +45,37 @@ SRC="$CX/lib/$ARCH"
 [ -d "$SRC" ] || { echo "error: no $ENGINE library directory for $ARCH" >&2; exit 1; }
 [ -d "$FRAMEWORK" ] || {
   echo "error: GStreamer.framework is not installed." >&2
-  echo "       Get it from https://gstreamer.freedesktop.org (runtime package)." >&2
+  echo "       Install the macOS *runtime* package, 1.24 series:" >&2
+  echo "       https://gstreamer.freedesktop.org/data/pkg/osx/1.24.13/" >&2
+  echo "       (winevideo specifies 1.24.13; 1.24.14 is measured working here.)" >&2
   exit 1
 }
+
+# Which GStreamer this is, from the library rather than a plist -- the version
+# is encoded in its compatibility number as 1.MINOR.PATCH.
+#
+# winevideo names 1.24.13 exactly. What actually has to hold is looser: the
+# plugin has to be ABI-compatible with the CrossOver core it is re-homed onto,
+# and GStreamer guarantees that across 1.x. 1.24.14 is what is measured working
+# here. Anything outside 1.24 is untested, so it is reported rather than
+# refused -- refusing something that might work is as unhelpful as staying
+# quiet about something that might not.
+# The framework is a universal binary, so otool prints a header line per
+# architecture; matching on "compatibility version" skips those.
+compat="$(otool -L "$FRAMEWORK/lib/libgstreamer-1.0.0.dylib" 2>/dev/null \
+          | sed -n 's/.*compatibility version \([0-9]*\)\..*/\1/p' | head -1)"
+if [ -n "${compat:-}" ] && [ "$compat" -gt 0 ] 2>/dev/null; then
+  gst_minor=$(( compat / 100 ))
+  gst_patch=$(( compat % 100 ))
+  echo "gstreamer : 1.${gst_minor}.${gst_patch}"
+else
+  gst_minor=""
+  echo "gstreamer : version not readable"
+fi
+if [ -n "$gst_minor" ] && [ "$gst_minor" != "24" ]; then
+  echo "            note: 1.24 is the tested series (winevideo specifies 1.24.13," >&2
+  echo "            1.24.14 is measured working). Carrying on with this one." >&2
+fi
 
 echo "engine    : $ENGINE ($ARCH)"
 echo "framework : $FRAMEWORK"

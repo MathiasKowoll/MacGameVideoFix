@@ -23,7 +23,13 @@ needs a codec CrossOver does not ship.
 
 ## Staging the codec, without patching CrossOver
 
-The official GStreamer.framework has VC-1 in `libgstlibav` (ffmpeg). Loading
+The official GStreamer.framework has VC-1 in `libgstlibav` (ffmpeg). Install
+the macOS **runtime** package from
+[gstreamer.freedesktop.org](https://gstreamer.freedesktop.org/data/pkg/osx/1.24.13/)
+— winevideo specifies **1.24.13** for exactly these titles, and **1.24.14** is
+what is measured working here, so the constraint in practice is the 1.24 series
+rather than the exact patch. Nothing is redistributed: the decoder is borrowed
+from an install you already have, which is also how winevideo does it. Loading
 that plugin in place crashes: dyld ends up with two copies of libgstreamer and
 two GObject type registries, and Preview ships no `gst-plugin-scanner`, so
 there is no forked scanner to absorb it.
