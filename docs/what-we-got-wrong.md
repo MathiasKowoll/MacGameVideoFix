@@ -61,6 +61,20 @@ games table is generated from `wiki/games.py` and not maintained by hand.
 - **Passing a game path where the script expected an architecture**, creating a
   staging directory named after the CrossOver app.
 
+## Traps we had already written down and then walked into
+
+- **Imports by ordinal.** Findings has said for months that an entry in an
+  import table is either a name or an ordinal, that a hook walking names skips
+  the ordinals, and that `d3d12.dll` exports `D3D12CreateDevice` as ordinal 101.
+  The probe implements the countermeasure. The bridge never did — it had no
+  ordinal hooking at all — and nobody noticed for as long as the bridge existed,
+  because DYNASTY WARRIORS reaches that function through Streamline at runtime
+  and the `GetProcAddress` substitution caught it. Wo Long calls it straight
+  through its own table and the bridge armed nothing.
+
+  Writing a trap down is not the same as defending against it, and the two
+  places that needed the defence had diverged.
+
 ## Reading errors, which are worse than crashes
 
 These produced confident wrong conclusions rather than obvious failures.

@@ -1042,6 +1042,63 @@ static HRESULT WINAPI my_MFCreateSourceReaderFromByteStream(IMFByteStream *strea
     return hr;
 }
 
+/*
+ * Hooking an import that has no name.
+ *
+ * An import table entry is either a name or an ordinal, and a hook that walks
+ * names skips the ordinals entirely -- installing nothing, reporting nothing,
+ * and never being called. d3d12.dll's D3D12CreateDevice is ordinal 101, and
+ * two of the titles here import it that way.
+ *
+ * DYNASTY WARRIORS hid this: it has the ordinal import but reaches the
+ * function through NVIDIA Streamline at runtime, so the GetProcAddress
+ * substitution caught it and the missing half never showed. Wo Long calls it
+ * straight through its own table, so nothing caught it -- and with the D3D12
+ * side unarmed the bridge correctly refuses to hand out a share handle only
+ * that side can read, the game learns it cannot share, and it tears the player
+ * down and starts over. Seven times, in the log that led here.
+ */
+static void *hook_import_ordinal(const char *dll, WORD ordinal, void *replacement)
+{
+    BYTE *base = (BYTE *)GetModuleHandleA(NULL);
+    IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;
+    IMAGE_NT_HEADERS *nt;
+    IMAGE_IMPORT_DESCRIPTOR *desc;
+    DWORD rva;
+
+    if (!base || dos->e_magic != IMAGE_DOS_SIGNATURE) return NULL;
+    nt = (IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
+    rva = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+    if (!rva) return NULL;
+
+    for (desc = (IMAGE_IMPORT_DESCRIPTOR *)(base + rva); desc->Name; ++desc)
+    {
+        IMAGE_THUNK_DATA *names, *addrs;
+
+        if (lstrcmpiA((const char *)(base + desc->Name), dll)) continue;
+        if (!desc->OriginalFirstThunk) continue;
+
+        names = (IMAGE_THUNK_DATA *)(base + desc->OriginalFirstThunk);
+        addrs = (IMAGE_THUNK_DATA *)(base + desc->FirstThunk);
+
+        for (; names->u1.AddressOfData; ++names, ++addrs)
+        {
+            void *previous;
+            DWORD old;
+
+            if (!IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal)) continue;
+            if (IMAGE_ORDINAL(names->u1.Ordinal) != ordinal) continue;
+
+            previous = (void *)addrs->u1.Function;
+            if (!VirtualProtect(addrs, sizeof(*addrs), PAGE_READWRITE, &old)) return NULL;
+            addrs->u1.Function = (ULONGLONG)(ULONG_PTR)replacement;
+            VirtualProtect(addrs, sizeof(*addrs), old, &old);
+            return previous;
+        }
+    }
+    return NULL;
+}
+
 /* ------------------------------------------------------ the devices --- */
 
 static HRESULT (WINAPI *real_device_qi)(void *, REFIID, void **);
@@ -1286,6 +1343,13 @@ static DWORD WINAPI worker(LPVOID unused)
     {
         void *was = hook_import("sl.interposer.dll", "D3D12CreateDevice",
                                 (void *)my_D3D12CreateDevice);
+        if (was) real_D3D12CreateDevice = (HRESULT (WINAPI *)(void *, UINT, REFIID, void **))was;
+    }
+    /* And by ordinal, which is how d3d12 exports it and how a game that names
+     * no module reaches it. */
+    if (!real_D3D12CreateDevice)
+    {
+        void *was = hook_import_ordinal("d3d12.dll", 101, (void *)my_D3D12CreateDevice);
         if (was) real_D3D12CreateDevice = (HRESULT (WINAPI *)(void *, UINT, REFIID, void **))was;
     }
     /* MFCreateAttributes is called, not intercepted, so take its address --
