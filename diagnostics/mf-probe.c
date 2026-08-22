@@ -1480,15 +1480,235 @@ static void log_guid(const char *label, const GUID *g)
  *
  * Only failures are logged: a game asks COM for plenty of things that work.
  */
+/* Which library the player comes out of.
+ *
+ * This title imports no video DLL at all -- no Media Foundation, no quartz, no
+ * wmvcore in its import table -- but it carries their names as strings, so it
+ * loads one by hand when a movie starts. Watching the loader is the only way to
+ * see which, and it costs one line per library. */
+static HMODULE (WINAPI *real_LoadLibraryW)(LPCWSTR);
+static HMODULE (WINAPI *real_LoadLibraryExW)(LPCWSTR, HANDLE, DWORD);
+
+static BOOL interesting_lib_(const WCHAR *name)
+{
+    static const WCHAR *const want[] = { L"wmvcore", L"quartz", L"mf", L"wmp",
+                                         L"dsound", L"strmbase", L"devenum", NULL };
+    WCHAR low[MAX_PATH];
+    int i, j;
+
+    if (!name) return FALSE;
+    for (i = 0; i < MAX_PATH - 1 && name[i]; i++)
+        low[i] = (name[i] >= 'A' && name[i] <= 'Z') ? name[i] + 32 : name[i];
+    low[i] = 0;
+    for (j = 0; want[j]; j++)
+    {
+        const WCHAR *w = want[j];
+        int a, b;
+        for (a = 0; low[a]; a++)
+        {
+            for (b = 0; w[b] && low[a + b] == w[b]; b++) ;
+            if (!w[b]) return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static HMODULE WINAPI my_LoadLibraryW(LPCWSTR name)
+{
+    HMODULE h = real_LoadLibraryW(name);
+    if (interesting_lib_(name))
+        logf_("LoadLibraryW(\"%ls\") -> %p%s", name, (void *)h,
+              h ? "" : "   << refused, and the player has nowhere else to go");
+    return h;
+}
+
+static HMODULE WINAPI my_LoadLibraryExW(LPCWSTR name, HANDLE f, DWORD flags)
+{
+    HMODULE h = real_LoadLibraryExW(name, f, flags);
+    if (interesting_lib_(name))
+        logf_("LoadLibraryExW(\"%ls\") -> %p%s", name, (void *)h,
+              h ? "" : "   << refused, and the player has nowhere else to go");
+    return h;
+}
+
+/* One slot of one vtable, never a whole proxy.
+ *
+ * The original is stored before the slot is published: a thread calling through
+ * the moment after the write would otherwise forward through a pointer that is
+ * still null. That ordering has cost this project two crashes. */
+static BOOL patch_slot_(const char *what, void *obj, int slot,
+                        void *replacement, void **saved)
+{
+    void ***vt = (void ***)obj;
+    DWORD old_prot;
+
+    if (!obj || !*vt) { logf_("  patch %s: nothing to patch", what); return FALSE; }
+    if (*saved) return TRUE;
+    if (!(*vt)[slot])  { logf_("  patch %s: slot is null", what); return FALSE; }
+
+    *saved = (*vt)[slot];
+    if (!VirtualProtect(&(*vt)[slot], sizeof(void *), PAGE_READWRITE, &old_prot))
+    {
+        *saved = NULL;
+        logf_("  patch %s: slot is not writable", what);
+        return FALSE;
+    }
+    (*vt)[slot] = replacement;
+    VirtualProtect(&(*vt)[slot], sizeof(void *), old_prot, &old_prot);
+    logf_("  patch %s: slot %d  %p -> ours", what, slot, *saved);
+    return TRUE;
+}
+
+/* The DirectShow graph, where this title's video actually lives.
+ *
+ * It imports no video DLL and never touches Media Foundation. It builds a
+ * filter graph through COM instead -- CLSID_FilterGraph, IGraphBuilder -- and
+ * hands it a path. RenderFile is where the graph decides whether it can build a
+ * chain for that file at all, so its HRESULT is the whole answer: a refusal
+ * there names what is missing, and everything before it succeeding is why the
+ * failure has been invisible.
+ *
+ * IGraphBuilder puts RenderFile at slot 13: three for IUnknown, eight for
+ * IFilterGraph, then Connect and Render ahead of it. */
+#define SLOT_GRAPH_RENDERFILE 13
+
+static HRESULT (WINAPI *real_RenderFile)(void *, LPCWSTR, LPCWSTR);
+static HRESULT (WINAPI *real_AddFilter)(void *, void *, LPCWSTR);
+static HRESULT (WINAPI *real_Connect)(void *, void *, void *);
+static HRESULT (WINAPI *real_Render)(void *, void *);
+static HRESULT (WINAPI *real_AddSourceFilter)(void *, LPCWSTR, LPCWSTR, void **);
+
+/* IFilterGraph::AddFilter is 3, and IGraphBuilder adds Connect at 11, Render at
+   12, RenderFile at 13 and AddSourceFilter at 14. RenderFile is the one-call way
+   to build a graph and this title does not use it, so it assembles the chain
+   itself -- and then the refusal is at whichever of the others cannot be
+   satisfied. Watch them all rather than guess which. */
+#define SLOT_GRAPH_ADDFILTER   3
+#define SLOT_GRAPH_CONNECT     11
+#define SLOT_GRAPH_RENDER      12
+#define SLOT_GRAPH_ADDSOURCE   14
+
+static HRESULT WINAPI my_AddFilter(void *self, void *filter, LPCWSTR name)
+{
+    HRESULT hr = real_AddFilter(self, filter, name);
+    logf_("  AddFilter(\"%ls\") -> 0x%08lx", name ? name : L"(unnamed)", hr);
+    return hr;
+}
+
+static HRESULT WINAPI my_Connect(void *self, void *pin_out, void *pin_in)
+{
+    HRESULT hr = real_Connect(self, pin_out, pin_in);
+    logf_("  Connect -> 0x%08lx%s", hr,
+          FAILED(hr) ? "   << two filters that will not join" : "");
+    return hr;
+}
+
+static HRESULT WINAPI my_Render(void *self, void *pin)
+{
+    HRESULT hr = real_Render(self, pin);
+    logf_("  Render(pin) -> 0x%08lx%s", hr,
+          FAILED(hr) ? "   << nothing downstream can take this stream" : "");
+    return hr;
+}
+
+static HRESULT WINAPI my_AddSourceFilter(void *self, LPCWSTR file, LPCWSTR name, void **out)
+{
+    HRESULT hr = real_AddSourceFilter(self, file, name, out);
+    const WCHAR *tail = file, *q;
+    for (q = file; q && *q; q++) if (*q == '\\' || *q == '/') tail = q + 1;
+    logf_("  AddSourceFilter(\"%ls\") -> 0x%08lx%s", tail ? tail : L"(null)", hr,
+          FAILED(hr) ? "   << the file itself was refused" : "");
+    return hr;
+}
+
+static HRESULT WINAPI my_RenderFile(void *self, LPCWSTR file, LPCWSTR unused)
+{
+    HRESULT hr = real_RenderFile(self, file, unused);
+    const WCHAR *tail = file;
+    const WCHAR *p;
+
+    for (p = file; p && *p; p++) if (*p == '\\' || *p == '/') tail = p + 1;
+    logf_("IGraphBuilder::RenderFile(\"%ls\") -> 0x%08lx%s", tail ? tail : L"(null)", hr,
+          FAILED(hr) ? "   << the graph could not be built for this file" : "");
+    return hr;
+}
+
+/* IDMOWrapperFilter::Init, which is where a DirectShow graph is told which DMO
+   to put inside the wrapper it just made.
+ *
+ * This title creates the wrapper successfully and then abandons the whole graph
+ * without calling one method on it and without opening a movie file. Init is the
+ * only step between those two facts: it names the decoder, and a refusal there
+ * ends the attempt before anything else can be tried. Slot 3, straight after
+ * IUnknown. */
+static const GUID IID_IDMOWrapperFilter_ =
+    { 0x52d6f586, 0x9f0f, 0x4824, { 0x8f, 0xc8, 0xe3, 0x2c, 0xa0, 0x49, 0x30, 0xc2 } };
+#define SLOT_DMOWRAP_INIT 3
+
+static HRESULT (WINAPI *real_DMOInit)(void *, const GUID *, const GUID *);
+
+static HRESULT WINAPI my_DMOInit(void *self, const GUID *dmo, const GUID *cat)
+{
+    HRESULT hr = real_DMOInit(self, dmo, cat);
+    logf_("IDMOWrapperFilter::Init -> 0x%08lx%s", hr,
+          FAILED(hr) ? "   << the wrapper would not take this decoder" : "");
+    log_guid("  dmo     ", dmo);
+    log_guid("  category", cat);
+    return hr;
+}
+
 static HRESULT WINAPI my_CoCreateInstance(REFCLSID clsid, IUnknown *outer, DWORD context,
                                           REFIID iid, void **out)
 {
+    static LONG seen;
     HRESULT hr = real_CoCreateInstance(clsid, outer, context, iid, out);
-    if (FAILED(hr))
+
+    /* Every object, not only the ones that fail. A player built successfully out
+     * of the wrong component is exactly as interesting as one that could not be
+     * built at all, and a title that plays video through COM says which it uses
+     * here and nowhere else. */
+    if (FAILED(hr) || InterlockedIncrement(&seen) <= 20)
     {
-        logf_("CoCreateInstance FAILED");
-        log_guid("clsid", clsid);
-        log_hr("result", hr);
+        logf_("CoCreateInstance -> 0x%08lx", hr);
+        log_guid("  clsid", clsid);
+        log_guid("  iid  ", iid);
+    }
+
+    /* CLSID_DMOWrapperFilter. Ask it for the interface the game will use to load
+     * a decoder, and arm that, since the object we were handed is IBaseFilter. */
+    if (SUCCEEDED(hr) && out && *out && clsid && clsid->Data1 == 0x94297043)
+    {
+        static void *saved;
+        void *wrap = NULL;
+        HRESULT q = ((HRESULT (WINAPI *)(void *, const GUID *, void **))
+                     (*(void ***)*out)[0])(*out, &IID_IDMOWrapperFilter_, &wrap);
+        logf_("  QueryInterface(IDMOWrapperFilter) -> 0x%08lx", q);
+        if (SUCCEEDED(q) && wrap)
+        {
+            patch_slot_("IDMOWrapperFilter::Init", wrap, SLOT_DMOWRAP_INIT,
+                        (void *)my_DMOInit, &saved);
+            if (saved) real_DMOInit = (HRESULT (WINAPI *)(void *, const GUID *, const GUID *))saved;
+            ((void (WINAPI *)(void *))(*(void ***)wrap)[2])(wrap);   /* Release */
+        }
+    }
+
+    /* CLSID_FilterGraph. Arm RenderFile on the graph the game just took, which
+     * is the only place its video path can be seen from. */
+    if (SUCCEEDED(hr) && out && *out && clsid &&
+        clsid->Data1 == 0xe436ebb3 && clsid->Data2 == 0x524f)
+    {
+        static void *s_rf, *s_af, *s_cn, *s_rd, *s_as;
+        patch_slot_("RenderFile", *out, SLOT_GRAPH_RENDERFILE, (void *)my_RenderFile, &s_rf);
+        if (s_rf) real_RenderFile = (HRESULT (WINAPI *)(void *, LPCWSTR, LPCWSTR))s_rf;
+        patch_slot_("AddFilter", *out, SLOT_GRAPH_ADDFILTER, (void *)my_AddFilter, &s_af);
+        if (s_af) real_AddFilter = (HRESULT (WINAPI *)(void *, void *, LPCWSTR))s_af;
+        patch_slot_("Connect", *out, SLOT_GRAPH_CONNECT, (void *)my_Connect, &s_cn);
+        if (s_cn) real_Connect = (HRESULT (WINAPI *)(void *, void *, void *))s_cn;
+        patch_slot_("Render", *out, SLOT_GRAPH_RENDER, (void *)my_Render, &s_rd);
+        if (s_rd) real_Render = (HRESULT (WINAPI *)(void *, void *))s_rd;
+        patch_slot_("AddSourceFilter", *out, SLOT_GRAPH_ADDSOURCE, (void *)my_AddSourceFilter, &s_as);
+        if (s_as) real_AddSourceFilter =
+            (HRESULT (WINAPI *)(void *, LPCWSTR, LPCWSTR, void **))s_as;
     }
     return hr;
 }
@@ -2397,6 +2617,8 @@ static DWORD WINAPI worker(LPVOID unused)
     HOOK("KERNEL32.dll", FindFirstFileW);
     HOOK("KERNEL32.dll", FindFirstFileExW);
     HOOK("ole32.dll", CoCreateInstance);
+    HOOK("KERNEL32.dll", LoadLibraryW);
+    HOOK("KERNEL32.dll", LoadLibraryExW);
     HOOK("MFPlat.DLL", MFStartup);
     HOOK("MFPlat.DLL", MFShutdown);
     HOOK("MFPlat.DLL", MFCreateAttributes);
