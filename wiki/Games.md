@@ -35,12 +35,14 @@ current Preview it does not. Persona 5 Strikers needs a VC-1 decoder no CrossOve
 ships, and that is staged beside it rather than patched into it -- which also
 makes it the one title here that does not care what CrossOver decodes.
 
-**Which engine, per title.** Measured, and only what was measured: Mortal Shell 2,
-Beast of Reincarnation and Persona 5 Strikers run on stable 26.3 and on Preview.
-Both Life is Strange titles run on Preview and **crash on stable** -- they are
-the two sharing the H.264 half of the runtime patch, which restores NV12 after
-CrossOver removes it on macOS and was written against Preview's behaviour. That
-is our defect and it is open. DYNASTY WARRIORS has not been tried on stable.
+**Which engine, per title.** Measured: Mortal Shell 2, Beast of Reincarnation and
+Persona 5 Strikers run on stable 26.3 and on Preview. The other three crash on
+stable, for two unrelated reasons. DYNASTY WARRIORS was expected to -- it decodes
+VP9 through Media Foundation and stable ships none, which is the winevideo
+requirement on its own row, now measured rather than predicted. Both Life is
+Strange titles are our own defect: they share the H.264 half, which restores NV12
+after CrossOver removes it on macOS and was written against Preview's behaviour.
+That one is open. Use Preview for those three.
 
 None of these fixes decodes anything. The frames existed all along; they were
 being crashed on, mislabelled, or thrown away.
