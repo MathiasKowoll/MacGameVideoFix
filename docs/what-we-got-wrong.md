@@ -133,6 +133,30 @@ Recorded because the reasoning was sound and the answer was still no.
   This is the same shape as *four levers left forced on*, one entry down, and it
   is worse, because that one only mismeasured runs. This one shipped.
 
+## Checks that were wrong about writes that had succeeded
+
+Twice in one session, and the same shape both times: a verification that
+consulted the wrong thing and reported failure for work that had been done.
+
+- **Reading `user.reg` to confirm a registry override.** wineserver flushes
+  that file on its own schedule, so a key written a moment earlier is usually
+  not on disk. The installer treated that as a failed write and aborted a
+  KINGDOM HEARTS HD 1.5+2.5 install that had in fact succeeded — after copying
+  the files it would then have to roll back. It asks the registry now.
+- **Driving a Preview bottle with the release CrossOver.** The bottle belongs
+  to CrossOver Preview; running `reg.exe` against it from
+  `/Applications/CrossOver.app` makes Wine try to update the environment,
+  which fails with `failed to load start.exe: c000000d` and takes the command
+  with it. A verification sweep then reported that none of eight executables
+  had its override — minutes after one of those executables had demonstrably
+  loaded the bridge and played a video. The installer gets this right, trying
+  Preview first; the ad-hoc commands typed alongside it did not.
+
+The lesson is not "check more carefully". It is that **a check contradicting an
+observed fact is a broken check until proven otherwise**, and the correct first
+move is to doubt the instrument. Both times the observed fact — an install that
+worked, a video that played — was sitting right there in the same session.
+
 ## Mistakes on Kingdom Hearts
 
 - **Read data directory 0 instead of 1.** Index 0 is the export table; imports
