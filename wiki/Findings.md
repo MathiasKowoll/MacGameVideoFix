@@ -971,6 +971,40 @@ page arrives through a game asking the platform for hardware decode, a D3D
 video device, or a D3D-backed surface. A game that asks for none of those is
 unaffected by all of them, whatever its container or codec.
 
+**The adapter describes itself as two different vendors at once.**
+
+- *Observed.* `IDXGIAdapter::GetDesc` returns a description that does not agree
+  with itself:
+
+      adapter 0 from GetDesc: "AMD Compatibility Mode"
+        vendor 0x10de   device 0x66af
+        dedicated video 38338 MB, dedicated system 38338 MB, shared 38338 MB
+
+  `0x66af` is AMD's Radeon VII. `0x10de` is NVIDIA's vendor id. The name says
+  AMD. Two of the three say AMD, and the one that disagrees is the field
+  software actually branches on.
+- *Consequence.* DXMT reads the vendor id, concludes NVIDIA, and says so:
+  `info:  Vendor extension enabled: NVEXT`. It then has `nvapi64.dll` and
+  `nvngx.dll` in play on a machine with no NVIDIA hardware in it. Engines branch
+  on this constantly -- 0x1002 AMD, 0x10de NVIDIA, 0x8086 Intel -- and a game
+  taking an NVIDIA path on an adapter that answers like an AMD card in every
+  other respect is a real hazard, whatever any individual game does with it.
+- *Also.* The three memory figures are equal, which no real adapter reports:
+  Windows gives dedicated system memory as zero for a discrete card, and a
+  shared figure unrelated to the dedicated one.
+- *Reproduce.* Any title under D3DMetal; log `GetDesc` and `GetDesc1`. For the
+  DXMT half, run any D3D11 title with `CX_GRAPHICS_BACKEND=dxmt` and read its
+  log.
+- *What would fix it.* Make the three agree. Either report AMD throughout
+  (0x1002, matching the name and the device id already in use), or report
+  something that is not any of the three vendors software special-cases.
+  Success-with-a-contradiction is the harmful answer, as it is elsewhere in this
+  list.
+- *Standing.* **Measured**, on both backends. Rewriting the vendor id to 0x1002
+  under D3DMetal did not change the outcome for the title it was found on --
+  which says it is not what breaks that title, not that the inconsistency is
+  harmless.
+
 ## The fault that was not in the stack
 
 Every other repair here works around something the translation layer does
