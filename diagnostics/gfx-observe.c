@@ -377,12 +377,43 @@ static HRESULT WINAPI h12_committed(void *s, const void *heap, UINT hf, const vo
                 desc ? *(const UINT *)((const char *)desc + 32) : 0,
                 desc ? *(const UINT *)((const char *)desc + 48) : 0);
 }
+/*
+ * Does this game put two resources in the same memory?
+ *
+ * A placed resource is the caller taking responsibility for its own
+ * allocation, and a caller that reuses a range for a second resource is
+ * aliasing -- legal, common in engines that manage their own heaps, and
+ * correct only if an aliasing barrier separates the two uses. A barrier that
+ * is ignored produces data that is right sometimes and stale other times,
+ * varying with the allocation pattern rather than with anything on screen.
+ *
+ * That is a different fault from a mistranslated shader, and the two are told
+ * apart by exactly one question: does the game alias at all? So count it.
+ * Sixty-four slots per heap is enough to catch the practice without pretending
+ * to track the whole allocator.
+ */
+/*
+ * Counting overlaps by hand was wrong twice over: sizes were guessed -- taken
+ * only for buffers, left at zero for textures, so everything at offset zero
+ * looked like it collided -- and freed heaps were never removed, so an
+ * allocator reusing an address looked like aliasing. Both produced confident
+ * nonsense.
+ *
+ * The direct signal costs nothing to read: a game that aliases must issue an
+ * aliasing barrier, and barriers go through one call on the command list.
+ * Counting those answers the question without knowing a single resource size.
+ */
+static LONG barriers_alias, barriers_transition, barriers_uav;
+
 static HRESULT WINAPI h12_placed(void *s, void *hp, UINT64 off, const void *desc, UINT st,
                                  const void *cv, REFIID iid, void **o)
 {
     char detail[96];
     HRESULT hr = r12_placed(s, hp, off, desc, st, cv, iid, o);
     describe_resource(desc, detail, sizeof(detail));
+    if (SUCCEEDED(hr) && desc)
+    {
+    }
     return note(C_PLACED, hr, detail,
                 desc ? *(const UINT *)((const char *)desc + 32) : 0, 0);
 }
@@ -491,6 +522,44 @@ static HRESULT WINAPI h12_qi(void *s, REFIID iid, void **o)
     return hr;
 }
 
+static void (WINAPI *r12_barrier)(void *, UINT, const void *);
+
+/* D3D12_RESOURCE_BARRIER: Type at 0, Flags at 4, union from 8.
+ * Type 0 TRANSITION, 1 ALIASING, 2 UAV. Each element is 32 bytes wide. */
+static void WINAPI h12_barrier(void *self, UINT count, const void *bar)
+{
+    UINT i;
+    const char *b = (const char *)bar;
+    for (i = 0; b && i < count; ++i)
+    {
+        UINT type = *(const UINT *)(b + (size_t)i * 32);
+        if (type == 1)
+        {
+            if (InterlockedIncrement(&barriers_alias) == 1)
+                logf_("the game issues ALIASING barriers -- it reuses memory "
+                      "between resources, and correctness depends on those "
+                      "barriers being honoured");
+        }
+        else if (type == 2) InterlockedIncrement(&barriers_uav);
+        else InterlockedIncrement(&barriers_transition);
+    }
+    r12_barrier(self, count, bar);
+}
+
+static HRESULT (WINAPI *r12_cmdlist)(void *, UINT, UINT, void *, void *, REFIID, void **);
+
+static HRESULT WINAPI h12_cmdlist(void *s, UINT node, UINT type, void *alloc,
+                                  void *pso, REFIID iid, void **out)
+{
+    HRESULT hr = r12_cmdlist(s, node, type, alloc, pso, iid, out);
+    if (SUCCEEDED(hr) && out && *out && !r12_barrier)
+    {
+        r12_barrier = patch(*out, 26, h12_barrier);
+        logf_("watching resource barriers: %s", r12_barrier ? "yes" : "NO");
+    }
+    return hr;
+}
+
 static void watch_d3d12_device(void *dev)
 {
     if (!dev) return;
@@ -505,6 +574,7 @@ static void watch_d3d12_device(void *dev)
     r12_heap      = patch(dev, 28, h12_heap);
     r12_placed    = patch(dev, 29, h12_placed);
     r12_shared    = patch(dev, 32, h12_shared);
+    r12_cmdlist   = patch(dev, 12, h12_cmdlist);   /* CreateCommandList */
     logf_("watching the D3D12 device");
 }
 
@@ -646,6 +716,26 @@ static DWORD WINAPI worker(void *unused)
  * something specific and being refused only that. The difference decides what
  * to look at next, and neither number means anything alone.
  */
+/*
+ * Report on a timer, not only on the way out.
+ *
+ * A game closed from Steam, or killed, or crashed, never runs DLL_PROCESS_DETACH,
+ * and the totals are the half of this file that says what did NOT happen --
+ * which is exactly what is lost. One line every half minute costs nothing and
+ * survives any ending.
+ */
+static void report(void);
+
+static DWORD WINAPI ticker(void *unused)
+{
+    (void)unused;
+    for (;;)
+    {
+        Sleep(30000);
+        report();
+    }
+}
+
 static void report(void)
 {
     int i;
@@ -662,6 +752,12 @@ static void report(void)
     if (!any)
         logf_("  nothing was created through a watched call. Either the device "
               "never arrived, or it arrives somewhere this does not look.");
+    logf_("  resource barriers: %ld transition, %ld uav, %ld ALIASING%s",
+          barriers_transition, barriers_uav, barriers_alias,
+          barriers_alias ? "   << the game aliases memory"
+          : (barriers_transition || barriers_uav)
+              ? "   << none, and barriers ARE being counted"
+              : "   << none of any kind, so this was not watching");
 }
 
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
@@ -673,6 +769,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
         log_ready = TRUE;
         DisableThreadLibraryCalls(inst);
         CloseHandle(CreateThread(NULL, 0, worker, NULL, 0, NULL));
+        CloseHandle(CreateThread(NULL, 0, ticker, NULL, 0, NULL));
     }
     else if (reason == DLL_PROCESS_DETACH)
         report();
