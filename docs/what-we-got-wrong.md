@@ -199,6 +199,62 @@ worked, a video that played — was sitting right there in the same session.
   marketing name for that enum value is an inference and was stated as though it
   had been read off the bytes.
 
+## Mistakes on Tormented Souls 2
+
+**Four runs into DXGI when the import table said GDI.** The first hypothesis
+was that DXGI was reporting something wrong, and four launches went into
+proving it before anything about the executable was read. The import table
+named `EnumDisplaySettingsW` — a GDI entry point, not a DXGI one — and could
+have been dumped without launching the game once. The fix did turn out to live
+in DXGI, which does not make the four runs less wasted: they were spent on a
+guess that a two-second read would have redirected.
+
+**A `DXGI_MODE_DESC` stride of 20 bytes instead of 28.** The structure is
+Width, Height, a `DXGI_RATIONAL` of two `UINT`s, Format, ScanlineOrdering,
+Scaling — 28 bytes. Walking the array at 20 read each entry starting partway
+into the last one and produced resolutions nobody had offered, including a
+confident claim that the largest available mode was 730 pixels tall. Two
+hypotheses were built on that number before the stride was checked. The real
+list had 26 modes and topped out at exactly the panel size. A wrong stride does
+not look like an error — it looks like data.
+
+**A hook installed in the import table for a function resolved at runtime.**
+The guard for `D3D11CreateDevice` was written into the game's import table,
+which is empty of it: the game calls `GetProcAddress` for it. The guard
+therefore never installed, and its silence was briefly read as evidence about
+the game rather than about the hook. This is the same shape as an earlier
+mistake with a carrier DLL, already written down in this file, and it was not
+recognised in time.
+
+**Twice called a fix verified by a run that never reached it.** The game
+started, the user confirmed it, and it was written down as working. The log said
+otherwise both times: the mode-list guard was installed and never entered, so
+whatever made the game start, it was not the code under test. The cause is that
+Tormented Souls 2 caches its filtered resolution list in
+`Saved/SaveGames/Settings.sav` and reads it back rather than enumerating again —
+one good launch bakes the result in, and every later launch works with or
+without the fix. The verification that counted required deleting that file.
+
+The general form is worth keeping: **a guard that is installed is not a guard
+that ran, and a game that starts is not evidence that the thing under test did
+anything.** The log line that proves a guard fired is cheap to check and it was
+skipped twice. It is the same error as reading a call's success as proof of the
+mechanism behind it, which appears twice more in this file.
+
+A related one, from the same game: the `1_0_CORE` retry fires twice on every
+launch of it, and for a while that looked like the repair. It is not — the game
+went on crashing at the same address while both retries were succeeding. A guard
+firing says the fault it watches for is present, and nothing at all about
+whether it is the fault that mattered.
+
+**A version-specific address nearly shipped.** The working diagnosis came from
+patching a vtable slot at a hardcoded RVA, valid for exactly this build of this
+game. It confirmed the cause and it could not travel in a published fix — a
+patch aimed at a fixed offset in someone else's build writes into whatever
+happens to be there. It was stripped before packaging, and the released guard
+touches only interfaces it looks up at runtime. Worth stating because the
+temptation was real: it worked.
+
 ## Process
 
 - **`git add -A` swept a half-rewritten script into a commit.** Files are listed

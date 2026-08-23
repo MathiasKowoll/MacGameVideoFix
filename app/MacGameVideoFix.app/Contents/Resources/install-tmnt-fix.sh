@@ -41,9 +41,28 @@ LIVE="$GAME/fmod.dll"
 REAL="$GAME/fmod_real.dll"
 PROXY="$HERE/fmod-tmnt.dll"
 EXPORTS="$HERE/pe.py"
-MARKER='rootsig-guard.log'
+# Two ways to recognise our own proxy, because one of them has already gone
+# stale once: the log path moved when rootsig-guard.c became d3d12-guards.c and
+# this string was not updated with it, which made is_ours() answer no about a
+# DLL that was ours. What that costs is at the bottom of this file, in the
+# refusal to move a proxy onto the saved original.
+MARKERS='d3d12-guards.log rootsig-guard.log'
 
-is_ours() { [ -f "$1" ] && LC_ALL=C grep -qa "$MARKER" "$1"; }
+is_ours() {
+  [ -f "$1" ] || return 1
+  for m in $MARKERS; do LC_ALL=C grep -qa "$m" "$1" && return 0; done
+  return 1
+}
+
+# The same question asked a way that cannot go stale: our proxy forwards to
+# fmod_real.dll, so it names that file in its import table. A genuine library
+# never imports its own _real variant. Markers are for reporting; this is what
+# the destructive step is allowed to rely on.
+looks_like_ours() {
+  [ -f "$1" ] || return 1
+  is_ours "$1" && return 0
+  LC_ALL=C grep -qa "fmod_real.dll" "$1"
+}
 
 [ -f "$GAME/$EXE_NAME" ] || {
   echo "error: no '$EXE_NAME' in $GAME" >&2
@@ -60,9 +79,19 @@ case "$MODE" in
   exit 0
   ;;
 --restore)
-  if is_ours "$LIVE" && [ -f "$REAL" ]; then
-    rm -f "$LIVE"; mv -f "$REAL" "$LIVE"
+  # mv -f overwrites; removing $LIVE first only opens a window in which neither
+  # file is in place, and an interruption there left a state nothing recovered.
+  if [ -f "$REAL" ] && ! looks_like_ours "$REAL" \
+       && { looks_like_ours "$LIVE" || [ ! -e "$LIVE" ]; }; then
+    mv -f "$REAL" "$LIVE"
     echo "restored — the game is back to its own fmod.dll"
+  elif looks_like_ours "$LIVE"; then
+    # Our proxy is here and the game's own DLL is not saved anywhere. There is
+    # nothing to put back, and saying "nothing of ours is installed" about a
+    # file that is plainly ours sends the reader looking in the wrong place.
+    echo "our proxy is installed, but the game's own fmod.dll is not saved here." >&2
+    echo "  Verify the game files in Steam to get it back, then run --install." >&2
+    exit 1
   else
     echo "nothing of ours is installed"
   fi
@@ -104,6 +133,23 @@ if [ -n "$missing" ]; then
 fi
 
 echo "[3/3] installing"
+# What must never happen is moving a PROXY onto the saved original: that
+# destroys the only copy of the game's own DLL. What is merely untidy is a
+# leftover $REAL sitting beside a genuine $LIVE, which is exactly what a Steam
+# file verification or a game patch leaves behind -- there the genuine library
+# is the live one, and saving it over the stale copy is the right move.
+#
+# An earlier version of this refused on "$REAL exists" alone. That is the wrong
+# question: it locked the ordinary post-verification state out of both install
+# and restore, with no way back.
+if looks_like_ours "$LIVE"; then
+  echo "error: $LIVE is already a proxy, so the game's own DLL is not here to save." >&2
+  echo "       Run --restore, or verify the game files in Steam, then try again." >&2
+  exit 1
+fi
+if [ -e "$REAL" ]; then
+  echo "  $REAL was left over from before; $LIVE is the game's own, so it replaces it"
+fi
 mv -f "$LIVE" "$REAL"
 cp "$PROXY" "$LIVE" || { mv -f "$REAL" "$LIVE"; echo "error: could not install" >&2; exit 1; }
 echo

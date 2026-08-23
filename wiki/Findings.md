@@ -33,6 +33,12 @@ Everything below is a gap or a defect in the translation stack, not in a game.
 Each one carries what was observed, how to reproduce it, and what would close
 it. The games are only where it surfaced.
 
+One repair in this project does not belong in this list, because the fault it
+works around is the game's own. It is written up separately in
+[the fault that was not in the stack](#the-fault-that-was-not-in-the-stack),
+and the distinction is worth keeping: a defect reported to the wrong project
+does not get fixed.
+
 Four words are used precisely: **measured** (observed directly here),
 **controlled** (observed with and without the thing under test), **inferred**
 (reasoned from something measured, not itself observed), and **not measured**
@@ -964,6 +970,50 @@ and uploads the result itself has nothing here to break.** Every fault on this
 page arrives through a game asking the platform for hardware decode, a D3D
 video device, or a D3D-backed surface. A game that asks for none of those is
 unaffected by all of them, whatever its container or codec.
+
+## The fault that was not in the stack
+
+Every other repair here works around something the translation layer does
+wrong. This one does not, and saying so plainly matters — a bug filed against
+D3DMetal for this would be closed, correctly.
+
+**A game that keeps only 16:9 resolutions, on a display that has none.**
+
+- *Observed.* Tormented Souls 2 dies before the first frame with
+  `EXCEPTION_ACCESS_VIOLATION reading address 0xfffffffffffffff8`. That address
+  is −8: a null array base indexed with −1, and −1 in Unreal is `INDEX_NONE`.
+- *Why the array is empty.* The game asks its RHI for the available
+  resolutions — the call succeeds, thirteen come back — and then filters them
+  with two `comisd` instructions against doubles in its own `.rdata`, keeping
+  only aspect ratios strictly between 1.76 and 1.79. That is 16:9 and nothing
+  else. This screen is 2056×1329, an aspect of 1.547; every mode offered for it
+  is 1.6 or 1.547, because they are modes for this panel. Nothing survives the
+  filter, the array stays empty, the search for a current mode returns
+  `INDEX_NONE`, and the next instruction indexes the empty array with it. There
+  is no branch after the filter for the empty case.
+- *Whose defect it is.* The game's. Ask Windows for the modes of a 3:2 monitor
+  and you get 3:2 modes; this code reads −8 there too. It is an assumption that
+  every display is widescreen — nearly always true on a desktop monitor, nearly
+  always false on a laptop.
+- *Reproduce.* Any non-16:9 display. The trigger is not a size, it is the
+  absence of a 16:9 mode, which holds for 16:10, 3:2, 4:3 and ultrawide alike.
+- *The workaround.* Append 16:9 modes to what `IDXGIOutput::GetDisplayModeList`
+  returns when it offers none, in
+  [`d3d12-guards.c`](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/runtime/d3d12-guards.c).
+  Rendering is unaffected: the game draws into a swap chain of whatever size it
+  asks for, and the mode list feeds the menu and this filter, not the back
+  buffer.
+- *Standing.* **Measured.** The two constants were read out of the game's
+  `.rdata`; the filter and the missing branch were read in the disassembly, not
+  inferred from behaviour.
+
+Two things about `DXGI_MODE_DESC` are worth writing down, because getting them
+wrong cost a whole hypothesis here. It is **28 bytes**, not 20: Width 0,
+Height 4, RefreshRate numerator 8 and denominator 12, Format 16,
+ScanlineOrdering 20, Scaling 24. And a mode list read at the wrong stride
+reports resolutions nobody offered — it produced a confident claim that the
+largest available mode was 730 pixels tall, when the real list held 26 modes
+topping out at exactly the panel size.
 
 ## Other games
 

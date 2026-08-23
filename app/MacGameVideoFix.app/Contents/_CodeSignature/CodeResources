@@ -12,6 +12,10 @@
 		<data>
 		wG5rSxkutVSq2WB/fBdimJEzF9g=
 		</data>
+		<key>Resources/OpenColorIO_2_3-tormented.dll</key>
+		<data>
+		XbcKGZIWj1RjZID2AJxpQsVU6rw=
+		</data>
 		<key>Resources/amd_ags_x64-nioh3.dll</key>
 		<data>
 		aGhfisnGxznt55/Y5Fw1dqsqTM8=
@@ -30,7 +34,7 @@
 		</data>
 		<key>Resources/fmod-tmnt.dll</key>
 		<data>
-		p/BZ/v+WERJEKFHeN5JVTwLktAA=
+		1vtE5KJt+lvm7Kl3Bz1p/w6c5BE=
 		</data>
 		<key>Resources/install-dwo-bridge.sh</key>
 		<data>
@@ -62,7 +66,11 @@
 		</data>
 		<key>Resources/install-tmnt-fix.sh</key>
 		<data>
-		qCcHDEuI9k1nA57Y0VuwkTlSThY=
+		EJ82LBHUy64UmpqYMMmipBa9Apc=
+		</data>
+		<key>Resources/install-tormented-fix.sh</key>
+		<data>
+		Xs110hyIoramunC2j3dt15g1O6s=
 		</data>
 		<key>Resources/libogg_64.dll</key>
 		<data>
@@ -105,6 +113,13 @@
 			63LET2v0N+nUBn1FwRcI1fxKiZv4b6F7zHS4aeN2tC4=
 			</data>
 		</dict>
+		<key>Resources/OpenColorIO_2_3-tormented.dll</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			RxElbNfDRc22syjBtXmJifH5obVmnfti+CBw1D4O7D8=
+			</data>
+		</dict>
 		<key>Resources/amd_ags_x64-nioh3.dll</key>
 		<dict>
 			<key>hash2</key>
@@ -137,7 +152,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			MvN9JAWdRIJf8ERgqjZHYbNPrsziY3ghYiyUF5DiSEw=
+			Idoa2VsfXOQoh8em9Fb5opljmkdFiTVK2ibCUH7ClE0=
 			</data>
 		</dict>
 		<key>Resources/install-dwo-bridge.sh</key>
@@ -193,7 +208,14 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			s9w9IW7GVNr5wkWLcuVpfmO5aU1C5KIaVPme2SSmnEw=
+			7OEg3GcOri0lVeRP6rfjMM4UR2e6sbBo2mKIyg9NAmI=
+			</data>
+		</dict>
+		<key>Resources/install-tormented-fix.sh</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			tx/g76goFgQvgM+EJQ46qR9GxbApolOITEVLlhRVh+E=
 			</data>
 		</dict>
 		<key>Resources/libogg_64.dll</key>

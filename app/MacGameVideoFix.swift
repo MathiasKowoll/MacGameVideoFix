@@ -160,6 +160,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
     case kingdomHearts28
     case kingdomHearts1525
     case tmntSplinteredFate
+    case tormentedSouls2
 
     var id: String { rawValue }
 
@@ -180,6 +181,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .kingdomHearts28:   return "KINGDOM HEARTS Dream Drop Distance"
         case .kingdomHearts1525: return "KINGDOM HEARTS HD 1.5+2.5 ReMIX"
         case .tmntSplinteredFate: return "TMNT: Splintered Fate"
+        case .tormentedSouls2:    return "Tormented Souls 2"
         }
     }
 
@@ -199,6 +201,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .kingdomHearts28,
              .kingdomHearts1525: return "Cutscene runs with sound, picture solid green"
         case .tmntSplinteredFate: return "Opens a window, then closes silently"
+        case .tormentedSouls2:    return "Fatal error before the first frame"
         }
     }
 
@@ -222,6 +225,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .kingdomHearts28:   return "KINGDOM HEARTS Dream Drop Distance.exe"
         case .kingdomHearts1525: return "KINGDOM HEARTS HD 1.5+2.5 Launcher.exe"
         case .tmntSplinteredFate: return "TMNTSF.exe"
+        case .tormentedSouls2:    return "TormentedSouls2.exe"
         }
     }
 
@@ -235,6 +239,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
             return "the package folder, the one holding the games' .exe files"
         case .tmntSplinteredFate:
             return "the folder holding TMNTSF.exe"
+        case .tormentedSouls2:
+            return "the folder holding TormentedSouls2.exe"
         default:               return "the game folder, the one with Engine inside"
         }
     }
@@ -259,6 +265,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
             return "…/steamapps/common/KINGDOM HEARTS -HD 1.5+2.5 ReMIX-"
         case .tmntSplinteredFate:
             return "…/steamapps/common/Teenage Mutant Ninja Turtles Splintered Fate"
+        case .tormentedSouls2:
+            return "…/steamapps/common/Tormented Souls 2"
         }
     }
 
@@ -268,7 +276,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
              .nioh, .nioh2, .nioh3,
              .nierReplicant, .woLong,
              .kingdomHearts28, .kingdomHearts1525:   return [.videoBridge]
-        case .tmntSplinteredFate:                   return [.guardCall]
+        case .tmntSplinteredFate,
+             .tormentedSouls2:                      return [.guardCall]
         default:                                 return [.runtime]
         }
     }
@@ -300,6 +309,10 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         /* Not a bridge and not about video: it guards one D3D12 call that ends
          * the process instead of returning an error. */
         case .tmntSplinteredFate: return "install-tmnt-fix.sh"
+        /* Same guards, different carrier: this one rides on the colour
+         * management library the game imports, and the guard that saves it is
+         * the one about 16:9. */
+        case .tormentedSouls2: return "install-tormented-fix.sh"
         default:               return "install-runtime-fix.sh"
         }
     }
@@ -365,7 +378,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         if self == .nioh || self == .nioh2 || self == .nioh3
             || self == .nierReplicant || self == .woLong
             || self == .kingdomHearts28 || self == .kingdomHearts1525
-            || self == .tmntSplinteredFate {
+            || self == .tmntSplinteredFate || self == .tormentedSouls2 {
             guard let exe = executable else { return nil }
             var candidates = [url]
             if let subs = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
@@ -457,6 +470,10 @@ enum Title {
         }
         for c in candidates where fm.fileExists(atPath: c.appendingPathComponent("TMNTSF.exe").path) {
             return .bridgeGame(c, .tmntSplinteredFate)
+        }
+        for c in candidates
+        where fm.fileExists(atPath: c.appendingPathComponent("TormentedSouls2.exe").path) {
+            return .bridgeGame(c, .tormentedSouls2)
         }
         if let g = GameFolder.locate(from: url) { return .unrealVP9(g) }
         return nil
@@ -2905,7 +2922,7 @@ extension SupportedGame {
         switch self {
         case .dynastyWarriors, .personaStrikers, .nioh, .nioh2, .nioh3,
              .nierReplicant, .woLong, .kingdomHearts28, .kingdomHearts1525,
-             .tmntSplinteredFate:
+             .tmntSplinteredFate, .tormentedSouls2:
             return FileManager.default.fileExists(
                 atPath: folder.appendingPathComponent(exe).path)
         default:

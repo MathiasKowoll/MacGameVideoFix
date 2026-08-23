@@ -7,19 +7,22 @@ Makes Windows games show their cutscenes under CrossOver on Apple Silicon.
 > Specifically **`crossover-preview-arm64-20260821`**. That is where every title
 > here is measured, and it is the only configuration this project supports.
 >
-> Three of the nine also run on stable CrossOver 26.3 and the table says which.
-> Treat that as a bonus: stable is not tested before a release, and what stops
-> the other three is in the engine rather than in anything installed beside the
-> game.
+> Three of the fifteen also run on stable CrossOver 26.3 and the table says
+> which. Treat that as a bonus: stable is not tested before a release, and what
+> stops the rest is in the translation stack shipped with it rather than in
+> anything installed beside the game.
 
-Fourteen entries, and more games than that: the two KINGDOM HEARTS packages
+Fifteen entries, and more games than that: the two KINGDOM HEARTS packages
 hold seven playable titles between them.
 
-Most of these are video faults, which is what the name says. One is not:
-Splintered Fate never reaches a cutscene because it does not start, and the
-call that stops it is guarded the same way everything else here is fixed — by
-answering it better. They install the same way: open the app, pick the game from
-the list, drop its folder on it, press Apply.
+Most of these are video faults, which is what the name says. Two are not.
+Splintered Fate and Tormented Souls 2 never reach a cutscene because they do
+not start, and what stops each one is answered the same way everything else
+here is fixed — by giving a better answer to a call the game already makes.
+Tormented Souls 2 is also the only entry whose fault is the game's own rather
+than the translation layer's: it keeps 16:9 resolutions and nothing else, and a
+laptop display has none. They install the same way: open the app, pick the game
+from the list, drop its folder on it, press Apply.
 
 | Game | Symptom | CrossOver |
 | --- | --- | --- |
@@ -37,6 +40,7 @@ the list, drop its folder on it, press Apply.
 | [**KINGDOM HEARTS Dream Drop Distance**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Kingdom-Hearts) | Cutscene runs with sound, picture solid green | Preview 20260821 — not tried on 26.3 |
 | [**KINGDOM HEARTS HD 1.5+2.5 ReMIX**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Kingdom-Hearts) | Cutscene runs with sound, picture solid green | Preview 20260821 — not tried on 26.3 |
 | [**TMNT: Splintered Fate**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/TMNT-Splintered-Fate) | Opens a window, then closes silently | Preview 20260821 — not tried on 26.3 |
+| [**Tormented Souls 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Tormented-Souls-2) | Fatal error before the first frame | Preview 20260821 — not tried on 26.3 |
 
 **This project targets `crossover-preview-arm64-20260821`**, and that is what
 "Preview" means in the column above and everywhere else in this file. Every title
@@ -67,10 +71,10 @@ Tested on an M4 Max, macOS 27, against CrossOver 26.3 and
 
 ## Quick start
 
-Read [Requirements](#requirements) first. Six of the nine titles have only been
-measured on CrossOver Preview, three of those crash on stable 26.3, and three
-need a GStreamer package installed before they can work at all. Each of those
-looks exactly like the fix not working.
+Read [Requirements](#requirements) first. Twelve of the fifteen entries have
+only been measured on CrossOver Preview, and three need a GStreamer package
+installed before they can work at all. Each of those looks exactly like the fix
+not working.
 
 1. Download `MacGameVideoFix.app` from [Releases](../../releases), or build it
    yourself with `app/build-app.sh`.
@@ -348,6 +352,6 @@ cannot get as far as a decoder on stable, while Mortal Shell 2 ships the same
 codec in `.mp4`, which `isomp4` handles on both, and works on stable.
 
 That lead is in what the build can open, not in what it can decode. It is not a
-recommendation about which build to run generally, and two titles here are
+recommendation about which build to run generally, and three entries here are
 confirmed on stable 26.3.
 

@@ -310,6 +310,29 @@ static HRESULT WINAPI h11_fmt(void *s, UINT fmt, UINT *support)
     return hr;
 }
 
+/*
+ * The adapter a game reaches through its device, rather than through the
+ * factory.
+ *
+ * Enumerating adapters is one way to get one; asking the device you already
+ * have is another, and a probe that only watches the first sees nothing at all
+ * on a game that uses the second. IDXGIDevice::GetAdapter is slot 7, and the
+ * adapter it hands back is the one whose outputs and display modes matter.
+ */
+static HRESULT (WINAPI *rdxgi_getadapter)(void *, void **);
+static void arm_adapter(void *ad, UINT index);
+
+static HRESULT WINAPI hdxgi_getadapter(void *self, void **out)
+{
+    HRESULT hr = rdxgi_getadapter(self, out);
+    static LONG told;
+    if (InterlockedIncrement(&told) <= 4)
+        logf_("%s  IDXGIDevice::GetAdapter -> 0x%08lx",
+              FAILED(hr) ? "REFUSED " : "        ", (unsigned long)hr);
+    if (SUCCEEDED(hr) && out && *out) arm_adapter(*out, 0);
+    return hr;
+}
+
 /* Every interface the game asks the device for, and whether it got one. */
 static HRESULT WINAPI h11_qi(void *s, REFIID iid, void **o)
 {
@@ -318,6 +341,10 @@ static HRESULT WINAPI h11_qi(void *s, REFIID iid, void **o)
     if (g && first_time(0x2002, (UINT)g->Data1, (UINT)(g->Data2 | (g->Data3 << 16))))
         logf_("%s  D3D11 device QueryInterface %s -> 0x%08lx",
               FAILED(hr) ? "REFUSED " : "        ", guid_text(iid), (unsigned long)hr);
+    /* IDXGIDevice, IDXGIDevice1..4 all start the same way, so slot 7 is
+     * GetAdapter on any of them. */
+    if (SUCCEEDED(hr) && o && *o && g && g->Data1 == 0x54ec77fa && !rdxgi_getadapter)
+        rdxgi_getadapter = patch(*o, 7, hdxgi_getadapter);
     return hr;
 }
 
@@ -609,20 +636,48 @@ static HRESULT (WINAPI *rdxgi_swapchain)(void *, void *, HWND, const void *,
                                          const void *, void *, void **);
 static HRESULT (WINAPI *rdxgi_swapchain_old)(void *, void *, void *, void **);
 
-static void describe_adapter(const void *desc, UINT which, const char *from)
+/*
+ * The whole adapter description, not the name and the vendor.
+ *
+ * An engine does not pick the first adapter it is offered: it enumerates,
+ * filters and keeps the best. Every field below is something a filter can
+ * reject on -- a software adapter, one with no dedicated memory, one whose
+ * vendor it does not recognise -- and a filter that rejects the only adapter
+ * leaves an empty list. Reading "the last one" out of an empty list is a read
+ * eight bytes below zero, which is what a crash at 0xfffffffffffffff8 is.
+ *
+ * DXGI_ADAPTER_DESC1: Description 0 (128 WCHARs), VendorId 256, DeviceId 260,
+ * SubSysId 264, Revision 268, DedicatedVideoMemory 272, DedicatedSystemMemory
+ * 280, SharedSystemMemory 288, AdapterLuid 296, Flags 304.
+ */
+static void describe_adapter(const void *desc, UINT which, const char *from, BOOL is_desc1)
 {
+    const char *d = (const char *)desc;
     const WCHAR *w = (const WCHAR *)desc;
     char name[132];
-    UINT i = 0, vendor, device;
+    UINT i = 0;
 
     if (!desc) return;
     while (i < 128 && w[i]) { name[i] = (w[i] > 31 && w[i] < 127) ? (char)w[i] : '?'; ++i; }
     name[i] = 0;
-    vendor = *(const UINT *)((const char *)desc + 256);
-    device = *(const UINT *)((const char *)desc + 260);
-    if (first_time(0x4001, which, vendor))
-        logf_("        adapter %u from %s: \"%s\"  vendor 0x%04x  device 0x%04x",
-              which, from, name, vendor, device);
+    if (!first_time(0x4001, which, *(const UINT *)(d + 256))) return;
+
+    logf_("        adapter %u from %s: \"%s\"", which, from, name);
+    logf_("          vendor 0x%04x  device 0x%04x  subsys 0x%08lx  revision %u",
+          *(const UINT *)(d + 256), *(const UINT *)(d + 260),
+          (unsigned long)*(const UINT *)(d + 264), *(const UINT *)(d + 268));
+    logf_("          dedicated video %llu MB, dedicated system %llu MB, shared %llu MB",
+          (unsigned long long)(*(const UINT64 *)(d + 272) >> 20),
+          (unsigned long long)(*(const UINT64 *)(d + 280) >> 20),
+          (unsigned long long)(*(const UINT64 *)(d + 288) >> 20));
+    if (is_desc1)
+    {
+        UINT flags = *(const UINT *)(d + 304);
+        logf_("          flags 0x%x%s%s", flags,
+              (flags & 1) ? "  REMOTE" : "",
+              (flags & 2) ? "  SOFTWARE -- an engine that skips software adapters "
+                            "would skip this one" : "");
+    }
 }
 
 static UINT last_adapter_index;
@@ -630,22 +685,108 @@ static UINT last_adapter_index;
 static HRESULT WINAPI hdxgi_getdesc(void *self, void *desc)
 {
     HRESULT hr = rdxgi_getdesc(self, desc);
-    if (SUCCEEDED(hr)) describe_adapter(desc, last_adapter_index, "GetDesc");
+    if (SUCCEEDED(hr)) describe_adapter(desc, last_adapter_index, "GetDesc", FALSE);
     return hr;
 }
 static HRESULT WINAPI hdxgi_getdesc1(void *self, void *desc)
 {
     HRESULT hr = rdxgi_getdesc1(self, desc);
-    if (SUCCEEDED(hr)) describe_adapter(desc, last_adapter_index, "GetDesc1");
+    if (SUCCEEDED(hr)) describe_adapter(desc, last_adapter_index, "GetDesc1", TRUE);
     return hr;
 }
+
+static HRESULT (WINAPI *rdxgi_enumout)(void *, UINT, void **);
+static HRESULT WINAPI hdxgi_enumout(void *, UINT, void **);
 
 static void arm_adapter(void *ad, UINT index)
 {
     last_adapter_index = index;
     if (!ad) return;
+    if (!rdxgi_enumout)  rdxgi_enumout  = patch(ad,  7, hdxgi_enumout);
     if (!rdxgi_getdesc)  rdxgi_getdesc  = patch(ad,  8, hdxgi_getdesc);
     if (!rdxgi_getdesc1) rdxgi_getdesc1 = patch(ad, 10, hdxgi_getdesc1);
+}
+
+/*
+ * Outputs and their display modes.
+ *
+ * A game that picks a resolution searches a list of modes for the one it wants
+ * and uses the result as an index. When the search fails Unreal returns
+ * INDEX_NONE, which is -1, and an engine that does not check indexes the list
+ * with it -- reading below the start of an array, or below zero when the array
+ * was never allocated.
+ *
+ * So the two questions are whether there are any outputs at all, and whether
+ * the mode the game is looking for is among the ones it is given.
+ *
+ * IDXGIAdapter: 7 EnumOutputs. IDXGIOutput: 7 GetDesc, 8 GetDisplayModeList,
+ * 9 FindClosestMatchingMode.
+ * DXGI_MODE_DESC is 28 bytes, not 20: Width 0, Height 4, RefreshRate numerator
+ * 8 and denominator 12, Format 16, ScanlineOrdering 20, Scaling 24. Walking
+ * this array at the wrong stride does not look like an error -- it looks like
+ * data, and it reports resolutions nobody offered. That mistake was made here
+ * and it cost two hypotheses; see docs/what-we-got-wrong.md.
+ */
+#define MODE_DESC_UINTS 7
+static HRESULT (WINAPI *rdxgi_modelist)(void *, UINT, UINT, UINT *, void *);
+static HRESULT (WINAPI *rdxgi_closest)(void *, const void *, void *, void *);
+
+static HRESULT WINAPI hdxgi_modelist(void *self, UINT fmt, UINT flags, UINT *count, void *modes)
+{
+    HRESULT hr = rdxgi_modelist(self, fmt, flags, count, modes);
+    if (first_time(0x4005, fmt, modes ? 1 : 0))
+        logf_("%s  GetDisplayModeList(format %u, %s) -> 0x%08lx  %u modes",
+              FAILED(hr) ? "REFUSED " : "        ", fmt,
+              modes ? "filling" : "counting", (unsigned long)hr, count ? *count : 0);
+    if (SUCCEEDED(hr) && modes && count && *count)
+    {
+        const UINT *m = (const UINT *)modes;
+        UINT k, shown = *count < 4 ? *count : 4;
+        UINT widest = 0, tallest = 0;
+        for (k = 0; k < *count; ++k)
+        {
+            const UINT *e = m + (size_t)k * MODE_DESC_UINTS;
+            if (e[0] > widest)  widest  = e[0];
+            if (e[1] > tallest) tallest = e[1];
+        }
+        for (k = 0; k < shown; ++k)
+        {
+            const UINT *e = m + (size_t)k * MODE_DESC_UINTS;
+            if (first_time(0x4006, e[0], e[1]))
+                logf_("            mode %ux%u @ %u/%u  format %u",
+                      e[0], e[1], e[2], e[3], e[4]);
+        }
+        if (first_time(0x4007, widest, tallest))
+            logf_("            largest of the %u modes offered: %ux%u",
+                  *count, widest, tallest);
+    }
+    return hr;
+}
+
+static HRESULT WINAPI hdxgi_closest(void *self, const void *want, void *got, void *dev)
+{
+    HRESULT hr = rdxgi_closest(self, want, got, dev);
+    const UINT *w = (const UINT *)want;
+    if (first_time(0x4007, w ? w[0] : 0, w ? w[1] : 0))
+        logf_("%s  FindClosestMatchingMode(%ux%u) -> 0x%08lx",
+              FAILED(hr) ? "REFUSED " : "        ",
+              w ? w[0] : 0, w ? w[1] : 0, (unsigned long)hr);
+    return hr;
+}
+
+static HRESULT WINAPI hdxgi_enumout(void *self, UINT i, void **out)
+{
+    HRESULT hr = rdxgi_enumout(self, i, out);
+    if (first_time(0x4004, i, (UINT)hr))
+        logf_("%s  EnumOutputs(%u) -> 0x%08lx%s",
+              FAILED(hr) ? "REFUSED " : "        ", i, (unsigned long)hr,
+              (FAILED(hr) && i == 0) ? "   << no monitor at all" : "");
+    if (SUCCEEDED(hr) && out && *out)
+    {
+        if (!rdxgi_modelist) rdxgi_modelist = patch(*out, 8, hdxgi_modelist);
+        if (!rdxgi_closest)  rdxgi_closest  = patch(*out, 9, hdxgi_closest);
+    }
+    return hr;
 }
 
 static HRESULT WINAPI hdxgi_enum(void *self, UINT i, void **out)
@@ -886,11 +1027,141 @@ static HRESULT WINAPI my_DxcCreateInstance(REFCLSID clsid, REFIID iid, void **ou
     return hr;
 }
 
+/* ------------------------------------------------- display modes, the GDI way */
+
+/*
+ * Where a resolution list actually comes from, on the engines that do not use
+ * DXGI for it.
+ *
+ * Unreal has two paths and the choice is visible in the import table: a title
+ * importing EnumDisplaySettingsW builds its resolution list from GDI, and every
+ * DXGI hook in this file will watch an empty road while it does. The list it
+ * builds is an array of {width, height, refresh} -- twelve bytes an entry --
+ * and a search through it that finds nothing returns INDEX_NONE.
+ *
+ * DEVMODEW: dmBitsPerPel at 168, dmPelsWidth 172, dmPelsHeight 176,
+ * dmDisplayFrequency 184.
+ */
+/*
+ * The monitor list, which is built right after the swap chain.
+ *
+ * Unreal walks EnumDisplayMonitors, asks GetMonitorInfo about each one and
+ * keeps the one flagged primary. A walk that visits nothing, or that visits
+ * monitors none of which is primary, leaves the index of the primary at -1 --
+ * and an index of -1 into an array that was never filled reads below zero.
+ *
+ * MONITORINFO: cbSize 0, rcMonitor 4..19, rcWork 20..35, dwFlags 36
+ * (MONITORINFOF_PRIMARY is 1).
+ */
+static BOOL (WINAPI *real_EnumDisplayMonitors)(HDC, const RECT *, MONITORENUMPROC, LPARAM);
+static BOOL (WINAPI *real_GetMonitorInfoW)(HMONITOR, void *);
+static LONG monitors_visited, monitors_primary, monitorinfo_ok, monitorinfo_bad;
+
+static MONITORENUMPROC real_monitor_proc;
+
+static BOOL CALLBACK my_monitor_proc(HMONITOR mon, HDC dc, LPRECT r, LPARAM data)
+{
+    LONG which = InterlockedIncrement(&monitors_visited);
+    if (which <= 8 && r)
+        logf_("        monitor %ld at %ld,%ld %ldx%ld", which,
+              (long)r->left, (long)r->top,
+              (long)(r->right - r->left), (long)(r->bottom - r->top));
+    return real_monitor_proc(mon, dc, r, data);
+}
+
+static BOOL WINAPI my_EnumDisplayMonitors(HDC dc, const RECT *clip,
+                                          MONITORENUMPROC proc, LPARAM data)
+{
+    BOOL ok;
+    LONG before = monitors_visited;
+    real_monitor_proc = proc;
+    ok = real_EnumDisplayMonitors(dc, clip, proc ? my_monitor_proc : proc, data);
+    logf_("%s  EnumDisplayMonitors -> %s, visited %ld%s",
+          ok ? "        " : "REFUSED ", ok ? "TRUE" : "FALSE",
+          monitors_visited - before,
+          (monitors_visited == before) ? "   << not one monitor" : "");
+    return ok;
+}
+
+static BOOL WINAPI my_GetMonitorInfoW(HMONITOR mon, void *info)
+{
+    BOOL ok = real_GetMonitorInfoW(mon, info);
+    if (ok)
+    {
+        DWORD flags = *(const DWORD *)((const char *)info + 36);
+        InterlockedIncrement(&monitorinfo_ok);
+        if (flags & 1) InterlockedIncrement(&monitors_primary);
+        if (monitorinfo_ok <= 8)
+            logf_("        GetMonitorInfo -> flags 0x%lx%s",
+                  (unsigned long)flags, (flags & 1) ? "  PRIMARY" : "");
+    }
+    else
+    {
+        InterlockedIncrement(&monitorinfo_bad);
+        if (monitorinfo_bad <= 4) logf_("REFUSED  GetMonitorInfoW returned FALSE");
+    }
+    return ok;
+}
+
+static BOOL (WINAPI *real_EnumDisplaySettingsW)(const WCHAR *, DWORD, void *);
+static BOOL (WINAPI *real_EnumDisplayDevicesW)(const WCHAR *, DWORD, void *, DWORD);
+static LONG modes_asked, modes_given;
+
+static BOOL WINAPI my_EnumDisplaySettingsW(const WCHAR *device, DWORD which, void *dm)
+{
+    BOOL ok = real_EnumDisplaySettingsW(device, which, dm);
+    InterlockedIncrement(&modes_asked);
+    if (ok)
+    {
+        const char *d = (const char *)dm;
+        InterlockedIncrement(&modes_given);
+        if (modes_given <= 12)
+            logf_("        display mode %lu: %ux%u @ %u Hz, %u bpp",
+                  (unsigned long)which,
+                  *(const DWORD *)(d + 172), *(const DWORD *)(d + 176),
+                  *(const DWORD *)(d + 184), *(const DWORD *)(d + 168));
+    }
+    else if (modes_asked <= 4 || which == 0)
+        logf_("REFUSED  EnumDisplaySettingsW(mode %lu) returned FALSE%s",
+              (unsigned long)which,
+              which == 0 ? "   << not one mode, so the resolution list is empty" : "");
+    return ok;
+}
+
+static BOOL WINAPI my_EnumDisplayDevicesW(const WCHAR *device, DWORD which,
+                                          void *dd, DWORD flags)
+{
+    BOOL ok = real_EnumDisplayDevicesW(device, which, dd, flags);
+    if (first_time(0x5001, which, ok))
+    {
+        char name[36];
+        int i = 0;
+        const WCHAR *w = (const WCHAR *)((const char *)dd + 4);   /* DeviceName */
+        if (ok && dd) while (i < 32 && w[i]) { name[i] = (char)(w[i] & 0x7f); ++i; }
+        name[ok && dd ? i : 0] = 0;
+        logf_("%s  EnumDisplayDevicesW(%lu) -> %s%s%s",
+              ok ? "        " : "REFUSED ", (unsigned long)which,
+              ok ? "TRUE" : "FALSE", ok ? "  " : "", ok ? name : "");
+    }
+    return ok;
+}
+
 /* --------------------------------------------------- where the devices come from */
 
 static HRESULT (WINAPI *real_D3D12CreateDevice)(void *, UINT, REFIID, void **);
 static HRESULT (WINAPI *real_D3D11CreateDevice)(void *, UINT, HMODULE, UINT, const UINT *,
                                                 UINT, UINT, void **, UINT *, void **);
+/*
+ * The combined form, which is easy to miss and common in older engines.
+ *
+ * A game that calls this creates its device and its swap chain in one go, and a
+ * probe watching only D3D11CreateDevice sees neither -- while the DXGI factory
+ * hook still reports the swap chain that appears inside it. The result is a log
+ * showing a swap chain with no device behind it, which reads as impossible and
+ * is really just a missing hook.
+ */
+static HRESULT (WINAPI *real_D3D11CreateDeviceAndSwapChain)(void *, UINT, HMODULE, UINT,
+        const UINT *, UINT, UINT, const void *, void **, void **, UINT *, void **);
 static BOOL seen11, seen12;
 
 static HRESULT WINAPI my_D3D12CreateDevice(void *adapter, UINT level, REFIID iid, void **dev)
@@ -902,14 +1173,36 @@ static HRESULT WINAPI my_D3D12CreateDevice(void *adapter, UINT level, REFIID iid
     return hr;
 }
 
+static HRESULT WINAPI my_D3D11CreateDeviceAndSwapChain(void *adapter, UINT type, HMODULE sw,
+        UINT flags, const UINT *levels, UINT nlevels, UINT sdk, const void *scd,
+        void **swap, void **dev, UINT *got, void **ctx)
+{
+    HRESULT hr = real_D3D11CreateDeviceAndSwapChain(adapter, type, sw, flags, levels,
+                                                    nlevels, sdk, scd, swap, dev, got, ctx);
+    logf_("%s  D3D11CreateDeviceAndSwapChain(flags 0x%x) -> 0x%08lx  level 0x%x  "
+          "device %s  swapchain %s",
+          FAILED(hr) ? "REFUSED " : "        ", flags, (unsigned long)hr, got ? *got : 0,
+          (dev && *dev) ? "yes" : "NONE", (swap && *swap) ? "yes" : "NONE");
+    if (SUCCEEDED(hr) && dev && *dev && !seen11) { seen11 = TRUE; watch_d3d11_device(*dev); }
+    return hr;
+}
+
 static HRESULT WINAPI my_D3D11CreateDevice(void *adapter, UINT type, HMODULE sw, UINT flags,
                                            const UINT *levels, UINT nlevels, UINT sdk,
                                            void **dev, UINT *got, void **ctx)
 {
     HRESULT hr = real_D3D11CreateDevice(adapter, type, sw, flags, levels, nlevels, sdk,
                                         dev, got, ctx);
-    logf_("%s  D3D11CreateDevice(flags 0x%x) -> 0x%08lx  level 0x%x",
-          FAILED(hr) ? "REFUSED " : "        ", flags, (unsigned long)hr, got ? *got : 0);
+    logf_("%s  D3D11CreateDevice(flags 0x%x, adapter %s) -> 0x%08lx  level 0x%x",
+          FAILED(hr) ? "REFUSED " : "        ", flags, adapter ? "given" : "default",
+          (unsigned long)hr, got ? *got : 0);
+    /*
+     * The adapter the engine hands in here is the one its RHI keeps, and the
+     * one whose outputs it later asks for. Arming it at this point needs no
+     * guess about which enumeration API the engine used to find it -- it is
+     * simply the argument.
+     */
+    if (adapter) arm_adapter(adapter, 0);
     if (SUCCEEDED(hr) && dev && *dev && !seen11) { seen11 = TRUE; watch_d3d11_device(*dev); }
     return hr;
 }
@@ -956,6 +1249,12 @@ static FARPROC WINAPI my_GetProcAddress(HMODULE mod, LPCSTR name)
     {
         if (!real_D3D11CreateDevice) real_D3D11CreateDevice = (void *)p;
         return (FARPROC)my_D3D11CreateDevice;
+    }
+    if (lstrcmpA(name, "D3D11CreateDeviceAndSwapChain") == 0)
+    {
+        if (!real_D3D11CreateDeviceAndSwapChain)
+            real_D3D11CreateDeviceAndSwapChain = (void *)p;
+        return (FARPROC)my_D3D11CreateDeviceAndSwapChain;
     }
     if (lstrcmpA(name, "CreateDXGIFactory") == 0)
     {
@@ -1082,6 +1381,13 @@ static DWORD WINAPI worker(void *unused)
             real_D3D11CreateDevice = was;
             logf_("hooked %s!D3D11CreateDevice", device_modules[i]);
         }
+        was = hook_import(device_modules[i], "D3D11CreateDeviceAndSwapChain", 0,
+                          (void *)my_D3D11CreateDeviceAndSwapChain);
+        if (was && !real_D3D11CreateDeviceAndSwapChain)
+        {
+            real_D3D11CreateDeviceAndSwapChain = was;
+            logf_("hooked %s!D3D11CreateDeviceAndSwapChain", device_modules[i]);
+        }
     }
 
     {
@@ -1120,6 +1426,20 @@ static DWORD WINAPI worker(void *unused)
             void *w = hook_import("d3d12.dll", rs[k].name, 0, rs[k].repl);
             if (w) { *rs[k].slot = w; logf_("hooked d3d12.dll!%s", rs[k].name); }
         }
+    }
+
+    {
+        void *w = hook_import("USER32.dll", "EnumDisplaySettingsW", 0,
+                              (void *)my_EnumDisplaySettingsW);
+        if (w) { real_EnumDisplaySettingsW = w; logf_("hooked USER32!EnumDisplaySettingsW"); }
+        w = hook_import("USER32.dll", "EnumDisplayDevicesW", 0,
+                        (void *)my_EnumDisplayDevicesW);
+        if (w) { real_EnumDisplayDevicesW = w; logf_("hooked USER32!EnumDisplayDevicesW"); }
+        w = hook_import("USER32.dll", "EnumDisplayMonitors", 0,
+                        (void *)my_EnumDisplayMonitors);
+        if (w) { real_EnumDisplayMonitors = w; logf_("hooked USER32!EnumDisplayMonitors"); }
+        w = hook_import("USER32.dll", "GetMonitorInfoW", 0, (void *)my_GetMonitorInfoW);
+        if (w) { real_GetMonitorInfoW = w; logf_("hooked USER32!GetMonitorInfoW"); }
     }
 
     real_GetProcAddress = (void *)GetProcAddress(GetModuleHandleA("kernel32.dll"),
@@ -1178,6 +1498,13 @@ static void report(void)
     if (!any)
         logf_("  nothing was created through a watched call. Either the device "
               "never arrived, or it arrives somewhere this does not look.");
+    if (monitors_visited || monitorinfo_ok || monitorinfo_bad)
+        logf_("  monitors: %ld visited, %ld described, %ld refused, %ld flagged primary%s",
+              monitors_visited, monitorinfo_ok, monitorinfo_bad, monitors_primary,
+              monitors_primary ? "" : "   << none primary, which is an index of -1");
+    if (modes_asked)
+        logf_("  display modes: %ld asked for, %ld returned%s", modes_asked, modes_given,
+              modes_given ? "" : "   << not one, so any search through the list fails");
     if (rs_deser || rs_ser)
         logf_("  root signatures: %ld deserialised, %ld serialised", rs_deser, rs_ser);
     if (dxc_seen)
