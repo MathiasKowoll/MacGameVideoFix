@@ -29,7 +29,7 @@ bottle.
 | The wave width is misreported | **No** | `D3D12_OPTIONS1`: WaveOps 1, `WaveLaneCountMin` 32, `WaveLaneCountMax` 32 — correct for this GPU |
 | The game uses AMD shader intrinsics that go nowhere | **No** | Its AGS imports are `PushMarker`, `PopMarker`, `SetMarker`, `CreateDevice`, `DestroyDevice` and two settings calls. Debug markers only. |
 | Havok is missing a library | **No** | Havok is statically linked; `hkCompatFormats.dll` ships with no copy of the game and fails to load on Windows too |
-| A CPU instruction is advertised but implemented wrongly | **No** | Rosetta advertises AVX, AVX2, FMA, F16C, BMI1, BMI2. Seven arithmetic checks, all correct, including an F16C round trip and a 4×4 transform against its scalar equivalent |
+| A CPU instruction is advertised but implemented wrongly | **No** | Rosetta advertises AVX, AVX2, FMA, F16C, BMI1, BMI2. **Thirteen** arithmetic checks, all correct — including **gather by index and its masked form**, byte shuffle, truncating float-to-int, a quaternion multiply against its scalar equivalent, unaligned loads, an F16C round trip and a 4×4 transform. Gather is the operation a skinning path performs before any other: *fetch the matrix for bone N*. The first version of this test left it out, which was the wrong seven to pick. |
 | DirectStorage corrupts streamed assets | **No** | `dstoragecore.dll` moved aside, game relaunched, deformation unchanged |
 | The game aliases memory and the barriers are not honoured | **No** | 2,627,042 transition and 447,984 UAV barriers counted, **0 aliasing** — and the counter proves the hook was live, which is the distinction an earlier bad measurement could not make |
 
@@ -88,6 +88,15 @@ layer beneath it does not provide.
 - Confirming the machine dependence properly: the same build, the same
   CrossOver, two different Apple Silicon parts, same scene. If it is a race,
   that is where it shows.
+
+  The obvious counter-proposal, and why it does not survive: *Rosetta may expose
+  a different instruction set on a different part.* It may — but neither
+  direction produces this symptom. Exposing **fewer** instructions sends the
+  engine down its scalar path, which is slower and correct. Exposing **more**
+  on the other machine does not repair a wrong answer on this one. The
+  hypothesis needs an instruction that is advertised here *and* returns the
+  wrong number, and the thirteen checks above are the ones a skinning path
+  depends on.
 - Someone inside D3DMetal comparing what a UAV barrier on a placed resource
   becomes in Metal against what the D3D12 specification requires of it.
 

@@ -181,6 +181,168 @@ static void test_f16c(void)
 }
 
 /*
+ * Fetch by index -- the operation a skinning path performs before any other.
+ *
+ * "Give me the matrix for bone N" is a gather, and a gather that returns the
+ * wrong element hands the shader somebody else's bone. The result is geometry
+ * that is recognisable and in the wrong place, and which mesh is affected
+ * depends on which indices it uses -- so one costume can be wrong while
+ * another is right, from the same code.
+ *
+ * This is the instruction family the first version of this file left out.
+ */
+__attribute__((target("avx2")))
+static void test_gather(void)
+{
+    /* A table where element i holds i * 100, so a wrong lane is obvious. */
+    float table[32];
+    __m256i idx = _mm256_setr_epi32(31, 0, 17, 4, 9, 25, 2, 12);
+    float r[8]; int i, good = 1, at = 0; char got[160], want[160];
+    static const int expect[8] = { 31, 0, 17, 4, 9, 25, 2, 12 };
+
+    for (i = 0; i < 32; ++i) table[i] = (float)i * 100.0f;
+    _mm256_storeu_ps(r, _mm256_i32gather_ps(table, idx, 4));
+    for (i = 0; i < 8; ++i)
+    {
+        good &= near_(r[i], (float)expect[i] * 100.0f);
+        at += _snprintf(got + at, sizeof(got) - at, "%g ", r[i]);
+    }
+    at = 0;
+    for (i = 0; i < 8; ++i)
+        at += _snprintf(want + at, sizeof(want) - at, "%g ", (float)expect[i] * 100.0f);
+    ok("AVX2 gather by index (bone lookup)", good, got, want);
+}
+
+/* The masked form: lanes whose mask bit is clear must be left untouched. A
+ * gather that writes them anyway overwrites whatever the caller had there. */
+__attribute__((target("avx2")))
+static void test_gather_masked(void)
+{
+    float table[16];
+    __m256i idx = _mm256_setr_epi32(1, 2, 3, 4, 5, 6, 7, 8);
+    __m256 src = _mm256_set1_ps(-1.0f);
+    __m256 mask = _mm256_castsi256_ps(
+        _mm256_setr_epi32(-1, 0, -1, 0, -1, 0, -1, 0));
+    float r[8]; int i, good = 1, at = 0; char got[160], want[160];
+
+    for (i = 0; i < 16; ++i) table[i] = (float)i;
+    _mm256_storeu_ps(r, _mm256_mask_i32gather_ps(src, table, idx, mask, 4));
+    for (i = 0; i < 8; ++i)
+    {
+        float expect = (i & 1) ? -1.0f : (float)(i + 1);
+        good &= near_(r[i], expect);
+        at += _snprintf(got + at, sizeof(got) - at, "%g ", r[i]);
+    }
+    _snprintf(want, sizeof(want), "1 -1 3 -1 5 -1 7 -1");
+    ok("AVX2 masked gather leaves masked lanes alone", good, got, want);
+}
+
+/* Float to integer truncation, which is how a bone index is usually derived
+ * from packed weights. Off by one here selects the neighbouring bone. */
+__attribute__((target("avx")))
+static void test_cvt(void)
+{
+    __m256 v = _mm256_setr_ps(0.9f, 1.9f, -0.9f, -1.9f, 2.5f, 3.5f, 255.99f, 0.0f);
+    int r[8], i, good = 1, at = 0; char got[160], want[160];
+    static const int expect[8] = { 0, 1, 0, -1, 2, 3, 255, 0 };
+    _mm256_storeu_si256((__m256i *)r, _mm256_cvttps_epi32(v));
+    for (i = 0; i < 8; ++i)
+    {
+        good &= (r[i] == expect[i]);
+        at += _snprintf(got + at, sizeof(got) - at, "%d ", r[i]);
+    }
+    _snprintf(want, sizeof(want), "0 1 0 -1 2 3 255 0");
+    ok("AVX truncating float-to-int (index derivation)", good, got, want);
+}
+
+/* Byte shuffle, used to unpack bone indices and weights out of a packed
+ * vertex. A wrong lane order here scrambles which weight belongs to which
+ * bone, which deforms a mesh without breaking it. */
+__attribute__((target("avx2")))
+static void test_shuffle_bytes(void)
+{
+    __m256i src = _mm256_setr_epi8(
+        0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,
+        16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31);
+    /* Reverse within each 128-bit lane, which is what pshufb does. */
+    __m256i ctrl = _mm256_setr_epi8(
+        15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0,
+        15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0);
+    unsigned char r[32]; int i, good = 1;
+    char got[128], want[128]; int at = 0;
+    _mm256_storeu_si256((__m256i *)r, _mm256_shuffle_epi8(src, ctrl));
+    for (i = 0; i < 16; ++i) good &= (r[i] == 15 - i);
+    for (i = 16; i < 32; ++i) good &= (r[i] == 16 + (31 - i));
+    for (i = 0; i < 8; ++i) at += _snprintf(got + at, sizeof(got) - at, "%d ", r[i]);
+    _snprintf(want, sizeof(want), "15 14 13 12 11 10 9 8 (first eight)");
+    ok("AVX2 byte shuffle (unpacking packed vertex data)", good, got, want);
+}
+
+/* Unaligned loads that straddle a cache line and a page. Vertex streams are
+ * rarely aligned to anything convenient. */
+static void test_unaligned(void)
+{
+    static float big[1024];
+    int i, good = 1;
+    char got[96], want[96];
+    float r[4];
+    for (i = 0; i < 1024; ++i) big[i] = (float)i;
+    /* Offset 1023 floats in, deliberately not 16-byte aligned. */
+    _mm_storeu_ps(r, _mm_loadu_ps(big + 1017));
+    for (i = 0; i < 4; ++i) good &= near_(r[i], (float)(1017 + i));
+    _snprintf(got, sizeof(got), "%g %g %g %g", r[0], r[1], r[2], r[3]);
+    _snprintf(want, sizeof(want), "1017 1018 1019 1020");
+    ok("unaligned 128-bit load", good, got, want);
+}
+
+/*
+ * A quaternion multiply, which is what animation blending actually spends its
+ * time on, done with FMA and then by hand.
+ *
+ * Bone rotations are quaternions. If this disagrees, every joint in the game
+ * is rotated by a number that is nearly right, which is exactly what a limb in
+ * the wrong place looks like.
+ */
+__attribute__((target("fma")))
+static void test_quaternion(void)
+{
+    float a[4] = { 0.1826f, 0.3651f, 0.5477f, 0.7303f };   /* normalised-ish */
+    float b[4] = { 0.4082f, -0.8165f, 0.4082f, 0.0f };
+    float s[4], v[4];
+    int i, good = 1, at = 0;
+    char got[160], want[160];
+    __m128 va = _mm_loadu_ps(a), vb = _mm_loadu_ps(b), acc;
+
+    /* By hand: (w1 v1)(w2 v2) = (w1w2 - v1.v2, w1v2 + w2v1 + v1 x v2) */
+    s[0] = a[3]*b[0] + b[3]*a[0] + (a[1]*b[2] - a[2]*b[1]);
+    s[1] = a[3]*b[1] + b[3]*a[1] + (a[2]*b[0] - a[0]*b[2]);
+    s[2] = a[3]*b[2] + b[3]*a[2] + (a[0]*b[1] - a[1]*b[0]);
+    s[3] = a[3]*b[3] - (a[0]*b[0] + a[1]*b[1] + a[2]*b[2]);
+
+    /* With FMA, in the shape a vectorised blender would use. */
+    acc = _mm_mul_ps(_mm_shuffle_ps(va, va, 0xFF), vb);
+    acc = _mm_fmadd_ps(_mm_shuffle_ps(vb, vb, 0xFF),
+                       _mm_blend_ps(va, _mm_setzero_ps(), 0x8), acc);
+    _mm_storeu_ps(v, acc);
+    /* Only the vector part of that partial form is compared; the cross product
+     * and the w term are done scalar on both sides so the comparison is of the
+     * multiply-add itself, not of two different algorithms. */
+    v[0] += (a[1]*b[2] - a[2]*b[1]);
+    v[1] += (a[2]*b[0] - a[0]*b[2]);
+    v[2] += (a[0]*b[1] - a[1]*b[0]);
+    v[3] = a[3]*b[3] - (a[0]*b[0] + a[1]*b[1] + a[2]*b[2]);
+
+    for (i = 0; i < 4; ++i)
+    {
+        good &= near_(v[i], s[i]);
+        at += _snprintf(got + at, sizeof(got) - at, "%.6f ", v[i]);
+    }
+    at = 0;
+    for (i = 0; i < 4; ++i) at += _snprintf(want + at, sizeof(want) - at, "%.6f ", s[i]);
+    ok("quaternion multiply, FMA against scalar", good, got, want);
+}
+
+/*
  * The one that matters most: a 4x4 transform, the operation a skinning path
  * performs millions of times, done twice.
  *
@@ -241,6 +403,12 @@ int main(void)
     if (f.avx2)  test_avx2();   else printf("  --    AVX2 not advertised\n");
     if (f.fma)   test_fma();    else printf("  --    FMA not advertised\n");
     if (f.f16c)  test_f16c();   else printf("  --    F16C not advertised\n");
+    if (f.avx)   test_cvt();    else printf("  --    AVX not advertised\n");
+    if (f.avx2)  test_gather();        else printf("  --    AVX2 not advertised\n");
+    if (f.avx2)  test_gather_masked(); else printf("  --    AVX2 not advertised\n");
+    if (f.avx2)  test_shuffle_bytes(); else printf("  --    AVX2 not advertised\n");
+    if (f.fma)   test_quaternion();    else printf("  --    FMA not advertised\n");
+    test_unaligned();
     test_matrix();
 
     printf("\n  %d checks, %d wrong\n", checks, failures);
