@@ -669,6 +669,18 @@ Wine tree is not the same offer.
 bridge which entry point one of them uses is a cost paid once rather than
 maintenance.
 
+**What being outside costs, with a title that shows it.** Ninja Gaiden 4 needs a
+VP9 decoder MFT, and an MFT has to exist inside the process that owns Media
+Foundation. winevideo adds one to winegstreamer's class factory; the CLSID it
+registers is absent from CrossOver Preview's `winegstreamer.dll`, verified by
+searching for the GUID in binary form. Registering it from outside would
+enumerate a transform that cannot be instantiated, which is worse than not
+registering it. Answering the enumeration query is enough to get a title *past*
+the check -- measured -- but not to decode anything.
+
+That is the boundary, and it is not a gap in the tooling: some repairs have to
+live where the decoder lives.
+
 **What being outside costs.** A hook in the game process reaches only what the
 game calls. A repair living in `d3d9` sees every surface presented no matter
 which entry point created it; this one saw nothing at all until it was told

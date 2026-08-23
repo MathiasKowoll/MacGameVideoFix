@@ -1,7 +1,48 @@
 # Ninja Gaiden 4 — where it actually stops
 
-Not fixed. Written down because the reason is precise, and because an earlier
+Not fixed, and now believed to be **out of reach for this project's approach**.
+Written down because the reason is precise, and because more than one earlier
 claim in this repository about it was wrong.
+
+## The conclusion, 22 August 2026
+
+Two gates were known. A third was found between them, and the first turned out
+to be crossable.
+
+**Gate 1 is crossable, and this was measured.** The game asks
+`MFTEnumEx(MFT_CATEGORY_VIDEO_DECODER, {Video, VP90})` and gets nothing.
+Answering by repeating the query for H.264 -- which is registered, so what comes
+back is a real list of real objects with real lifetimes -- is enough: the game
+counts them and carries on. It never activates them. That question had been open
+and is now closed.
+
+**DirectStorage is the wall.** Past gate 1 the title reaches
+`IDStorageFactory::CreateQueue`, which returns `DXGI_ERROR_UNSUPPORTED` and a
+null queue that the game stores without checking and calls through. That is with
+every capability question granted, with GPU decompression forced off through
+`DSTORAGE_CONFIGURATION1`, and with the staging buffer at the size the game
+asked for. Removing `dstoragecore.dll` avoids the crash and replaces it with a
+stall: 76 threads, none inside DirectStorage, Media Foundation, D3D12 or DXGI,
+the main one waiting on a C++ condition variable.
+
+**And the video was never reached.** `MFCreateSourceReaderFromURL` did not
+appear in any of eight runs. Whatever this title's video needs, it is not what
+stops it first.
+
+**Why it is out of reach.** The VP9 decoder MFT winevideo registers points at
+CLSID `{E3AAF548-C9A4-4C6E-234D-5ADA374B0000}`, which its own patch adds to
+winegstreamer's class factory. A search for that GUID in binary form inside
+CrossOver Preview's `winegstreamer.dll` finds nothing. Registering it without
+that patch would produce an MFT that enumerates and cannot be instantiated --
+worse than the substitution above. A decoder has to exist inside the process
+that owns Media Foundation, and this project does not put things there.
+
+The owner of this machine reports that the only configuration in which they have
+played the title is with winevideo installed, which is consistent with all of
+the above.
+
+So this page records a boundary rather than a plan: it is the concrete case of
+the limit set out under *Living outside CrossOver* in the wiki's Findings.
 
 ## The wrong claim, corrected
 
