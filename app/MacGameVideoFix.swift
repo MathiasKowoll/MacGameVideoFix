@@ -157,6 +157,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
     case nioh3
     case nierReplicant
     case woLong
+    case kingdomHearts28
 
     var id: String { rawValue }
 
@@ -174,6 +175,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .nioh3:             return "Nioh 3"
         case .nierReplicant:     return "NieR Replicant ver.1.22474487139"
         case .woLong:            return "Wo Long: Fallen Dynasty"
+        case .kingdomHearts28:   return "KINGDOM HEARTS Dream Drop Distance"
         }
     }
 
@@ -190,6 +192,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .nioh3:             return "Failed to play movie"
         case .nierReplicant:     return "Crashes when the first video starts"
         case .woLong:            return "Cutscene runs with sound, picture black"
+        case .kingdomHearts28:   return "Cutscene runs with sound, picture solid green"
         }
     }
 
@@ -210,6 +213,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .nioh3:             return "Nioh3.exe"
         case .nierReplicant:     return "NieR Replicant ver.1.22474487139.exe"
         case .woLong:            return "WoLong.exe"
+        case .kingdomHearts28:   return "KINGDOM HEARTS Dream Drop Distance.exe"
         }
     }
 
@@ -217,6 +221,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
     var folderHint: String {
         switch self {
         case .dynastyWarriors: return "the folder holding DWORIGINS.exe"
+        case .kingdomHearts28:
+            return "the folder holding KINGDOM HEARTS Dream Drop Distance.exe"
         default:               return "the game folder, the one with Engine inside"
         }
     }
@@ -235,6 +241,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .nioh3:             return "…/steamapps/common/Nioh3"
         case .nierReplicant:     return "…/steamapps/common/NieR Replicant ver.1.22474487139"
         case .woLong:            return "…/steamapps/common/WoLongFallenDynasty"
+        case .kingdomHearts28:
+            return "…/steamapps/common/KINGDOM HEARTS HD 2.8 Final Chapter Prologue"
         }
     }
 
@@ -242,7 +250,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         switch self {
         case .dynastyWarriors, .personaStrikers,
              .nioh, .nioh2, .nioh3,
-             .nierReplicant, .woLong:            return [.videoBridge]
+             .nierReplicant, .woLong, .kingdomHearts28: return [.videoBridge]
         default:                                 return [.runtime]
         }
     }
@@ -266,6 +274,11 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         /* The only one that also writes a registry key: its carrier is a DLL
          * Wine implements, so an override is needed for ours to load at all. */
         case .nierReplicant:   return "install-nier-bridge.sh"
+        /* The second one to write a registry key, and for the same reason: it
+         * rides dinput8 too. Only Dream Drop Distance is fixed -- the 0.2
+         * Birth by Sleep half of the package plays its cutscenes through
+         * CriWare, which never reaches Media Foundation. */
+        case .kingdomHearts28: return "install-kh3d-bridge.sh"
         default:               return "install-runtime-fix.sh"
         }
     }
@@ -329,7 +342,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         // nioh.exe and nioh2.exe are distinct names, so the wrong one of the
         // pair fails to match rather than being accepted as the other.
         if self == .nioh || self == .nioh2 || self == .nioh3
-            || self == .nierReplicant || self == .woLong {
+            || self == .nierReplicant || self == .woLong || self == .kingdomHearts28 {
             guard let exe = executable else { return nil }
             var candidates = [url]
             if let subs = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
@@ -408,6 +421,11 @@ enum Title {
         }
         for c in candidates where fm.fileExists(atPath: c.appendingPathComponent("WoLong.exe").path) {
             return .bridgeGame(c, .woLong)
+        }
+        for c in candidates
+        where fm.fileExists(
+            atPath: c.appendingPathComponent("KINGDOM HEARTS Dream Drop Distance.exe").path) {
+            return .bridgeGame(c, .kingdomHearts28)
         }
         if let g = GameFolder.locate(from: url) { return .unrealVP9(g) }
         return nil
@@ -2848,7 +2866,7 @@ extension SupportedGame {
         /// because it was being looked for in the Unreal place.
         switch self {
         case .dynastyWarriors, .personaStrikers, .nioh, .nioh2, .nioh3,
-             .nierReplicant, .woLong:
+             .nierReplicant, .woLong, .kingdomHearts28:
             return FileManager.default.fileExists(
                 atPath: folder.appendingPathComponent(exe).path)
         default:

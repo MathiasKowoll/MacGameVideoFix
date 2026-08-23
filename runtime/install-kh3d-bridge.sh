@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
 #
-# Install the NieR Replicant ver.1.22474487139 video bridge.
+# Install the KINGDOM HEARTS Dream Drop Distance video bridge.
 #
-#     install-nier-bridge.sh <game folder>            install
-#     install-nier-bridge.sh <game folder> --status   report
-#     install-nier-bridge.sh <game folder> --restore  undo
+#     install-kh3d-bridge.sh <game folder>            install
+#     install-kh3d-bridge.sh <game folder> --status   report
+#     install-kh3d-bridge.sh <game folder> --restore  undo
 #
-# This one is different from the other nine, in two ways worth knowing before
-# running it.
+# The folder is the KINGDOM HEARTS HD 2.8 Final Chapter Prologue one -- the
+# folder holding "KINGDOM HEARTS Dream Drop Distance.exe", not the launcher's
+# parent and not the 0.2 Birth by Sleep subfolder.
 #
-# THE CARRIER IS NOT THE GAME'S. NieR ships exactly one DLL of its own,
-# steam_api64.dll, and nothing here rides on Steam's API or re-exports a
-# Steamworks entry point. So the bridge rides on dinput8.dll, which the game
-# imports and which has five exports and nothing to do with rendering. The
-# original is CrossOver's own: this script copies it out of your bottle and
-# beside the game as dinput8_real.dll. Nothing is redistributed -- the copy is
-# your file -- but it is a copy, so re-run this after a CrossOver upgrade if
-# input ever misbehaves.
+# This fixes Dream Drop Distance only. 0.2 Birth by Sleep ships in the same
+# package but plays its cutscenes through CriWare Sofdec (.usm), which never
+# touches Media Foundation, so this bridge has nothing to do there.
+#
+# THE CARRIER IS NOT THE GAME'S, as with NieR. The only DLL beside the
+# executable is steam_api64.dll, and nothing here rides on Steam's API or
+# re-exports a Steamworks entry point. So the bridge rides on dinput8.dll,
+# which the game imports and which has five exports and nothing to do with
+# rendering. The original is CrossOver's own: this script copies it out of your
+# bottle and beside the game as dinput8_real.dll. Nothing is redistributed --
+# the copy is your file -- but it is a copy, so re-run this after a CrossOver
+# upgrade if input ever misbehaves.
 #
 # IT WRITES ONE REGISTRY KEY. Wine implements dinput8 itself and prefers its
 # own build, so a DLL sitting beside the game is never loaded. The override
@@ -27,7 +32,7 @@
 
 set -euo pipefail
 
-usage() { sed -n '3,25p' "$0" >&2; exit 1; }
+usage() { sed -n '3,30p' "$0" >&2; exit 1; }
 [ $# -ge 1 ] || usage
 
 GAME="$1"
@@ -35,10 +40,18 @@ MODE="${2:---install}"
 if [ "${MGVF_STATUS_ONLY:-0}" = 1 ]; then MODE=--status; fi
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
-EXE_NAME='NieR Replicant ver.1.22474487139.exe'
+# Two executables, because two of them play video.
+#
+# Dream Drop Distance plays the game's cutscenes. The launcher plays KINGDOM
+# HEARTS chi Back Cover, the film in the package, out of its own MOVIE folder --
+# measured, the bridge engages inside the launcher process. It loads the DLL
+# beside it today without being told to, but that is Wine's default load order
+# rather than anything this script arranged, so say it out loud instead.
+EXE_NAMES=('KINGDOM HEARTS Dream Drop Distance.exe' 'KINGDOM HEARTS HD 2.8 Launcher.exe')
+EXE_NAME="${EXE_NAMES[0]}"
 LIVE="$GAME/dinput8.dll"
 REAL="$GAME/dinput8_real.dll"
-PROXY="$HERE/dinput8-nier.dll"
+PROXY="$HERE/dinput8-kh3d.dll"
 EXPORTS="$HERE/pe.py"
 MARKER='dwo-video-bridge.log'
 
@@ -46,13 +59,10 @@ is_ours() { [ -f "$1" ] && LC_ALL=C grep -qa "$MARKER" "$1"; }
 
 [ -f "$GAME/$EXE_NAME" ] || {
   echo "error: no '$EXE_NAME' in $GAME" >&2
-  echo "       Pick the folder NieR Replicant is installed in." >&2
+  echo "       Pick the KINGDOM HEARTS HD 2.8 Final Chapter Prologue folder." >&2
   exit 1
 }
 
-# The bottle holding this game, and the CrossOver that runs it. Both are needed
-# for the registry override; the bottle is also where the original dinput8
-# comes from.
 BOTTLES="$HOME/Library/Application Support/CrossOver/Bottles"
 
 # Which bottles can actually run this copy of the game.
@@ -122,9 +132,11 @@ case "$MODE" in
   if CX="$(find_crossover)"; then
     while read -r b; do
       [ -n "$b" ] || continue
-      "$CX/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe delete \
-        "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$EXE_NAME\\DllOverrides" \
-        /v dinput8 /f >/dev/null 2>&1 || true
+      for exe in "${EXE_NAMES[@]}"; do
+        "$CX/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe delete \
+          "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$exe\\DllOverrides" \
+          /v dinput8 /f >/dev/null 2>&1 || true
+      done
     done < <(find_bottles || true)
   fi
   echo "restored — the bridge and the dinput8 override are gone"
@@ -152,8 +164,6 @@ CX="$(find_crossover)" || {
 echo "      bottle: $(basename "$BOTTLE")"
 
 echo "[2/4] taking a copy of the bottle's own dinput8"
-# Never over a proxy: if $LIVE is already ours, $REAL would be overwritten with
-# the proxy and the original lost for good.
 if is_ours "$LIVE"; then
   echo "error: $LIVE is already a proxy but $REAL is gone." >&2
   echo "       Verify the game files in Steam, then run this again." >&2
@@ -186,10 +196,14 @@ echo "[4/4] telling Wine to prefer it, for this game only"
 wrote=0
 while read -r b; do
   [ -n "$b" ] || continue
-  "$CX/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe add \
-    "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$EXE_NAME\\DllOverrides" \
-    /v dinput8 /d "native,builtin" /f >/dev/null 2>&1 || continue
-  LC_ALL=C grep -qa "$EXE_NAME" "$b/user.reg" 2>/dev/null || continue
+  ok=0
+  for exe in "${EXE_NAMES[@]}"; do
+    "$CX/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe add \
+      "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$exe\\DllOverrides" \
+      /v dinput8 /d "native,builtin" /f >/dev/null 2>&1 || continue
+    LC_ALL=C grep -qa "$exe" "$b/user.reg" 2>/dev/null && ok=1
+  done
+  [ "$ok" = 1 ] || continue
   echo "      $(basename "$b")"
   wrote=$((wrote + 1))
 done < <(find_bottles || true)

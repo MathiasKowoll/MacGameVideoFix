@@ -54,13 +54,51 @@ is_ours() { [ -f "$1" ] && LC_ALL=C grep -qa "$MARKER" "$1"; }
 # for the registry override; the bottle is also where the original dinput8
 # comes from.
 BOTTLES="$HOME/Library/Application Support/CrossOver/Bottles"
-find_bottle() {
-  local b
+
+# Which bottles can actually run this copy of the game.
+#
+# Picking the first bottle that happens to have a dinput8.dll is wrong: a Mac
+# can hold several, and the override has to land in the one the game is
+# launched from. So match on the Steam library the game sits in -- every bottle
+# whose libraryfolders.vdf lists it is a candidate, and each gets the override.
+# Naming them all is deliberate: the user may switch bottles between runs, and
+# an override for one executable is inert in a bottle that never runs it.
+find_bottles() {
+  local b vdf lib key hit=0
+  # The library root, as a slash-free lowercase key: libraryfolders.vdf writes
+  # it as Z:\Volumes\Disk\Library, doubling every separator, so compare with
+  # all separators removed and the escaping stops mattering.
+  lib="${GAME%/steamapps/common/*}"
+  key="$(printf '%s' "${lib#/}" | tr -d '/\' | tr '[:upper:]' '[:lower:]')"
+  if [ "$lib" != "$GAME" ] && [ -n "$key" ]; then
+    for b in "$BOTTLES"/*/; do
+      [ -f "$b/drive_c/windows/system32/dinput8.dll" ] || continue
+      vdf="$(find "$b/drive_c" -maxdepth 7 -iname libraryfolders.vdf 2>/dev/null | head -1)"
+      [ -n "$vdf" ] || continue
+      LC_ALL=C tr -d '/\' < "$vdf" | tr '[:upper:]' '[:lower:]' \
+        | LC_ALL=C grep -qaF "$key" || continue
+      printf '%s
+' "${b%/}"; hit=1
+    done
+  fi
+  [ "$hit" = 1 ] && return 0
+  # Not a Steam layout, or no bottle claims the library: fall back to any
+  # bottle that could supply a dinput8 at all.
   for b in "$BOTTLES"/*/; do
     [ -f "$b/drive_c/windows/system32/dinput8.dll" ] || continue
-    printf '%s' "${b%/}"; return 0
+    printf '%s
+' "${b%/}"; return 0
   done
   return 1
+}
+# The first of them, for the things that need exactly one: the copy of the
+# original dinput8. Not "find_bottles | head -1" -- head closes the pipe, and
+# under pipefail the SIGPIPE that follows reads as a failure to find anything.
+find_bottle() {
+  local out
+  out="$(find_bottles)" || return 1
+  [ -n "$out" ] || return 1
+  printf '%s' "${out%%$'\n'*}"
 }
 find_crossover() {
   local a
@@ -81,10 +119,13 @@ case "$MODE" in
   ;;
 --restore)
   rm -f "$LIVE" "$REAL"
-  if BOTTLE="$(find_bottle)" && CX="$(find_crossover)"; then
-    "$CX/bin/wine" --bottle "$(basename "$BOTTLE")" --cx-app reg.exe delete \
-      "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$EXE_NAME\\DllOverrides" \
-      /v dinput8 /f >/dev/null 2>&1 || true
+  if CX="$(find_crossover)"; then
+    while read -r b; do
+      [ -n "$b" ] || continue
+      "$CX/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe delete \
+        "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$EXE_NAME\\DllOverrides" \
+        /v dinput8 /f >/dev/null 2>&1 || true
+    done < <(find_bottles || true)
   fi
   echo "restored — the bridge and the dinput8 override are gone"
   exit 0
@@ -142,14 +183,22 @@ fi
 cp "$PROXY" "$LIVE" || { echo "error: could not install the bridge" >&2; rm -f "$REAL"; exit 1; }
 
 echo "[4/4] telling Wine to prefer it, for this game only"
-"$CX/bin/wine" --bottle "$(basename "$BOTTLE")" --cx-app reg.exe add \
-  "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$EXE_NAME\\DllOverrides" \
-  /v dinput8 /d "native,builtin" /f >/dev/null 2>&1 || {
-    echo "error: the registry override could not be written." >&2
-    echo "       Without it Wine loads its own dinput8 and the bridge never runs." >&2
-    rm -f "$LIVE"; mv -f "$REAL" "$LIVE" 2>/dev/null || true
-    exit 1
-  }
+wrote=0
+while read -r b; do
+  [ -n "$b" ] || continue
+  "$CX/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe add \
+    "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$EXE_NAME\\DllOverrides" \
+    /v dinput8 /d "native,builtin" /f >/dev/null 2>&1 || continue
+  LC_ALL=C grep -qa "$EXE_NAME" "$b/user.reg" 2>/dev/null || continue
+  echo "      $(basename "$b")"
+  wrote=$((wrote + 1))
+done < <(find_bottles || true)
+if [ "$wrote" = 0 ]; then
+  echo "error: the registry override could not be written to any bottle." >&2
+  echo "       Without it Wine loads its own dinput8 and the bridge never runs." >&2
+  rm -f "$LIVE"; mv -f "$REAL" "$LIVE" 2>/dev/null || true
+  exit 1
+fi
 echo
 echo "installed"
 echo "  the video bridge is in place, and dinput8 is overridden for this game only"

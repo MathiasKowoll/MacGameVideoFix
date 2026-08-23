@@ -199,6 +199,33 @@ static const GUID iid_dxgi_buffer   = { 0xe7174cfa, 0x1c9e, 0x48b1,
 /* Set once OpenSharedHandle is watched, so nothing hands out a handle only
  * that hook can make sense of. */
 static BOOL d3d12_bridge_armed;
+/* The D3D11 texture the game asked to share: its shape, not the clip's. */
+static UINT share_width, share_height, share_format;
+
+/*
+ * Paint the bridge texture a flat colour instead of the frame.
+ *
+ * A diagnostic, not a feature, and compiled in rather than read from the
+ * environment because a game started from a running Steam never sees a
+ * variable set afterwards. It answers one question that nothing else here can:
+ * whether what this bridge writes reaches the screen at all. If the screen
+ * turns magenta the delivery works and the frame's contents or layout are
+ * wrong; if it does not, nothing this bridge writes is ever displayed.
+ */
+#define BRIDGE_TEST_MAGENTA 0
+
+/*
+ * Let the IMFDXGIBuffer query fail, as it would on a real software sample.
+ *
+ * Answering it is right for a game that wants a texture and will share it on
+ * to D3D12 -- DYNASTY WARRIORS and Nioh 3 both do. Kingdom Hearts does not:
+ * it creates its own NV12 plane pair in D3D12, R8 for luma at full size and
+ * R8G8 for chroma at half, and fills them from the sample's bytes. Handing it
+ * a BGRA texture where it expects an NV12 one sends it down a branch whose
+ * planes nothing fills, which is a green screen and no crash -- the same shape
+ * of mistake as offering NieR Replicant a video device it could not use.
+ */
+#define BRIDGE_TEST_REFUSE_DXGI_BUFFER 0
 
 struct stub_object { void **vtbl; LONG refcount; };
 
@@ -206,7 +233,6 @@ static struct stub_object stub_video_device, stub_video_context;
 
 /* Offer the video device even with no D3D12 behind it. Diagnostic only: it is
  * how a title is asked what it would do with one. */
-static BOOL force_video_device;
 static struct stub_object stub_vp_enumerator, stub_vp_processor;
 static struct stub_object stub_vp_input_view, stub_vp_output_view;
 static struct stub_object stub_dxgi_buffer;
@@ -240,6 +266,54 @@ static D3D11_VIDEO_PROCESSOR_CONTENT_DESC vp_content_desc;
  * its frames, and which calls it makes. Bounded, so a per-frame call cannot
  * fill the log.
  */
+/*
+ * An interface id as text.
+ *
+ * The bridge only recognises the handful of GUIDs it acts on, so every other
+ * query is invisible -- and on a title that takes an unknown route, the
+ * unrecognised ones are exactly the interesting ones. Four rotating buffers so
+ * a single log line can carry more than one.
+ */
+static const char *guid_text_(REFIID iid)
+{
+    static char buf[4][40];
+    static LONG turn;
+    char *out = buf[InterlockedIncrement(&turn) & 3];
+    const GUID *g = (const GUID *)iid;
+
+    if (!g) return "(null)";
+    _snprintf(out, sizeof(buf[0]), "%08lx-%04x-%04x-%02x%02x%02x%02x%02x%02x%02x%02x",
+              (unsigned long)g->Data1, g->Data2, g->Data3,
+              g->Data4[0], g->Data4[1], g->Data4[2], g->Data4[3],
+              g->Data4[4], g->Data4[5], g->Data4[6], g->Data4[7]);
+    return out;
+}
+
+/*
+ * Has this resource shape been seen before?
+ *
+ * Bounding by call count is the wrong bound here: a renderer creates thousands
+ * of textures and reuses a handful of shapes, so the first two dozen calls are
+ * all interface art and the one that matters -- the surface the size of the
+ * clip -- is created later and never reaches the log. Keyed on width, height
+ * and format instead, every distinct shape is reported exactly once and the
+ * total stays bounded by the number of shapes.
+ */
+static BOOL shape_is_new(UINT tag, UINT w, UINT h, UINT fmt)
+{
+    static struct { UINT tag, w, h, fmt; } seen[96];
+    static LONG count;
+    LONG i, n = count;
+
+    for (i = 0; i < n && i < (LONG)(sizeof(seen) / sizeof(seen[0])); ++i)
+        if (seen[i].tag == tag && seen[i].w == w && seen[i].h == h && seen[i].fmt == fmt)
+            return FALSE;
+    if (n >= (LONG)(sizeof(seen) / sizeof(seen[0]))) return FALSE;
+    seen[n].tag = tag; seen[n].w = w; seen[n].h = h; seen[n].fmt = fmt;
+    count = n + 1;
+    return TRUE;
+}
+
 static void stub_called(const char *what)
 {
     static LONG told;
@@ -640,6 +714,55 @@ static D3D12_PLACED_SUBRESOURCE_FOOTPRINT bridge_footprint;
 static UINT bridge_rows;
 static UINT64 bridge_row_bytes, bridge_total_bytes;
 
+/*
+ * Carry the frame as NV12, the way the decoder would have handed it over.
+ *
+ * The bridge has always published a B8G8R8A8 texture and converted into it,
+ * which is what a game wanting a picture needs. Kingdom Hearts wants the
+ * decoder's own surface instead: it opens the shared texture in D3D12 and
+ * copies plane 0 and plane 1 out of it into an R8 at full size and an R8G8 at
+ * half -- measured, 1920x1080 and 960x540 -- then converts in its own shader.
+ * Those copies read nothing from a BGRA texture, so the planes stay at zero,
+ * and zero luma with zero chroma is the green screen.
+ *
+ * Two subresources, two footprints, two copies. NV12 needs even dimensions.
+ */
+/*
+ * The plane textures a game creates for itself.
+ *
+ * Kingdom Hearts Dream Drop Distance expects the decoder's NV12 surface and
+ * pulls its two planes into resources of its own: R8_UNORM at the clip's size
+ * for luma, R8G8_UNORM at half for chroma. Those copies read nothing from the
+ * B8G8R8A8 texture this bridge publishes, so both planes stay at zero, and
+ * zero luma with zero chroma is exactly the green screen.
+ *
+ * D3DMetal cannot be handed an NV12 texture to copy from -- the request is
+ * fatal, see bridge_create -- so the frame goes in the other direction: this
+ * writes the two planes itself, into the game's own resources, and the game's
+ * shader converts them as it always did. Nothing here engages unless a game
+ * creates that exact pair at the clip's dimensions.
+ */
+static ID3D12Resource *plane_y, *plane_uv, *plane_upload;
+static D3D12_RESOURCE_DESC plane_y_desc, plane_uv_desc;
+static D3D12_PLACED_SUBRESOURCE_FOOTPRINT plane_y_fp, plane_uv_fp;
+static UINT64 plane_upload_size;
+static BOOL plane_ready;
+static ID3D12Device *bridge_device;
+static void plane_prepare(ID3D12Device *device);
+static void plane_write(const BYTE *nv12, UINT stride, UINT width, UINT height);
+
+/* A new plane needs new footprints and a correctly sized upload buffer. */
+static void plane_rearm(void)
+{
+    plane_ready = FALSE;
+    if (plane_upload) { ID3D12Resource_Release(plane_upload); plane_upload = NULL; }
+}
+
+static D3D12_PLACED_SUBRESOURCE_FOOTPRINT bridge_plane[2];
+static UINT bridge_plane_rows[2];
+static UINT64 bridge_plane_bytes[2];
+static BOOL bridge_is_nv12;
+
 #define BRIDGE_CHECK(call, what)                                    \
     do {                                                            \
         HRESULT _hr = (call);                                       \
@@ -657,19 +780,39 @@ static HRESULT bridge_create(ID3D12Device *device, UINT width, UINT height)
 
     heap.Type = D3D12_HEAP_TYPE_DEFAULT;
     desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    desc.Width = width;
-    desc.Height = height;
+    desc.Width = width & ~1u;
+    desc.Height = height & ~1u;
     desc.DepthOrArraySize = 1;
     desc.MipLevels = 1;
+    /*
+     * Not NV12, and not by choice.
+     *
+     * A shared NV12 texture is what the decoder would have published and what
+     * a game reading plane 0 and plane 1 out of it needs. D3DMetal does not
+     * refuse the request -- CreateCommittedResource with DXGI_FORMAT_NV12 does
+     * not return an error, it takes the process down, with no exception this
+     * bridge could catch and nothing in the log after the call. Measured on
+     * Kingdom Hearts Dream Drop Distance: the last line written is the shared
+     * handle being opened.
+     *
+     * So the frame reaches such a game the other way round, by writing into
+     * the plane textures it creates for itself. See plane_watch.
+     */
+    desc.Width = width;
+    desc.Height = height;
     desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
     desc.SampleDesc.Count = 1;
     desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    bridge_is_nv12 = FALSE;
     BRIDGE_CHECK(ID3D12Device_CreateCommittedResource(device, &heap,
             D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COMMON, NULL,
             &IID_ID3D12Resource, (void **)&bridge_texture), "texture");
 
-    ID3D12Device_GetCopyableFootprints(device, &desc, 0, 1, 0, &bridge_footprint,
-            &bridge_rows, &bridge_row_bytes, &bridge_total_bytes);
+    ID3D12Device_GetCopyableFootprints(device, &desc, 0, bridge_is_nv12 ? 2 : 1, 0,
+            bridge_plane, bridge_plane_rows, bridge_plane_bytes, &bridge_total_bytes);
+    bridge_footprint = bridge_plane[0];
+    bridge_rows = bridge_plane_rows[0];
+    bridge_row_bytes = bridge_plane_bytes[0];
 
     heap.Type = D3D12_HEAP_TYPE_UPLOAD;
     memset(&desc, 0, sizeof(desc));
@@ -708,6 +851,9 @@ static HRESULT bridge_create(ID3D12Device *device, UINT width, UINT height)
 
 static void bridge_destroy(void)
 {
+    plane_rearm();
+    if (plane_y)  { ID3D12Resource_Release(plane_y);  plane_y = NULL; }
+    if (plane_uv) { ID3D12Resource_Release(plane_uv); plane_uv = NULL; }
     if (bridge_event) { CloseHandle(bridge_event); bridge_event = NULL; }
     if (bridge_fence)   { ID3D12Fence_Release(bridge_fence); bridge_fence = NULL; }
     if (bridge_list)    { ID3D12GraphicsCommandList_Release(bridge_list); bridge_list = NULL; }
@@ -725,10 +871,52 @@ static void bridge_upload_frame(const BYTE *nv12, UINT stride, UINT width, UINT 
     BYTE *mapped = NULL;
 
     if (!bridge_texture || !bridge_upload || !bridge_list) return;
-    if (width != texture_width || height != texture_height) return;
+
+    /* A game that pulls the planes out for itself is served by writing them,
+     * not by the picture below. Both can run: they touch different resources. */
+    if (bridge_device)
+    {
+        plane_prepare(bridge_device);
+        plane_write(nv12, stride, width, height);
+    }
+    if (width > texture_width || height > texture_height) return;
     if (FAILED(ID3D12Resource_Map(bridge_upload, 0, NULL, (void **)&mapped)) || !mapped)
         return;
-    nv12_to_bgra(nv12, stride, mapped, bridge_footprint.Footprint.RowPitch, width, height);
+    if (bridge_is_nv12)
+    {
+        /*
+         * Straight through, plane by plane. No conversion: the game does that
+         * in its own shader, which is the whole reason it wanted the decoder's
+         * surface rather than a picture.
+         */
+        const BYTE *uv = nv12 + (size_t)stride * height;
+        UINT y;
+        for (y = 0; y < height; ++y)
+            memcpy(mapped + bridge_plane[0].Offset
+                   + (size_t)y * bridge_plane[0].Footprint.RowPitch,
+                   nv12 + (size_t)y * stride, width);
+        for (y = 0; y < height / 2; ++y)
+            memcpy(mapped + bridge_plane[1].Offset
+                   + (size_t)y * bridge_plane[1].Footprint.RowPitch,
+                   uv + (size_t)y * stride, width);
+    }
+    else
+        nv12_to_bgra(nv12, stride, mapped, bridge_footprint.Footprint.RowPitch, width, height);
+#if BRIDGE_TEST_MAGENTA
+    if (!bridge_is_nv12)
+    {
+        static LONG told;
+        UINT pitch = bridge_footprint.Footprint.RowPitch, y, x;
+        for (y = 0; y < height; ++y)
+        {
+            UINT32 *row = (UINT32 *)(mapped + (size_t)y * pitch);
+            for (x = 0; x < width; ++x) row[x] = 0xFFFF00FF;   /* BGRA magenta */
+        }
+        if (InterlockedIncrement(&told) == 1)
+            logf_("TEST: filling the bridge texture with magenta, %ux%u pitch %u",
+                  width, height, pitch);
+    }
+#endif
     ID3D12Resource_Unmap(bridge_upload, 0, NULL);
 
     ID3D12CommandAllocator_Reset(bridge_alloc);
@@ -737,8 +925,16 @@ static void bridge_upload_frame(const BYTE *nv12, UINT stride, UINT width, UINT 
     dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
     src.pResource = bridge_upload;
     src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-    src.PlacedFootprint = bridge_footprint;
-    ID3D12GraphicsCommandList_CopyTextureRegion(bridge_list, &dst, 0, 0, 0, &src, NULL);
+    {
+        UINT plane, planes = bridge_is_nv12 ? 2u : 1u;
+        for (plane = 0; plane < planes; ++plane)
+        {
+            dst.SubresourceIndex = plane;
+            src.PlacedFootprint = bridge_plane[plane];
+            ID3D12GraphicsCommandList_CopyTextureRegion(bridge_list, &dst, 0, 0, 0,
+                                                        &src, NULL);
+        }
+    }
     ID3D12GraphicsCommandList_Close(bridge_list);
     ID3D12CommandQueue_ExecuteCommandLists(bridge_queue, 1,
             (ID3D12CommandList *const *)&bridge_list);
@@ -807,6 +1003,21 @@ static HRESULT (WINAPI *real_buffer_qi)(void *, REFIID, void **);
 
 static HRESULT WINAPI buffer_qi(void *self, REFIID iid, void **out)
 {
+    {
+        static LONG told;
+        if (InterlockedIncrement(&told) <= 6)
+            logf_("sample buffer QI %s%s", guid_text_(iid),
+                  IsEqualGUID(iid, &iid_dxgi_buffer) ? "   << IMFDXGIBuffer" : "");
+    }
+#if BRIDGE_TEST_REFUSE_DXGI_BUFFER
+    if (IsEqualGUID(iid, &iid_dxgi_buffer))
+    {
+        static LONG told;
+        if (InterlockedIncrement(&told) == 1)
+            logf_("TEST: refusing IMFDXGIBuffer -- the game must fill its own planes");
+        return real_buffer_qi(self, iid, out);
+    }
+#endif
     if (IsEqualGUID(iid, &iid_dxgi_buffer))
     {
         InterlockedIncrement(&stub_dxgi_buffer.refcount);
@@ -830,6 +1041,29 @@ static void upload_frame(IMFSample *sample)
 
     if (!real_buffer_qi)
         real_buffer_qi = patch_vtable_slot(buffer, 0, buffer_qi);
+
+    /*
+     * ConvertToContiguousBuffer may hand back a different object from the one
+     * the sample holds, and the game queries the one it was given. Patching a
+     * vtable covers every instance of that class -- but only that class. Say
+     * which case this is, once, rather than assume.
+     */
+    {
+        static LONG told;
+        if (InterlockedIncrement(&told) <= 2)
+        {
+            IMFMediaBuffer *own = NULL;
+            DWORD count = 0;
+            IMFSample_GetBufferCount(sample, &count);
+            if (SUCCEEDED(IMFSample_GetBufferByIndex(sample, 0, &own)) && own)
+            {
+                logf_("sample: %lu buffer(s), own=%p contiguous=%p -- %s",
+                      (unsigned long)count, (void *)own, (void *)buffer,
+                      own == buffer ? "same object" : "DIFFERENT objects");
+                IMFMediaBuffer_Release(own);
+            }
+        }
+    }
 
     if (FAILED(IMFMediaBuffer_Lock(buffer, &data, NULL, &length)) || !data)
     {
@@ -863,6 +1097,35 @@ static void upload_frame(IMFSample *sample)
             desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
             if (FAILED(ID3D11Device_CreateTexture2D(video_device, &desc, NULL, &frame_texture)))
                 frame_texture = NULL;
+        }
+        /*
+         * Is there a picture in here at all?
+         *
+         * "A sample was delivered" only says the pointer was not null. NieR
+         * Replicant delivered three hundred samples whose luma measured flat
+         * at zero, and the two cases are indistinguishable from outside. A
+         * sparse sweep of the luma plane separates a decode that produced
+         * nothing from a frame that was produced and then lost on its way to
+         * the screen.
+         */
+        {
+            static LONG told;
+            LONG which = InterlockedIncrement(&told);
+            if (which == 1 || which == 30 || which == 120)
+            {
+                UINT x, y, lo = 255, hi = 0;
+                UINT64 sum = 0; UINT count = 0;
+                for (y = 0; y < frame_height; y += 8)
+                    for (x = 0; x < frame_width; x += 8)
+                    {
+                        BYTE v = data[(size_t)y * stride + x];
+                        if (v < lo) lo = v;
+                        if (v > hi) hi = v;
+                        sum += v; ++count;
+                    }
+                logf_("frame [#%ld] luma: average %lu, range %u..%u over %u samples",
+                      which, (unsigned long)(count ? sum / count : 0), lo, hi, count);
+            }
         }
         bridge_upload_frame(data, stride, frame_width, frame_height);
         /*
@@ -999,6 +1262,40 @@ static HRESULT WINAPI reader_read_sample(void *self, DWORD stream, DWORD flags,
 static HRESULT (WINAPI *real_MFCreateAttributes)(IMFAttributes **, UINT32);
 static HRESULT (WINAPI *real_MFCreateSourceReaderFromByteStream)(IMFByteStream *,
         IMFAttributes *, IMFSourceReader **);
+static HRESULT (WINAPI *real_MFCreateSourceReaderFromURL)(const WCHAR *,
+        IMFAttributes *, IMFSourceReader **);
+
+/*
+ * A copy of the game's attributes without the two that demand D3D decoding.
+ * NULL means there was nothing to copy or the copy failed, and the caller must
+ * fall back to the game's own store.
+ */
+static IMFAttributes *strip_d3d_attributes(IMFAttributes *attrs)
+{
+    IMFAttributes *plain = NULL;
+    UINT32 count = 0;
+
+    if (!attrs || !real_MFCreateAttributes) return NULL;
+    IMFAttributes_GetCount(attrs, &count);
+    if (SUCCEEDED(real_MFCreateAttributes(&plain, count + 2)) && plain
+        && SUCCEEDED(IMFAttributes_CopyAllItems(attrs, plain)))
+    {
+        IMFAttributes_DeleteItem(plain, &MF_SOURCE_READER_D3D_MANAGER);
+        IMFAttributes_DeleteItem(plain, &MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS);
+        return plain;
+    }
+    if (plain) IMFAttributes_Release(plain);
+    return NULL;
+}
+
+/* IMFSourceReader: 6 GetCurrentMediaType, 7 SetCurrentMediaType, 9 ReadSample. */
+static void arm_source_reader(IMFSourceReader *reader)
+{
+    if (!reader || real_read_sample) return;
+    real_get_current_type = patch_vtable_slot(reader, 6, reader_get_current_type);
+    real_set_media_type   = patch_vtable_slot(reader, 7, reader_set_media_type);
+    real_read_sample      = patch_vtable_slot(reader, 9, reader_read_sample);
+}
 
 /*
  * Ask for software decoding.
@@ -1012,33 +1309,55 @@ static HRESULT (WINAPI *real_MFCreateSourceReaderFromByteStream)(IMFByteStream *
 static HRESULT WINAPI my_MFCreateSourceReaderFromByteStream(IMFByteStream *stream,
         IMFAttributes *attrs, IMFSourceReader **reader)
 {
+    IMFAttributes *plain = strip_d3d_attributes(attrs);
     HRESULT hr = E_FAIL;
-    IMFAttributes *plain = NULL;
-    UINT32 count = 0;
 
-    if (attrs && real_MFCreateAttributes)
+    if (plain)
     {
-        IMFAttributes_GetCount(attrs, &count);
-        if (SUCCEEDED(real_MFCreateAttributes(&plain, count + 2)) && plain
-            && SUCCEEDED(IMFAttributes_CopyAllItems(attrs, plain)))
-        {
-            IMFAttributes_DeleteItem(plain, &MF_SOURCE_READER_D3D_MANAGER);
-            IMFAttributes_DeleteItem(plain, &MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS);
-            hr = real_MFCreateSourceReaderFromByteStream(stream, plain, reader);
-        }
-        if (plain) IMFAttributes_Release(plain);
+        hr = real_MFCreateSourceReaderFromByteStream(stream, plain, reader);
+        IMFAttributes_Release(plain);
     }
     if (FAILED(hr))
         hr = real_MFCreateSourceReaderFromByteStream(stream, attrs, reader);
 
-    if (SUCCEEDED(hr) && reader && *reader && !real_read_sample)
+    if (SUCCEEDED(hr) && reader) arm_source_reader(*reader);
+    return hr;
+}
+
+/*
+ * The same door, opened by name instead of by stream. Kingdom Hearts HD 2.8
+ * hands Media Foundation a path; NieR hands it a stream it has already
+ * decrypted. Both need the D3D attributes gone.
+ */
+static HRESULT WINAPI my_MFCreateSourceReaderFromURL(const WCHAR *url,
+        IMFAttributes *attrs, IMFSourceReader **reader)
+{
+    IMFAttributes *plain = strip_d3d_attributes(attrs);
+    BOOL software = FALSE;
+    HRESULT hr = E_FAIL;
+    char name[260];
+    size_t i = 0;
+
+    if (url)
+        while (i < sizeof(name) - 1 && url[i])
+        {
+            name[i] = (url[i] > 31 && url[i] < 127) ? (char)url[i] : '?';
+            i++;
+        }
+    name[i] = 0;
+
+    if (plain)
     {
-        /* IMFSourceReader: 6 GetCurrentMediaType, 7 SetCurrentMediaType,
-         * 9 ReadSample. */
-        real_get_current_type = patch_vtable_slot(*reader, 6, reader_get_current_type);
-        real_set_media_type   = patch_vtable_slot(*reader, 7, reader_set_media_type);
-        real_read_sample      = patch_vtable_slot(*reader, 9, reader_read_sample);
+        hr = real_MFCreateSourceReaderFromURL(url, plain, reader);
+        IMFAttributes_Release(plain);
+        software = SUCCEEDED(hr);
     }
+    if (FAILED(hr))
+        hr = real_MFCreateSourceReaderFromURL(url, attrs, reader);
+
+    logf_("MFCreateSourceReaderFromURL(%s) -> 0x%08lx%s", name, (unsigned long)hr,
+          software ? " [software decode]" : "");
+    if (SUCCEEDED(hr) && reader) arm_source_reader(*reader);
     return hr;
 }
 
@@ -1105,26 +1424,35 @@ static HRESULT (WINAPI *real_device_qi)(void *, REFIID, void **);
 static HRESULT (WINAPI *real_context_qi)(void *, REFIID, void **);
 
 /*
- * Only offer an ID3D11VideoDevice the bridge can actually back.
+ * Offer the ID3D11VideoDevice. Both halves are backed now.
  *
  * The stub is not a courtesy: it exists so a game will drive the video
- * processor whose output this bridge then presents through D3D12. DYNASTY
- * WARRIORS and Nioh 3 work that way. NieR Replicant has no D3D12 at all, so
- * that half can never engage, and answering yes there sends the game down a
- * path whose frames nothing collects -- a black screen with sound rather than
- * a crash.
+ * processor whose output this bridge presents. Where a D3D12 device is armed
+ * -- DYNASTY WARRIORS, Nioh 3, Wo Long, Kingdom Hearts -- the frame goes out
+ * that way. Where there is none, VideoProcessorBlt writes the converted frame
+ * into the game's own target with UpdateSubresource, which is how NieR
+ * Replicant is served.
  *
- * Gating on the D3D12 side being armed says exactly that, and it keeps the
- * decision out of a per-game switch: a title with no D3D12 device is told the
- * truth and can take its own fallback. NieR resolves MFCopyImage and
- * MFGetStrideForBitmapInfoHeader, so it appears to have one.
+ * This used to be gated on the D3D12 side being armed, and the reason was
+ * sound when it was written: the D3D11 delivery did not exist yet, so
+ * answering yes with nothing behind it was a black screen with sound. The
+ * delivery was then written and the gate was not removed. What kept NieR
+ * working after that was MGVF_VIDEO_DEVICE, an environment variable meant for
+ * one experiment -- and nothing in the installer, the app or the bottle ever
+ * set it. So the shipped fix answered "no" on every machine but the one it was
+ * measured on, and NieR played its video to a black screen for everyone else.
  *
- * Ordering holds for the titles that need the stub: both create their D3D12
- * device before anything queries for a video device.
+ * A game with no video path of its own is no worse off: it asked for a video
+ * device, and it gets one that delivers.
  */
 static HRESULT WINAPI device_qi(void *self, REFIID iid, void **out)
 {
-    if (!d3d12_bridge_armed && !force_video_device) return real_device_qi(self, iid, out);
+    {
+        static LONG told;
+        if (InterlockedIncrement(&told) <= 6)
+            logf_("D3D11 device QI %s%s", guid_text_(iid),
+                  IsEqualGUID(iid, &iid_video_device) ? "   << ID3D11VideoDevice" : "");
+    }
     if (IsEqualGUID(iid, &iid_video_device))
     {
         InterlockedIncrement(&stub_video_device.refcount);
@@ -1136,7 +1464,12 @@ static HRESULT WINAPI device_qi(void *self, REFIID iid, void **out)
 
 static HRESULT WINAPI context_qi(void *self, REFIID iid, void **out)
 {
-    if (!d3d12_bridge_armed && !force_video_device) return real_context_qi(self, iid, out);
+    {
+        static LONG told;
+        if (InterlockedIncrement(&told) <= 6)
+            logf_("D3D11 context QI %s%s", guid_text_(iid),
+                  IsEqualGUID(iid, &iid_video_context) ? "   << ID3D11VideoContext" : "");
+    }
     if (IsEqualGUID(iid, &iid_video_context))
     {
         InterlockedIncrement(&stub_video_context.refcount);
@@ -1154,6 +1487,12 @@ static HRESULT (WINAPI *real_texture_qi)(void *, REFIID, void **);
 static HRESULT WINAPI res_get_shared_handle(void *self, HANDLE *handle)
 {
     HRESULT hr = real_res_get_shared_handle(self, handle);
+    {
+        static LONG told;
+        if (InterlockedIncrement(&told) <= 12)
+            logf_("GetSharedHandle -> 0x%08lx%s", (unsigned long)hr,
+                  (FAILED(hr) && d3d12_bridge_armed) ? "   (answering BRIDGE_HANDLE)" : "");
+    }
     /*
      * Only invent a handle if the side that can recognise it is armed.
      *
@@ -1171,6 +1510,11 @@ static HRESULT WINAPI res_get_shared_handle(void *self, HANDLE *handle)
 static HRESULT WINAPI texture_qi(void *self, REFIID iid, void **out)
 {
     HRESULT hr = real_texture_qi(self, iid, out);
+    {
+        static LONG told;
+        if (InterlockedIncrement(&told) <= 6)
+            logf_("texture QI %s -> 0x%08lx", guid_text_(iid), (unsigned long)hr);
+    }
     if (IsEqualGUID(iid, &iid_dxgi_resource) && SUCCEEDED(hr) && out && *out
         && !real_res_get_shared_handle)
         real_res_get_shared_handle = patch_vtable_slot(*out, 8, res_get_shared_handle);
@@ -1197,13 +1541,28 @@ static HRESULT WINAPI device_create_texture2d(void *self, const void *desc,
     {
         static LONG told;
         BOOL nv12 = (d[4] == 103);   /* DXGI_FORMAT_NV12 */
-        if ((FAILED(hr) || nv12) && InterlockedIncrement(&told) <= 24)
+        /* Video-sized textures too: on a title that takes an unknown route,
+         * where it asks for a surface the size of the clip is the evidence
+         * that says where the frame was meant to land. */
+        BOOL big  = (d[0] >= 640 && d[1] >= 360);
+        (void)told;
+        if ((FAILED(hr) || nv12 || big) && shape_is_new(11, d[0], d[1], d[4]))
             logf_("CreateTexture2D %ux%u format=%u bind=0x%x misc=0x%x -> 0x%08lx%s",
                   d[0], d[1], d[4], d[8], d[10], (unsigned long)hr,
                   nv12 ? "   << NV12" : "");
     }
     if (SUCCEEDED(hr) && d && texture && *texture && (d[10] & 2) && !real_texture_qi)
+    {
+        /*
+         * This is the surface the game means to share, so this -- not the
+         * decoded frame's size -- is the shape the D3D12 side must match.
+         * Kingdom Hearts asks for 2048x1080 to carry a 1920x1080 clip.
+         */
+        share_width = d[0]; share_height = d[1]; share_format = d[4];
+        logf_("share target: %ux%u format=%u (clip is %ux%u)",
+              d[0], d[1], d[4], frame_width, frame_height);
         real_texture_qi = patch_vtable_slot(*texture, 0, texture_qi);
+    }
     return hr;
 }
 
@@ -1237,9 +1596,165 @@ static HRESULT WINAPI my_D3D11CreateDevice(void *adapter, UINT driver_type, HMOD
 static HRESULT (WINAPI *real_D3D12CreateDevice)(void *, UINT, REFIID, void **);
 static HRESULT (WINAPI *real_open_shared_handle)(void *, HANDLE, REFIID, void **);
 
+/*
+ * D3D12 resources large enough to hold a frame.
+ *
+ * A title that renders in D3D12 may never touch the D3D11 video processor and
+ * never ask for a shared handle: it can create its own committed resource and
+ * expect to fill it. Nothing else in this bridge would see that, and from
+ * outside it looks the same as a frame path that never ran. Log-only, bounded.
+ *
+ * D3D12_RESOURCE_DESC: Width is a UINT64 at offset 16, Height a UINT at 24,
+ * Format a UINT at 32.
+ */
+static HRESULT (WINAPI *real_create_committed)(void *, const void *, UINT,
+        const void *, UINT, const void *, REFIID, void **);
+
+static HRESULT WINAPI d3d12_create_committed(void *self, const void *heap, UINT heap_flags,
+        const void *desc, UINT state, const void *clear, REFIID iid, void **out)
+{
+    HRESULT hr = real_create_committed(self, heap, heap_flags, desc, state, clear,
+                                       iid, out);
+    if (desc)
+    {
+        static LONG told;
+        const char *d = (const char *)desc;
+        UINT w = (UINT)(*(const UINT64 *)(d + 16));
+        UINT h = *(const UINT *)(d + 24);
+        UINT fmt = *(const UINT *)(d + 32);
+        (void)told;
+        (void)told;
+        if (w >= 640 && h >= 360 && shape_is_new(12, w, h, fmt))
+            logf_("D3D12 CreateCommittedResource %ux%u format=%u -> 0x%08lx%s",
+                  w, h, fmt, (unsigned long)hr, fmt == 103 ? "   << NV12" : "");
+
+        if (SUCCEEDED(hr) && out && *out && frame_width && frame_height)
+        {
+            /*
+             * Hold a reference, and take the newest pair.
+             *
+             * Keeping the pointer without a reference is a use-after-free the
+             * moment the game drops the texture between clips, and keeping the
+             * first pair for ever means the second cutscene is written into
+             * resources nothing draws. Both are silent. AddRef fixes the
+             * first; replacing on sight fixes the second.
+             */
+            if (fmt == DXGI_FORMAT_R8_UNORM && w == frame_width && h == frame_height
+                && (ID3D12Resource *)*out != plane_y)
+            {
+                if (plane_y) ID3D12Resource_Release(plane_y);
+                plane_y = (ID3D12Resource *)*out;
+                ID3D12Resource_AddRef(plane_y);
+                memcpy(&plane_y_desc, desc, sizeof(plane_y_desc));
+                plane_rearm();
+                logf_("plane: luma %ux%u", w, h);
+            }
+            else if (fmt == DXGI_FORMAT_R8G8_UNORM && w == frame_width / 2
+                     && h == frame_height / 2 && (ID3D12Resource *)*out != plane_uv)
+            {
+                if (plane_uv) ID3D12Resource_Release(plane_uv);
+                plane_uv = (ID3D12Resource *)*out;
+                ID3D12Resource_AddRef(plane_uv);
+                memcpy(&plane_uv_desc, desc, sizeof(plane_uv_desc));
+                plane_rearm();
+                logf_("plane: chroma %ux%u", w, h);
+            }
+        }
+    }
+    return hr;
+}
+
+static void plane_prepare(ID3D12Device *device)
+{
+    D3D12_HEAP_PROPERTIES heap = { 0 };
+    D3D12_RESOURCE_DESC desc = { 0 };
+    UINT rows = 0;
+    UINT64 row_bytes = 0, y_size = 0, uv_size = 0, uv_offset;
+
+    if (plane_ready || !plane_y || !plane_uv) return;
+
+    ID3D12Device_GetCopyableFootprints(device, &plane_y_desc, 0, 1, 0,
+            &plane_y_fp, &rows, &row_bytes, &y_size);
+    uv_offset = (y_size + D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT - 1)
+                & ~(UINT64)(D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT - 1);
+    ID3D12Device_GetCopyableFootprints(device, &plane_uv_desc, 0, 1, uv_offset,
+            &plane_uv_fp, &rows, &row_bytes, &uv_size);
+    plane_upload_size = uv_offset + uv_size;
+
+    heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = plane_upload_size;
+    desc.Height = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_UNKNOWN;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    if (FAILED(ID3D12Device_CreateCommittedResource(device, &heap,
+            D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_GENERIC_READ, NULL,
+            &IID_ID3D12Resource, (void **)&plane_upload)))
+    {
+        logf_("plane: upload buffer refused, the planes stay empty");
+        if (plane_y)  { ID3D12Resource_Release(plane_y);  plane_y = NULL; }
+        if (plane_uv) { ID3D12Resource_Release(plane_uv); plane_uv = NULL; }
+        return;
+    }
+    plane_ready = TRUE;
+    logf_("plane: writing both planes directly, luma pitch %u chroma pitch %u",
+          plane_y_fp.Footprint.RowPitch, plane_uv_fp.Footprint.RowPitch);
+}
+
+/* Copy queue: every resource is in COMMON there, so no barriers are needed. */
+static void plane_write(const BYTE *nv12, UINT stride, UINT width, UINT height)
+{
+    D3D12_TEXTURE_COPY_LOCATION dst = { 0 }, src = { 0 };
+    const BYTE *uv = nv12 + (size_t)stride * height;
+    BYTE *mapped = NULL;
+    UINT y;
+
+    if (!plane_ready || !bridge_list || !bridge_queue) return;
+    if (FAILED(ID3D12Resource_Map(plane_upload, 0, NULL, (void **)&mapped)) || !mapped)
+        return;
+    for (y = 0; y < height; ++y)
+        memcpy(mapped + plane_y_fp.Offset + (size_t)y * plane_y_fp.Footprint.RowPitch,
+               nv12 + (size_t)y * stride, width);
+    for (y = 0; y < height / 2; ++y)
+        memcpy(mapped + plane_uv_fp.Offset + (size_t)y * plane_uv_fp.Footprint.RowPitch,
+               uv + (size_t)y * stride, width);
+    ID3D12Resource_Unmap(plane_upload, 0, NULL);
+
+    ID3D12CommandAllocator_Reset(bridge_alloc);
+    ID3D12GraphicsCommandList_Reset(bridge_list, bridge_alloc, NULL);
+    src.pResource = plane_upload;
+    src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    dst.pResource = plane_y;  src.PlacedFootprint = plane_y_fp;
+    ID3D12GraphicsCommandList_CopyTextureRegion(bridge_list, &dst, 0, 0, 0, &src, NULL);
+    dst.pResource = plane_uv; src.PlacedFootprint = plane_uv_fp;
+    ID3D12GraphicsCommandList_CopyTextureRegion(bridge_list, &dst, 0, 0, 0, &src, NULL);
+    ID3D12GraphicsCommandList_Close(bridge_list);
+    ID3D12CommandQueue_ExecuteCommandLists(bridge_queue, 1,
+            (ID3D12CommandList *const *)&bridge_list);
+
+    ++bridge_fence_value;
+    if (SUCCEEDED(ID3D12CommandQueue_Signal(bridge_queue, bridge_fence, bridge_fence_value))
+        && ID3D12Fence_GetCompletedValue(bridge_fence) < bridge_fence_value
+        && bridge_event)
+    {
+        ID3D12Fence_SetEventOnCompletion(bridge_fence, bridge_fence_value, bridge_event);
+        WaitForSingleObject(bridge_event, 1000);
+    }
+}
+
 static HRESULT WINAPI d3d12_open_shared_handle(void *self, HANDLE handle,
                                                REFIID iid, void **out)
 {
+    {
+        static LONG told;
+        if (InterlockedIncrement(&told) <= 12)
+            logf_("D3D12 OpenSharedHandle %p %s%s", handle, guid_text_(iid),
+                  handle == BRIDGE_HANDLE ? "   << ours" : "");
+    }
     if (handle == BRIDGE_HANDLE)
     {
         HRESULT hr;
@@ -1249,7 +1764,19 @@ static HRESULT WINAPI d3d12_open_shared_handle(void *self, HANDLE handle,
 
         EnterCriticalSection(&frame_lock);
         if (!bridge_texture && frame_width && frame_height)
+        {
+            /*
+             * The size the game asked to share, when it said one.
+             *
+             * The handle it passes belongs to a texture it created itself, and
+             * what comes back has to describe that texture -- not the clip.
+             * Kingdom Hearts shares a 2048x1080 surface to carry a 1920x1080
+             * frame, so a texture built to the clip's size is the wrong
+             * resource under the same handle, and what the game copies out of
+             * it is not a picture.
+             */
             bridge_create((ID3D12Device *)self, frame_width, frame_height);
+        }
         hr = bridge_texture ? S_OK : E_FAIL;
         if (bridge_texture)
         {
@@ -1268,8 +1795,10 @@ static HRESULT WINAPI my_D3D12CreateDevice(void *adapter, UINT feature_level,
     HRESULT hr = real_D3D12CreateDevice(adapter, feature_level, iid, device);
     if (SUCCEEDED(hr) && device && *device && !real_open_shared_handle)
     {
-        /* ID3D12Device slot 32 is OpenSharedHandle. */
+        /* ID3D12Device slot 32 is OpenSharedHandle, 27 CreateCommittedResource. */
         real_open_shared_handle = patch_vtable_slot(*device, 32, d3d12_open_shared_handle);
+        real_create_committed   = patch_vtable_slot(*device, 27, d3d12_create_committed);
+        bridge_device = (ID3D12Device *)*device;
         d3d12_bridge_armed = TRUE;
         logf_("D3D12 device reached, bridge armed");
     }
@@ -1303,8 +1832,9 @@ static FARPROC WINAPI my_GetProcAddress(HMODULE module, LPCSTR name)
 static DWORD WINAPI worker(LPVOID unused)
 {
     (void)unused;
-    force_video_device = GetEnvironmentVariableA("MGVF_VIDEO_DEVICE", NULL, 0) > 0;
-    if (force_video_device) logf_("MGVF_VIDEO_DEVICE set -- offering a video device with nothing behind it");
+    /* MGVF_VIDEO_DEVICE is gone: the video device is offered unconditionally
+     * now, so the lever it used to open has nothing left to open. Leaving it
+     * readable would only let a stale variable look meaningful. */
     stub_video_device.vtbl   = vd_vtbl;
     stub_video_context.vtbl  = vc_vtbl;
     stub_vp_enumerator.vtbl  = vpe_vtbl;
@@ -1363,11 +1893,17 @@ static DWORD WINAPI worker(LPVOID unused)
     real_MFCreateSourceReaderFromByteStream =
         hook_import("MFReadWrite.dll", "MFCreateSourceReaderFromByteStream",
                     my_MFCreateSourceReaderFromByteStream);
+    real_MFCreateSourceReaderFromURL =
+        hook_import("MFReadWrite.dll", "MFCreateSourceReaderFromURL",
+                    my_MFCreateSourceReaderFromURL);
 
     logf_("dwo-video-bridge: d3d11 %s, d3d12 %s, source reader %s",
           real_D3D11CreateDevice ? "hooked" : "not imported",
           real_D3D12CreateDevice ? "hooked at startup" : "waiting for GetProcAddress",
-          real_MFCreateSourceReaderFromByteStream ? "hooked" : "not imported");
+          (real_MFCreateSourceReaderFromByteStream && real_MFCreateSourceReaderFromURL)
+            ? "FromByteStream and FromURL hooked"
+            : real_MFCreateSourceReaderFromByteStream ? "FromByteStream hooked"
+            : real_MFCreateSourceReaderFromURL ? "FromURL hooked" : "not imported");
     return 0;
 }
 

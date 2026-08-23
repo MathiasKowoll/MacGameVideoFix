@@ -65,6 +65,11 @@ GAMES = [
      "Crashes when the first video starts", "Software decode, and the frame written into the game's target",
      "D3DMetal", "11", "Preview -- not tried on 26.3",
      "Fixed", "NieR-Replicant"),
+    ("KINGDOM HEARTS Dream Drop Distance", "Square Enix, in-house",
+     "Cutscene runs with sound, picture solid green",
+     "Software decode, and the luma and chroma planes written into the game's own textures",
+     "D3DMetal", "11 + 12", "Preview -- not tried on 26.3",
+     "Fixed", "Kingdom-Hearts-HD-2.8"),
 ]
 
 HEAD = ("| Game | Engine | Symptom | Fix | Backend | DX | CrossOver | Status |\n"

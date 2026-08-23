@@ -160,6 +160,45 @@ Four words are used precisely: **measured** (observed directly here),
   texture passed to `VideoProcessorBlt`.
 - *Standing.* **Measured.**
 
+**`ID3D12Device::CreateCommittedResource` with `DXGI_FORMAT_NV12` ends the
+process.**
+
+- *Observed.* The call does not return and does not fail. The process
+  terminates, with no exception a DLL loaded into it can catch, and nothing is
+  written after the call — the last line recorded is the shared handle being
+  opened, one call earlier. Requested with `D3D12_RESOURCE_DIMENSION_TEXTURE2D`,
+  even width and height, one mip, one array slice,
+  `D3D12_HEAP_TYPE_DEFAULT`, `D3D12_RESOURCE_STATE_COMMON`, no clear value.
+- *Consequence.* Worse than a refusal, because a refusal can be handled. A
+  caller cannot probe for support by trying and checking the result, and cannot
+  guard the attempt: there is no result. Any title that publishes or consumes
+  NV12 through D3D12 is unreachable, and so is any workaround that would supply
+  one on its behalf.
+- *Reproduce.* Create a D3D12 device and make that one call. KINGDOM HEARTS
+  Dream Drop Distance reaches it by way of a shared texture; nothing about the
+  game is needed to reproduce it.
+- *What would fix it.* Returning an `HRESULT` for a format that cannot be
+  created. Support would be better, but an error is what makes the situation
+  survivable — a caller that is told no can fall back, and one that is killed
+  cannot.
+- *Standing.* **Measured**, on one title, once.
+
+**A game may want the decoder's surface rather than a picture.**
+
+- *Observed.* KINGDOM HEARTS Dream Drop Distance takes the NV12 texture Media
+  Foundation would have produced, opens it in D3D12 through a shared handle,
+  and copies **plane 0 and plane 1** into resources of its own — `R8_UNORM` at
+  the clip's size for luma, `R8G8_UNORM` at half for chroma — then converts
+  them in its own shader.
+- *Consequence.* Handing such a title a converted `B8G8R8A8` frame is not a
+  partial fix, it is invisible: the plane copies read nothing, both planes stay
+  at zero, and zero luma with zero chroma displays as solid green. The symptom
+  looks like a missing frame and is not one. Any Media Foundation fallback that
+  substitutes a picture for the decoder's own surface will produce this.
+- *Reproduce.* The plane pair is created immediately after the shared handle is
+  opened, and is visible from `ID3D12Device::CreateCommittedResource`.
+- *Standing.* **Measured.**
+
 **`IDXGIResource::GetSharedHandle` is `E_NOTIMPL`.**
 
 - *Consequence.* Decoding video on a D3D11 device and presenting it with a
