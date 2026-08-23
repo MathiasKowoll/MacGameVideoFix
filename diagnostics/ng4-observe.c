@@ -1217,7 +1217,12 @@ static HRESULT WINAPI my_MFCreateSourceReaderFromURL(LPCWSTR url, void *attrs, v
         {
             HRESULT again = real_MFCreateSourceReaderFromByteStream(stream, attrs, reader);
             logf_("  resolved by content -> 0x%08lx", again);
-            IUnknown_Release((IUnknown *)stream);
+            {   /* Release through slot 2 rather than the IUnknown macros:
+                 * this file does not pull in the headers that declare them. */
+                ULONG (WINAPI *release)(void *) =
+                    (ULONG (WINAPI *)(void *))(*(void ***)stream)[2];
+                release(stream);
+            }
             if (SUCCEEDED(again)) return again;
         }
     }
@@ -2841,6 +2846,8 @@ static LONG config1_seen;
 
 /* Hand DirectStorage a configuration with GPU decompression off. Used both for
  * the game's own call and, if the game never makes one, ahead of the factory. */
+static BOOL keep_gpu_decompression;
+
 static HRESULT set_config1_cpu_only(const struct dstorage_config1 *from)
 {
     struct dstorage_config1 cfg;
@@ -2862,11 +2869,30 @@ static HRESULT set_config1_cpu_only(const struct dstorage_config1 *from)
         logf_("  config in : (none -- the game never set one, so these are defaults)");
     }
 
-    /* Nothing is forced any more. These fields are named Disable*, so the zeros
-     * the game passes mean the features are ON, not off -- the opposite of how
-     * they were read at first. Forcing them changed nothing about the crash, but
-     * it did mean every run since was measuring a configuration the game never
-     * asked for, immediately before the call that fails. Pass it through. */
+    /*
+     * Ask for CPU decompression, because the GPU kind cannot be had here.
+     *
+     * These fields are named Disable*, so the zeros the game passes mean the
+     * features are ON. It is asking for GPU decompression through the
+     * metacommand path -- and D3DMetal refuses EnumerateMetaCommands for this
+     * executable by name, through its per-title override table. CreateQueue
+     * then returns DXGI_ERROR_UNSUPPORTED, hands back a null queue, and the
+     * game stores it without checking and calls through it.
+     *
+     * This was tried once before and recorded as changing nothing. The
+     * conditions have moved since: OPTIONS17 is now answered yes, the staging
+     * buffer is reduced, and the factory is no longer being refused outright.
+     * So it is worth one measurement rather than an assumption inherited from a
+     * different configuration.
+     *
+     * NG4_KEEP_GPU_DECOMP=1 passes the game's own values through instead.
+     */
+    if (!keep_gpu_decompression)
+    {
+        cfg.DisableGpuDecompressionMetacommand = TRUE;
+        cfg.DisableGpuDecompression = TRUE;
+        logf_("  forcing CPU decompression: metacmd and gpuDecomp both disabled");
+    }
 
     /* ForceMappingLayer was tried here and made things worse: the game died
      * earlier, before CreateQueue, and with a different kind of fault. The
@@ -2874,7 +2900,7 @@ static HRESULT set_config1_cpu_only(const struct dstorage_config1 *from)
      * so it stays off and the native path stays the thing to explain. */
 
     hr = real_DStorageSetConfiguration1(&cfg);
-    logf_("  config out: passed through unchanged -> 0x%08lx", hr);
+    logf_("  config out -> 0x%08lx", hr);
     return hr;
 }
 
@@ -2977,6 +3003,20 @@ static HRESULT WINAPI my_CreateQueue(void *self, const struct dstorage_queue_des
     return hr;
 }
 
+/*
+ * Refusing the factory was an experiment, and it stopped being one.
+ *
+ * It was left forced on, so every run since has measured the game's fallback
+ * I/O path rather than DirectStorage -- including two runs made after the
+ * MFTEnumEx gate was answered for the first time, which is exactly when the
+ * DirectStorage path became worth seeing. Both stalled identically, which does
+ * establish that the fallback path does not work either, but it was not the
+ * question being asked.
+ *
+ * Opt in with NG4_REFUSE_DSTORAGE=1.
+ */
+static BOOL refuse_dstorage_factory;
+
 static HRESULT WINAPI my_DStorageGetFactory(const GUID *iid, void **out)
 {
     HRESULT hr;
@@ -3006,7 +3046,7 @@ static HRESULT WINAPI my_DStorageGetFactory(const GUID *iid, void **out)
      * exactly why disabling dstoragecore.dll changed behaviour. Refusing here is
      * the same lever, but without disturbing the install and with every other
      * probe still reporting -- so this run says how far the other path gets. */
-    if (SUCCEEDED(hr) && out && *out)
+    if (refuse_dstorage_factory && SUCCEEDED(hr) && out && *out)
     {
         void **factory = (void **)*out;
         ((HRESULT (WINAPI *)(void *))((void **)*factory)[2])(factory);   /* Release */
@@ -3108,6 +3148,12 @@ static DWORD WINAPI worker(LPVOID unused)
         v[0] = 0;
         if (GetEnvironmentVariableA("NG4_NO_MFT_ANSWER", v, sizeof(v)) && v[0] == '1')
             answer_mft_gate = FALSE;
+        v[0] = 0;
+        if (GetEnvironmentVariableA("NG4_REFUSE_DSTORAGE", v, sizeof(v)) && v[0] == '1')
+            refuse_dstorage_factory = TRUE;
+        v[0] = 0;
+        if (GetEnvironmentVariableA("NG4_KEEP_GPU_DECOMP", v, sizeof(v)) && v[0] == '1')
+            keep_gpu_decompression = TRUE;
         v[0] = 0;
         if (GetEnvironmentVariableA("P5S_REAL_FRAMES", v, sizeof(v)) && v[0] == '1')
             paint_magenta = FALSE;

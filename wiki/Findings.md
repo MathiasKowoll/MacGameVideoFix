@@ -174,6 +174,30 @@ Four words are used precisely: **measured** (observed directly here),
 - *Standing.* **Measured** that this is the only difference. **Not measured**
   why. This is the shape a bug report would take rather than a diagnosis.
 
+**DirectStorage cannot create a queue, whatever it is offered.**
+
+- *Observed.* `IDStorageFactory::CreateQueue` returns `0x887a0004`,
+  `DXGI_ERROR_UNSUPPORTED`, and writes a null queue pointer. Every capability
+  it asks about first is granted -- `OPTIONS17` answered yes, feature 46, 7, 8
+  and 23 all succeeding, a 32 MB committed resource created, a copy command
+  queue created -- and it still refuses.
+- *Not a configuration.* `DSTORAGE_CONFIGURATION1` was set with
+  `DisableGpuDecompressionMetacommand` and `DisableGpuDecompression` both on,
+  so no metacommand path is involved, and the result is byte-identical. The
+  staging buffer was reduced from 256 MB to 32 MB, and `ForceMappingLayer` was
+  tried and made the failure earlier and different.
+- *Consequence.* Ninja Gaiden 4 stores the null without checking it and calls
+  through it -- `mov rdx, [rax]` with `rax` at zero. The same shape as
+  `ID3DDestructionNotifier`: a `check()` compiled out of a shipping build.
+- *And the fallback does not work either.* Denying the factory outright, which
+  is the same lever as removing `dstoragecore.dll`, makes the title choose its
+  other I/O backend. It then stalls: every one of its 76 threads waiting, none
+  of them inside DirectStorage, Media Foundation, D3D12 or DXGI, and the main
+  one blocked in a C++ condition variable.
+- *Standing.* **Measured.** Why the queue is refused is **not measured** -- the
+  decision happens inside Microsoft's `dstoragecore.dll` running under Wine,
+  and the Agility SDK this title ships is never loaded.
+
 **A per-title override table decides feature availability by executable name.**
 
 - *Observed.* `__ZL20ApplicationOverrides`, 49 records of `0x48` bytes, matched
