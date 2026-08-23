@@ -669,17 +669,18 @@ Wine tree is not the same offer.
 bridge which entry point one of them uses is a cost paid once rather than
 maintenance.
 
-**What being outside costs, with a title that shows it.** Ninja Gaiden 4 needs a
-VP9 decoder MFT, and an MFT has to exist inside the process that owns Media
-Foundation. winevideo adds one to winegstreamer's class factory; the CLSID it
-registers is absent from CrossOver Preview's `winegstreamer.dll`, verified by
-searching for the GUID in binary form. Registering it from outside would
-enumerate a transform that cannot be instantiated, which is worse than not
-registering it. Answering the enumeration query is enough to get a title *past*
-the check -- measured -- but not to decode anything.
+**A decoder has to live in the process, and it can still be ours.** A title that
+needs a VP9 decoder MFT needs one inside the process that owns Media
+Foundation. It does not follow that it has to come from a patched
+winegstreamer, and this page briefly said it did. Both calls that decide which
+transform gets used -- `MFTEnumEx` and `IMFActivate::ActivateObject` -- are
+interceptable from a proxy, so a transform of our own can be handed over without
+registering anything. What it would need inside it is a decoder, and Mortal
+Shell 2 is the existing proof that one can be carried in-process: its Electra
+decodes VP9 with its own libvpx.
 
-That is the boundary, and it is not a gap in the tooling: some repairs have to
-live where the decoder lives.
+Not built, and not needed by any title fixed here. Recorded because the limit
+was stated more strongly than the evidence supports.
 
 **What being outside costs.** A hook in the game process reaches only what the
 game calls. A repair living in `d3d9` sees every surface presented no matter

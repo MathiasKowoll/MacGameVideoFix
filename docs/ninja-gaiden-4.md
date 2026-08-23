@@ -1,8 +1,9 @@
 # Ninja Gaiden 4 — where it actually stops
 
-Not fixed, and now believed to be **out of reach for this project's approach**.
-Written down because the reason is precise, and because more than one earlier
-claim in this repository about it was wrong.
+Not fixed. Blocked by DirectStorage rather than by video, which is not where
+anyone expected. Written down because the reason is precise, and because more
+than one earlier claim in this repository about it was wrong -- including one
+made and withdrawn on the same day.
 
 ## The conclusion, 22 August 2026
 
@@ -29,20 +30,31 @@ the main one waiting on a C++ condition variable.
 appear in any of eight runs. Whatever this title's video needs, it is not what
 stops it first.
 
-**Why it is out of reach.** The VP9 decoder MFT winevideo registers points at
-CLSID `{E3AAF548-C9A4-4C6E-234D-5ADA374B0000}`, which its own patch adds to
-winegstreamer's class factory. A search for that GUID in binary form inside
-CrossOver Preview's `winegstreamer.dll` finds nothing. Registering it without
-that patch would produce an MFT that enumerates and cannot be instantiated --
-worse than the substitution above. A decoder has to exist inside the process
-that owns Media Foundation, and this project does not put things there.
+**What is not the reason, and was written here as one.** This page said for a
+while that the title was out of reach because a decoder MFT has to live inside
+the process that owns Media Foundation and this project cannot put one there.
+The first half is true; the second is not. The MFT can be ours.
+
+`MFTEnumEx` is already answered from a proxy, and `IMFActivate::ActivateObject`
+is already hooked -- it observes today, but the same hook can return an
+`IMFTransform` of our own instead of whatever the enumeration pointed at. What
+that transform then needs is a VP9 decoder, and there is precedent in this
+repository for exactly that: Mortal Shell 2's Electra decodes VP9 in-process
+with its own libvpx, which is portable C. Registration is not involved --
+nothing has to be written to the registry, because the two calls that decide
+which transform gets used are both intercepted.
+
+That is real work -- an `IMFTransform` is about twenty methods, most of them
+trivial, and a decoder has to be built into the carrier -- but it is the same
+kind of work as everything else here, not a different kind.
+
+**What actually stops this title today** is the paragraph above about
+DirectStorage, which comes first. A working VP9 transform would change nothing
+for Ninja Gaiden 4 until `CreateQueue` succeeds. It would matter for any title
+whose only missing piece is the decoder.
 
 The owner of this machine reports that the only configuration in which they have
-played the title is with winevideo installed, which is consistent with all of
-the above.
-
-So this page records a boundary rather than a plan: it is the concrete case of
-the limit set out under *Living outside CrossOver* in the wiki's Findings.
+played the title is with winevideo installed.
 
 ## The wrong claim, corrected
 
