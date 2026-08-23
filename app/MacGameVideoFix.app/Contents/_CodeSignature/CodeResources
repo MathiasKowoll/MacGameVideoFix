@@ -14,7 +14,7 @@
 		</data>
 		<key>Resources/amd_ags_x64-nioh3.dll</key>
 		<data>
-		J79gCJ5usamY+g+z3qZUVEHUF9U=
+		O1wfRdlLNLY9hORpHme8wL/MWns=
 		</data>
 		<key>Resources/amd_ags_x64.dll</key>
 		<data>
@@ -22,11 +22,11 @@
 		</data>
 		<key>Resources/dinput8-kh3d.dll</key>
 		<data>
-		g2nbfF0svsXf2qBrpHiI5eTslA0=
+		sjSD5gNoEYGkTsMifTVzCwrGW3M=
 		</data>
 		<key>Resources/dinput8-nier.dll</key>
 		<data>
-		g2nbfF0svsXf2qBrpHiI5eTslA0=
+		sjSD5gNoEYGkTsMifTVzCwrGW3M=
 		</data>
 		<key>Resources/install-dwo-bridge.sh</key>
 		<data>
@@ -34,7 +34,7 @@
 		</data>
 		<key>Resources/install-kh3d-bridge.sh</key>
 		<data>
-		6IfoNajwFsiJW30fYnKnRCe2Rs4=
+		mNXLsEA6LZXD458DgxvpakPm3w8=
 		</data>
 		<key>Resources/install-nier-bridge.sh</key>
 		<data>
@@ -62,7 +62,7 @@
 		</data>
 		<key>Resources/libxess.dll</key>
 		<data>
-		gw0MAgt8PaLr1jNzyiZF0UKbWk0=
+		6GxC1aSyK1i3WFnTrjLqcriWTGc=
 		</data>
 		<key>Resources/pak-hide-videos.py</key>
 		<data>
@@ -101,7 +101,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			3/JL14tBrTVyqdB8omdhx4QsPgCxquK95ic/GNVokqc=
+			jrbLu7BrBKDSznNODrC2fDRdB/NvlW0vz/kwbZCpQ4A=
 			</data>
 		</dict>
 		<key>Resources/amd_ags_x64.dll</key>
@@ -115,14 +115,14 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			26ixHVGHSaRTQN60kuwZtWGz7ci0R1mmAuUYVIZyOZo=
+			Y1Fhv6ysM4ywGtJqr826Xd2IjnJKqdiQ+ipiDbFz8dc=
 			</data>
 		</dict>
 		<key>Resources/dinput8-nier.dll</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			26ixHVGHSaRTQN60kuwZtWGz7ci0R1mmAuUYVIZyOZo=
+			Y1Fhv6ysM4ywGtJqr826Xd2IjnJKqdiQ+ipiDbFz8dc=
 			</data>
 		</dict>
 		<key>Resources/install-dwo-bridge.sh</key>
@@ -136,7 +136,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			It1vpt68uVkLyoUdYNpgj2azoNTvXiay0Na5o/mxL08=
+			i1/N5/kAgjGQ9y38M3AhLauXX3+ZdgcjfTObXo5emNI=
 			</data>
 		</dict>
 		<key>Resources/install-nier-bridge.sh</key>
@@ -185,7 +185,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			Xy99F7Kdh9EmVPyp42LlpLBXpH0K75idt1ZUXO2+b1A=
+			IMgI5Svd+ivd21ABwJwYII7CVQmdtjN0/0hzrWcwlHU=
 			</data>
 		</dict>
 		<key>Resources/pak-hide-videos.py</key>

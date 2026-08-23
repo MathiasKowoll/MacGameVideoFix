@@ -742,11 +742,45 @@ static UINT64 bridge_row_bytes, bridge_total_bytes;
  * shader converts them as it always did. Nothing here engages unless a game
  * creates that exact pair at the clip's dimensions.
  */
+/*
+ * Which titles take this route, named rather than guessed.
+ *
+ * A per-game switch is the thing this bridge otherwise avoids, and here it is
+ * the honest answer. The signature the plane pair presents -- an R8_UNORM at
+ * the clip's size and an R8G8_UNORM at half -- is not specific enough to arm
+ * on. A modern renderer produces exactly that shape for an occlusion mask at
+ * full resolution and motion vectors at half, and a game whose clips match its
+ * render resolution would have both. DYNASTY WARRIORS plays a 2560x1440 clip,
+ * which is very likely its render size.
+ *
+ * Arming on the shape alone would mean writing luma into a texture the game
+ * draws with, on three titles that work today, to serve one that does not.
+ * Naming the executables costs a line per title and cannot do that.
+ */
+static BOOL plane_route_wanted(void)
+{
+    static const char *const titles[] = {
+        "KINGDOM HEARTS Dream Drop Distance.exe",
+        "KINGDOM HEARTS HD 2.8 Launcher.exe",       /* plays Back Cover */
+    };
+    static int decided;
+    size_t i;
+
+    if (!decided)
+    {
+        decided = -1;
+        for (i = 0; i < sizeof(titles) / sizeof(titles[0]); ++i)
+            if (lstrcmpiA(exe_tag_(), titles[i]) == 0) { decided = 1; break; }
+    }
+    return decided == 1;
+}
+
 static ID3D12Resource *plane_y, *plane_uv, *plane_upload;
 static D3D12_RESOURCE_DESC plane_y_desc, plane_uv_desc;
 static D3D12_PLACED_SUBRESOURCE_FOOTPRINT plane_y_fp, plane_uv_fp;
 static UINT64 plane_upload_size;
 static BOOL plane_ready;
+static LONG plane_told;
 static ID3D12Device *bridge_device;
 static void plane_prepare(ID3D12Device *device);
 static void plane_write(const BYTE *nv12, UINT stride, UINT width, UINT height);
@@ -758,10 +792,6 @@ static void plane_rearm(void)
     if (plane_upload) { ID3D12Resource_Release(plane_upload); plane_upload = NULL; }
 }
 
-static D3D12_PLACED_SUBRESOURCE_FOOTPRINT bridge_plane[2];
-static UINT bridge_plane_rows[2];
-static UINT64 bridge_plane_bytes[2];
-static BOOL bridge_is_nv12;
 
 #define BRIDGE_CHECK(call, what)                                    \
     do {                                                            \
@@ -803,16 +833,12 @@ static HRESULT bridge_create(ID3D12Device *device, UINT width, UINT height)
     desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
     desc.SampleDesc.Count = 1;
     desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-    bridge_is_nv12 = FALSE;
     BRIDGE_CHECK(ID3D12Device_CreateCommittedResource(device, &heap,
             D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COMMON, NULL,
             &IID_ID3D12Resource, (void **)&bridge_texture), "texture");
 
-    ID3D12Device_GetCopyableFootprints(device, &desc, 0, bridge_is_nv12 ? 2 : 1, 0,
-            bridge_plane, bridge_plane_rows, bridge_plane_bytes, &bridge_total_bytes);
-    bridge_footprint = bridge_plane[0];
-    bridge_rows = bridge_plane_rows[0];
-    bridge_row_bytes = bridge_plane_bytes[0];
+    ID3D12Device_GetCopyableFootprints(device, &desc, 0, 1, 0, &bridge_footprint,
+            &bridge_rows, &bridge_row_bytes, &bridge_total_bytes);
 
     heap.Type = D3D12_HEAP_TYPE_UPLOAD;
     memset(&desc, 0, sizeof(desc));
@@ -874,36 +900,18 @@ static void bridge_upload_frame(const BYTE *nv12, UINT stride, UINT width, UINT 
 
     /* A game that pulls the planes out for itself is served by writing them,
      * not by the picture below. Both can run: they touch different resources. */
-    if (bridge_device)
+    if (bridge_device && plane_route_wanted())
     {
         plane_prepare(bridge_device);
         plane_write(nv12, stride, width, height);
     }
-    if (width > texture_width || height > texture_height) return;
+    /* Exact, not an upper bound: a frame smaller than the texture would leave
+     * the margin holding whatever was there before. */
+    if (width != texture_width || height != texture_height) return;
     if (FAILED(ID3D12Resource_Map(bridge_upload, 0, NULL, (void **)&mapped)) || !mapped)
         return;
-    if (bridge_is_nv12)
-    {
-        /*
-         * Straight through, plane by plane. No conversion: the game does that
-         * in its own shader, which is the whole reason it wanted the decoder's
-         * surface rather than a picture.
-         */
-        const BYTE *uv = nv12 + (size_t)stride * height;
-        UINT y;
-        for (y = 0; y < height; ++y)
-            memcpy(mapped + bridge_plane[0].Offset
-                   + (size_t)y * bridge_plane[0].Footprint.RowPitch,
-                   nv12 + (size_t)y * stride, width);
-        for (y = 0; y < height / 2; ++y)
-            memcpy(mapped + bridge_plane[1].Offset
-                   + (size_t)y * bridge_plane[1].Footprint.RowPitch,
-                   uv + (size_t)y * stride, width);
-    }
-    else
-        nv12_to_bgra(nv12, stride, mapped, bridge_footprint.Footprint.RowPitch, width, height);
+    nv12_to_bgra(nv12, stride, mapped, bridge_footprint.Footprint.RowPitch, width, height);
 #if BRIDGE_TEST_MAGENTA
-    if (!bridge_is_nv12)
     {
         static LONG told;
         UINT pitch = bridge_footprint.Footprint.RowPitch, y, x;
@@ -925,16 +933,8 @@ static void bridge_upload_frame(const BYTE *nv12, UINT stride, UINT width, UINT 
     dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
     src.pResource = bridge_upload;
     src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-    {
-        UINT plane, planes = bridge_is_nv12 ? 2u : 1u;
-        for (plane = 0; plane < planes; ++plane)
-        {
-            dst.SubresourceIndex = plane;
-            src.PlacedFootprint = bridge_plane[plane];
-            ID3D12GraphicsCommandList_CopyTextureRegion(bridge_list, &dst, 0, 0, 0,
-                                                        &src, NULL);
-        }
-    }
+    src.PlacedFootprint = bridge_footprint;
+    ID3D12GraphicsCommandList_CopyTextureRegion(bridge_list, &dst, 0, 0, 0, &src, NULL);
     ID3D12GraphicsCommandList_Close(bridge_list);
     ID3D12CommandQueue_ExecuteCommandLists(bridge_queue, 1,
             (ID3D12CommandList *const *)&bridge_list);
@@ -1628,8 +1628,31 @@ static HRESULT WINAPI d3d12_create_committed(void *self, const void *heap, UINT 
             logf_("D3D12 CreateCommittedResource %ux%u format=%u -> 0x%08lx%s",
                   w, h, fmt, (unsigned long)hr, fmt == 103 ? "   << NV12" : "");
 
-        if (SUCCEEDED(hr) && out && *out && frame_width && frame_height)
+        if (SUCCEEDED(hr) && out && *out && plane_route_wanted())
         {
+            /* frame_width and the plane pointers are read by plane_write on
+             * the Media Foundation thread. CRITICAL_SECTION is re-entrant for
+             * the owning thread, so plane_prepare creating a resource from
+             * inside the lock re-enters here harmlessly. */
+            /*
+             * The shape of a decode plane, not merely its size.
+             *
+             * D3D12_RESOURCE_DESC: Dimension at 0, DepthOrArraySize at 28,
+             * MipLevels at 30, Flags at 48. A plane the game fills from a
+             * decoded texture is a plain single-slice 2D texture with no
+             * flags; a render target, an unordered-access surface or a depth
+             * buffer is not, and those are what a post-process chain allocates
+             * at the shapes this would otherwise match.
+             */
+            const char *rd = (const char *)desc;
+            BOOL plain = *(const UINT *)(rd + 0) == D3D12_RESOURCE_DIMENSION_TEXTURE2D
+                      && *(const UINT16 *)(rd + 28) == 1
+                      && *(const UINT16 *)(rd + 30) == 1
+                      && *(const UINT *)(rd + 48) == D3D12_RESOURCE_FLAG_NONE;
+
+            EnterCriticalSection(&frame_lock);
+            if (plain && frame_width && frame_height)
+            {
             /*
              * Hold a reference, and take the newest pair.
              *
@@ -1647,7 +1670,8 @@ static HRESULT WINAPI d3d12_create_committed(void *self, const void *heap, UINT 
                 ID3D12Resource_AddRef(plane_y);
                 memcpy(&plane_y_desc, desc, sizeof(plane_y_desc));
                 plane_rearm();
-                logf_("plane: luma %ux%u", w, h);
+                if (InterlockedIncrement(&plane_told) <= 8)
+                    logf_("plane: luma %ux%u", w, h);
             }
             else if (fmt == DXGI_FORMAT_R8G8_UNORM && w == frame_width / 2
                      && h == frame_height / 2 && (ID3D12Resource *)*out != plane_uv)
@@ -1657,8 +1681,11 @@ static HRESULT WINAPI d3d12_create_committed(void *self, const void *heap, UINT 
                 ID3D12Resource_AddRef(plane_uv);
                 memcpy(&plane_uv_desc, desc, sizeof(plane_uv_desc));
                 plane_rearm();
-                logf_("plane: chroma %ux%u", w, h);
+                if (InterlockedIncrement(&plane_told) <= 8)
+                    logf_("plane: chroma %ux%u", w, h);
             }
+            }
+            LeaveCriticalSection(&frame_lock);
         }
     }
     return hr;
@@ -1700,8 +1727,9 @@ static void plane_prepare(ID3D12Device *device)
         return;
     }
     plane_ready = TRUE;
-    logf_("plane: writing both planes directly, luma pitch %u chroma pitch %u",
-          plane_y_fp.Footprint.RowPitch, plane_uv_fp.Footprint.RowPitch);
+    if (InterlockedIncrement(&plane_told) <= 8)
+        logf_("plane: writing both planes directly, luma pitch %u chroma pitch %u",
+              plane_y_fp.Footprint.RowPitch, plane_uv_fp.Footprint.RowPitch);
 }
 
 /* Copy queue: every resource is in COMMON there, so no barriers are needed. */
@@ -1713,6 +1741,16 @@ static void plane_write(const BYTE *nv12, UINT stride, UINT width, UINT height)
     UINT y;
 
     if (!plane_ready || !bridge_list || !bridge_queue) return;
+    /*
+     * Copy the planes' geometry, not the frame's.
+     *
+     * The footprints were computed from the descriptors captured when the pair
+     * was created. If a later clip is larger and the game has not yet made a
+     * new pair, writing the frame's rows into those footprints runs off the end
+     * of the upload buffer. Refusing is the right answer: the next pair the
+     * game creates re-arms this.
+     */
+    if (width != plane_y_desc.Width || height != plane_y_desc.Height) return;
     if (FAILED(ID3D12Resource_Map(plane_upload, 0, NULL, (void **)&mapped)) || !mapped)
         return;
     for (y = 0; y < height; ++y)

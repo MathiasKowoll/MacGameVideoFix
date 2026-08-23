@@ -40,7 +40,15 @@ MODE="${2:---install}"
 if [ "${MGVF_STATUS_ONLY:-0}" = 1 ]; then MODE=--status; fi
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
-EXE_NAME='KINGDOM HEARTS Dream Drop Distance.exe'
+# Two executables, because two of them play video.
+#
+# Dream Drop Distance plays the game's cutscenes. The launcher plays KINGDOM
+# HEARTS chi Back Cover, the film in the package, out of its own MOVIE folder --
+# measured, the bridge engages inside the launcher process. It loads the DLL
+# beside it today without being told to, but that is Wine's default load order
+# rather than anything this script arranged, so say it out loud instead.
+EXE_NAMES=('KINGDOM HEARTS Dream Drop Distance.exe' 'KINGDOM HEARTS HD 2.8 Launcher.exe')
+EXE_NAME="${EXE_NAMES[0]}"
 LIVE="$GAME/dinput8.dll"
 REAL="$GAME/dinput8_real.dll"
 PROXY="$HERE/dinput8-kh3d.dll"
@@ -124,9 +132,11 @@ case "$MODE" in
   if CX="$(find_crossover)"; then
     while read -r b; do
       [ -n "$b" ] || continue
-      "$CX/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe delete \
-        "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$EXE_NAME\\DllOverrides" \
-        /v dinput8 /f >/dev/null 2>&1 || true
+      for exe in "${EXE_NAMES[@]}"; do
+        "$CX/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe delete \
+          "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$exe\\DllOverrides" \
+          /v dinput8 /f >/dev/null 2>&1 || true
+      done
     done < <(find_bottles || true)
   fi
   echo "restored — the bridge and the dinput8 override are gone"
@@ -186,10 +196,14 @@ echo "[4/4] telling Wine to prefer it, for this game only"
 wrote=0
 while read -r b; do
   [ -n "$b" ] || continue
-  "$CX/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe add \
-    "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$EXE_NAME\\DllOverrides" \
-    /v dinput8 /d "native,builtin" /f >/dev/null 2>&1 || continue
-  LC_ALL=C grep -qa "$EXE_NAME" "$b/user.reg" 2>/dev/null || continue
+  ok=0
+  for exe in "${EXE_NAMES[@]}"; do
+    "$CX/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe add \
+      "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$exe\\DllOverrides" \
+      /v dinput8 /d "native,builtin" /f >/dev/null 2>&1 || continue
+    LC_ALL=C grep -qa "$exe" "$b/user.reg" 2>/dev/null && ok=1
+  done
+  [ "$ok" = 1 ] || continue
   echo "      $(basename "$b")"
   wrote=$((wrote + 1))
 done < <(find_bottles || true)

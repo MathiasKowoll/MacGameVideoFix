@@ -918,6 +918,27 @@ winevideo had already worked out what was wrong. Where the two differ most:
 winevideo works outside the game, so it reaches titles protected against
 tampering, which nothing here can.
 
+## Titles that need nothing, and why that is worth recording
+
+A page of defects makes every failure look inevitable. These were tested and
+play correctly untouched, and the reason each one does is the same reason it
+was never at risk.
+
+- **KINGDOM HEARTS 0.2 Birth by Sleep.** 49 CriWare `.usm` cutscenes carrying
+  MPEG-1 (`mpeg_codec = 1`, `00 00 01 B3` sequence headers at 1920×1080,
+  `ffprobe` reporting `mpeg1video`), decoded by CriWare's own software decoder,
+  statically linked. It never asks Media Foundation for anything and never asks
+  D3D for a video surface.
+- **KINGDOM HEARTS III.** 180 CriWare `.usm`, this time carrying H.264, on the
+  D3D11 RHI. Plays at full rate with the bridge not loaded at all — verified by
+  an empty log, not by absence of complaint.
+
+The pattern is worth stating: **a title that decodes its own video in software
+and uploads the result itself has nothing here to break.** Every fault on this
+page arrives through a game asking the platform for hardware decode, a D3D
+video device, or a D3D-backed surface. A game that asks for none of those is
+unaffected by all of them, whatever its container or codec.
+
 ## Other games
 
 None of these faults is specific to the title it was found on.

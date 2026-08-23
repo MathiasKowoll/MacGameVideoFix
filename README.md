@@ -12,7 +12,7 @@ Makes Windows games show their cutscenes under CrossOver on Apple Silicon.
 > the other three is in the engine rather than in anything installed beside the
 > game.
 
-Nine games so far. They install the same way: open the app, pick the game from
+Twelve games so far. They install the same way: open the app, pick the game from
 the list, drop its folder on it, press Apply.
 
 | Game | Symptom | CrossOver |
@@ -28,6 +28,7 @@ the list, drop its folder on it, press Apply.
 | [**Nioh 3**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Nioh-3) | Failed to play movie | Preview 20260821 — not tried on 26.3 |
 | [**Wo Long: Fallen Dynasty**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Wo-Long-Fallen-Dynasty) | Cutscene runs with sound, picture black | Preview 20260821 — not tried on 26.3 |
 | [**NieR Replicant ver.1.22474487139**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/NieR-Replicant) | Crashes when the first video starts | Preview 20260821 — not tried on 26.3 |
+| [**KINGDOM HEARTS Dream Drop Distance**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Kingdom-Hearts-HD-2.8) | Cutscene runs with sound, picture solid green | Preview 20260821 — not tried on 26.3 |
 
 **This project targets `crossover-preview-arm64-20260821`**, and that is what
 "Preview" means in the column above and everywhere else in this file. Every title
