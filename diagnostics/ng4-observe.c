@@ -138,6 +138,15 @@ typedef struct { GUID guidMajorType; GUID guidSubtype; } REG_TYPE_INFO;
  * exactly like "the game never calls the decoder" -- a far more interesting
  * conclusion than "VirtualProtect refused", and the wrong one. An instrument
  * that can fail silently is worse than no instrument. */
+/*
+ * Everything below changes what the game sees, and every one of them was at
+ * some point left forced on -- which is how four runs measured a configuration
+ * no title ever asked for. The file says it changes nothing while watching; it
+ * now does that by default, and each lever has to be asked for.
+ */
+static BOOL force_cpu_decompression;   /* NG4_CPU_DECOMP */
+static BOOL fake_options17;            /* NG4_FAKE_OPTIONS17 */
+
 /* Set while DirectStorage is inside CreateQueue, so the capability questions it
    asks can be told apart from the game's own. CheckFeatureSupport is called
    constantly by everything; only this window is interesting. */
@@ -1033,8 +1042,13 @@ static HRESULT WINAPI my_MFStartup(ULONG version, DWORD flags)
  * genuine list of real objects with a real lifetime. The game counts them and
  * carries on.
  *
- * Set NG4_NO_MFT_ANSWER=1 to watch without this. */
-static BOOL answer_mft_gate = TRUE;
+ * Off by default, like every other lever here. A run that substitutes an answer
+ * cannot also tell you what the system would have answered -- and the first
+ * thing this probe is now used for is watching a configuration that works,
+ * where our answer would sit on top of a real one and hide it.
+ *
+ * Set NG4_ANSWER_MFT=1 to put it back. */
+static BOOL answer_mft_gate;
 
 static const GUID guid_VP90 =
     { 0x30395056, 0x0000, 0x0010, { 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71 } };
@@ -2367,7 +2381,7 @@ static HRESULT WINAPI my_CheckFeature(void *self, UINT feature, void *data, UINT
      * Saying yes does not make the capability exist. If it turns the refusal into
      * a queue, it names the requirement, which is what this run is for; whether
      * that queue then works is the next question, not this one. */
-    if (in_create_queue_ && feature == 46 && SUCCEEDED(hr) &&
+    if (fake_options17 && in_create_queue_ && feature == 46 && SUCCEEDED(hr) &&
         data && size >= 8 && readable_(data, 8))
     {
         ((UINT32 *)data)[0] = 1;
@@ -2846,7 +2860,6 @@ static LONG config1_seen;
 
 /* Hand DirectStorage a configuration with GPU decompression off. Used both for
  * the game's own call and, if the game never makes one, ahead of the factory. */
-static BOOL keep_gpu_decompression;
 
 static HRESULT set_config1_cpu_only(const struct dstorage_config1 *from)
 {
@@ -2887,7 +2900,7 @@ static HRESULT set_config1_cpu_only(const struct dstorage_config1 *from)
      *
      * NG4_KEEP_GPU_DECOMP=1 passes the game's own values through instead.
      */
-    if (!keep_gpu_decompression)
+    if (force_cpu_decompression)
     {
         cfg.DisableGpuDecompressionMetacommand = TRUE;
         cfg.DisableGpuDecompression = TRUE;
@@ -2935,12 +2948,21 @@ static HRESULT (WINAPI *real_CreateQueue)(void *, const struct dstorage_queue_de
 #define SLOT_DS_SET_STAGING 7
 #define STAGING_DEFAULT     (32u * 1024 * 1024)
 
+static BOOL small_staging;
 static HRESULT (WINAPI *real_SetStaging)(void *, UINT32);
 
 static HRESULT WINAPI my_SetStaging(void *self, UINT32 size)
 {
     HRESULT hr;
-    if (size > STAGING_DEFAULT)
+    /*
+     * Pass the game's own size through.
+     *
+     * Capping this at 32 MB was an experiment and was left forced on, so every
+     * run since has been asking DirectStorage to build a queue against a
+     * staging buffer an eighth of what the title asked for -- immediately
+     * before the call that refuses. NG4_SMALL_STAGING=1 brings the cap back.
+     */
+    if (small_staging && size > STAGING_DEFAULT)
     {
         logf_("IDStorageFactory::SetStagingBufferSize(%u MB) -> asking for %u MB instead",
               size / (1024 * 1024), STAGING_DEFAULT / (1024 * 1024));
@@ -3146,14 +3168,20 @@ static DWORD WINAPI worker(LPVOID unused)
         if (GetEnvironmentVariableA("BEAST_FORCE_NV12", v, sizeof(v)) && v[0] == '1')
             restore_nv12 = TRUE;
         v[0] = 0;
-        if (GetEnvironmentVariableA("NG4_NO_MFT_ANSWER", v, sizeof(v)) && v[0] == '1')
-            answer_mft_gate = FALSE;
+        if (GetEnvironmentVariableA("NG4_ANSWER_MFT", v, sizeof(v)) && v[0] == '1')
+            answer_mft_gate = TRUE;
         v[0] = 0;
         if (GetEnvironmentVariableA("NG4_REFUSE_DSTORAGE", v, sizeof(v)) && v[0] == '1')
             refuse_dstorage_factory = TRUE;
         v[0] = 0;
-        if (GetEnvironmentVariableA("NG4_KEEP_GPU_DECOMP", v, sizeof(v)) && v[0] == '1')
-            keep_gpu_decompression = TRUE;
+        if (GetEnvironmentVariableA("NG4_CPU_DECOMP", v, sizeof(v)) && v[0] == '1')
+            force_cpu_decompression = TRUE;
+        v[0] = 0;
+        if (GetEnvironmentVariableA("NG4_FAKE_OPTIONS17", v, sizeof(v)) && v[0] == '1')
+            fake_options17 = TRUE;
+        v[0] = 0;
+        if (GetEnvironmentVariableA("NG4_SMALL_STAGING", v, sizeof(v)) && v[0] == '1')
+            small_staging = TRUE;
         v[0] = 0;
         if (GetEnvironmentVariableA("P5S_REAL_FRAMES", v, sizeof(v)) && v[0] == '1')
             paint_magenta = FALSE;
