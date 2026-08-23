@@ -60,10 +60,11 @@ Dream Drop Distance: `dinput8`'s `DirectInput8Create`,
 `D3D11CreateDevice`, and `d3d12.dll` **ordinal 101**. Measured from the import
 tables before anything was installed.
 
-They take the same route too, confirmed on KINGDOM HEARTS FINAL MIX: the reader
-opens `STEAM/dt/KH1Movie/OPN.mp4` in software, the shared handle comes back
-through `OpenSharedHandle`, and the same plane pair appears at 1920×1080 and
-960×540.
+They take the same route too, confirmed by running two of them. FINAL MIX opens
+`STEAM/dt/KH1Movie/OPN.mp4`, Re_Chain of Memories opens
+`STEAM/dt/KHCReSource/BIN/movie/RLP.mp4`, both in software, both getting the
+shared handle back through `OpenSharedHandle`, both producing the same plane
+pair at 1920×1080 and 960×540.
 
 The only change any of this needed was to the gate that decides which titles
 take the plane route. It had been two executable names; eight is not a list any
@@ -158,8 +159,18 @@ Nothing engages unless a game creates that exact pair at the clip's dimensions,
 so the four titles that take the shared-texture route are untouched.
 
 Both plane resources are referenced while held, and replaced when the game
-creates a new pair — a second cutscene at a different size gets new textures,
-and writing into the old ones would be silent.
+creates a new pair. That path is not theoretical and was not left to argument:
+Re_Chain of Memories plays a 1920×1080 clip and then a 1280×720 one in the same
+session, and the log shows the bridge rebuilding around it —
+
+    bridge ready: 1280x720, upload pitch 5120
+    plane: luma 1280x720
+    plane: chroma 640x360
+    plane: writing both planes directly, luma pitch 1280 chroma pitch 1280
+
+— with both clips visible on screen. Writing into the first pair after the
+second was created would have been silent, which is the reason to hold a
+reference and replace on sight rather than capture once.
 
 ## The carrier, which is not the game's
 
@@ -182,9 +193,11 @@ Measured on Preview and D3DMetal only. 26.3 has not been tried.
 0.2 Birth by Sleep and KINGDOM HEARTS III are untouched by this and need to be.
 Both decode their own video in software.
 
-Of HD 1.5+2.5 ReMIX, FINAL MIX is the title the route was confirmed on. The
-other five executables are covered by the same installer and the same measured
-import signature, which is a strong argument and not a run.
+Four of the eight executables have been run and watched: Dream Drop Distance,
+2.8's launcher playing Back Cover, FINAL MIX and Re_Chain of Memories. The
+remaining four — II FINAL MIX, Birth by Sleep FINAL MIX, the Theater and
+1.5+2.5's launcher — are covered by the same installer and carry the same
+measured import signature, which is a strong argument and not a run.
 
 The launcher crashes on exit on this machine, inside `libobjc` by way of
 `winemac`, in a thread belonging to the launcher rather than the game. It is
