@@ -60,14 +60,20 @@ Dream Drop Distance: `dinput8`'s `DirectInput8Create`,
 `D3D11CreateDevice`, and `d3d12.dll` **ordinal 101**. Measured from the import
 tables before anything was installed.
 
-They take the same route too, confirmed by running three of them — one per
-engine in the package:
+They take the same route too, and this was run rather than argued. Every
+executable below was watched opening a clip, arming the plane pair and putting
+a picture on screen:
 
 | | Opens | Plane pair |
 | --- | --- | --- |
 | FINAL MIX | `dt/KH1Movie/OPN.mp4` | 1920×1080 and 960×540 |
-| Re_Chain of Memories | `dt/KHCReSource/BIN/movie/RLP.mp4`, then a 1280×720 clip | both sizes, rebuilt between them |
+| Re_Chain of Memories | `dt/KHCReSource/BIN/movie/RLP.mp4`, then three more | 1920×1080, then rebuilt at 1280×720 |
 | II FINAL MIX | `juefigs/KH2ReSource/zmovie/en/opn.mp4` | 1280×720 and 640×360 |
+| Birth by Sleep FINAL MIX | `juefigs/BBSReSource/movie/EN/LOP.mp4` | 1280×720 and 640×360 |
+| the launcher | `Mare/MOVIE/ReCoded/dt/hd501.mp4` | 1280×720 and 640×360 |
+
+The launcher is not a formality here: it is what plays the film collections,
+the way 2.8's launcher plays Back Cover.
 
 All in software, all getting the shared handle back through
 `OpenSharedHandle`, all producing the plane pair the fix writes into.
@@ -199,12 +205,15 @@ Measured on Preview and D3DMetal only. 26.3 has not been tried.
 0.2 Birth by Sleep and KINGDOM HEARTS III are untouched by this and need to be.
 Both decode their own video in software.
 
-Five of the eight executables have been run and watched: Dream Drop Distance,
-2.8's launcher playing Back Cover, FINAL MIX, Re_Chain of Memories and II FINAL
-MIX — which between them are every distinct engine in the two packages. The
-remaining three — Birth by Sleep FINAL MIX, the Theater and 1.5+2.5's launcher
-— are covered by the same installer and carry the same measured import
-signature, which is a strong argument and not a run.
+Seven of the eight executables have been run and watched, covering every
+distinct engine in both packages: Dream Drop Distance, 2.8's launcher playing
+Back Cover, FINAL MIX, Re_Chain of Memories, II FINAL MIX, Birth by Sleep
+FINAL MIX and 1.5+2.5's launcher.
+
+`KINGDOM HEARTS Theater.exe` is the one not observed. It carries the same
+import signature and the installer covers it, but the film collections were
+reached through the launcher rather than through it, so nothing here has seen
+it open a clip.
 
 The launcher crashes on exit on this machine, inside `libobjc` by way of
 `winemac`, in a thread belonging to the launcher rather than the game. It is
