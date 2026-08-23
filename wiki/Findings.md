@@ -198,6 +198,20 @@ Four words are used precisely: **measured** (observed directly here),
   decision happens inside Microsoft's `dstoragecore.dll` running under Wine,
   and the Agility SDK this title ships is never loaded.
 
+**DirectStorage fails on both CrossOver lines, and a patched CrossOver does not
+change it.**
+
+- *Observed.* `CreateQueue` returns `DXGI_ERROR_UNSUPPORTED` on
+  `crossover-preview-arm64-20260821` and on stable 26.3 alike, including on a
+  26.3 patched with winevideo 0.5. Same result, same null queue, same
+  dereference in the calling title.
+- *Consequence.* Any title that uses DirectStorage and does not check
+  `CreateQueue`'s result dies. The only working configuration found is one where
+  `dstoragecore.dll` is removed so that no factory exists at all and the title
+  takes another path.
+- *Standing.* **Measured** on two CrossOver versions and with a third-party
+  patch installed. Why the queue is refused is **not measured**.
+
 **A per-title override table decides feature availability by executable name.**
 
 - *Observed.* `__ZL20ApplicationOverrides`, 49 records of `0x48` bytes, matched

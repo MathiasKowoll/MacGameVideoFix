@@ -5,6 +5,48 @@ anyone expected. Written down because the reason is precise, and because more
 than one earlier claim in this repository about it was wrong -- including one
 made and withdrawn on the same day.
 
+## Measured against a configuration that works, 22 August 2026
+
+The single most useful thing done for this title: the same probe, watching only,
+run against CrossOver 26.3 with winevideo 0.5 installed -- a configuration whose
+owner has played the game -- and then against CrossOver Preview.
+
+**On 26.3 with winevideo and DirectStorage disabled, the title reaches its
+menu.** It also does something never seen in eight previous runs:
+
+    MFCreateSourceReaderFromURL(.\Assets/Movies/88f75716-...-....msd) -> S_OK
+
+The first video it opens is the `.msd` -- the one file out of four hundred that
+is not a WebM. winevideo registers a byte-stream handler for `.msd` as well as
+`.webm` and `.mkv`, which is why that call resolves.
+
+**DirectStorage fails identically on 26.3, with winevideo installed.**
+`CreateQueue` returns `DXGI_ERROR_UNSUPPORTED` and the same null dereference at
+`+0x102f72f` follows. So the crash is not a D3DMetal 4.0b2 regression, and
+winevideo does not repair it -- their patcher does not mention DirectStorage
+anywhere. The working configuration is one where `dstoragecore.dll` is disabled
+and the title takes its other I/O path.
+
+**Answering MFTEnumEx by substitution is equivalent to their real MFT, for that
+gate.** With our answer switched off, winevideo's registered VP9 decoder
+returned `1 decoder(s) offered` -- the same count the substitution produces. The
+game counts and carries on either way.
+
+**And Preview stalls anyway.** With the same `.webm`, `.mkv` and `.msd` handlers
+registered, DirectStorage disabled and the MFT gate answered, the title stops in
+the same place it always has: after `IMFDXGIDeviceManager::ResetDevice`, before
+any source reader. A control run with nothing of this project installed stalls
+identically, so the probe is not the cause.
+
+What separates the two is therefore upstream of the video and is not yet
+isolated. The remaining variables are the CrossOver version itself and
+winevideo's patched `winegstreamer` and `mfplat`.
+
+One difference worth recording because it will matter elsewhere: on 26.3 the
+D3D12 vtable patches are refused -- `VirtualProtect` returns error 87 against
+that vtable -- while on Preview they take. That memory is protected differently
+between the two builds.
+
 ## The conclusion, 22 August 2026
 
 Two gates were known. A third was found between them, and the first turned out
