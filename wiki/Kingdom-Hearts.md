@@ -60,11 +60,17 @@ Dream Drop Distance: `dinput8`'s `DirectInput8Create`,
 `D3D11CreateDevice`, and `d3d12.dll` **ordinal 101**. Measured from the import
 tables before anything was installed.
 
-They take the same route too, confirmed by running two of them. FINAL MIX opens
-`STEAM/dt/KH1Movie/OPN.mp4`, Re_Chain of Memories opens
-`STEAM/dt/KHCReSource/BIN/movie/RLP.mp4`, both in software, both getting the
-shared handle back through `OpenSharedHandle`, both producing the same plane
-pair at 1920×1080 and 960×540.
+They take the same route too, confirmed by running three of them — one per
+engine in the package:
+
+| | Opens | Plane pair |
+| --- | --- | --- |
+| FINAL MIX | `dt/KH1Movie/OPN.mp4` | 1920×1080 and 960×540 |
+| Re_Chain of Memories | `dt/KHCReSource/BIN/movie/RLP.mp4`, then a 1280×720 clip | both sizes, rebuilt between them |
+| II FINAL MIX | `juefigs/KH2ReSource/zmovie/en/opn.mp4` | 1280×720 and 640×360 |
+
+All in software, all getting the shared handle back through
+`OpenSharedHandle`, all producing the plane pair the fix writes into.
 
 The only change any of this needed was to the gate that decides which titles
 take the plane route. It had been two executable names; eight is not a list any
@@ -193,11 +199,12 @@ Measured on Preview and D3DMetal only. 26.3 has not been tried.
 0.2 Birth by Sleep and KINGDOM HEARTS III are untouched by this and need to be.
 Both decode their own video in software.
 
-Four of the eight executables have been run and watched: Dream Drop Distance,
-2.8's launcher playing Back Cover, FINAL MIX and Re_Chain of Memories. The
-remaining four — II FINAL MIX, Birth by Sleep FINAL MIX, the Theater and
-1.5+2.5's launcher — are covered by the same installer and carry the same
-measured import signature, which is a strong argument and not a run.
+Five of the eight executables have been run and watched: Dream Drop Distance,
+2.8's launcher playing Back Cover, FINAL MIX, Re_Chain of Memories and II FINAL
+MIX — which between them are every distinct engine in the two packages. The
+remaining three — Birth by Sleep FINAL MIX, the Theater and 1.5+2.5's launcher
+— are covered by the same installer and carry the same measured import
+signature, which is a strong argument and not a run.
 
 The launcher crashes on exit on this machine, inside `libobjc` by way of
 `winemac`, in a thread belonging to the launcher rather than the game. It is
