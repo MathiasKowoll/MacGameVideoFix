@@ -62,12 +62,13 @@ cp "$ROOT/scripts/transcode-movies.sh" "$ROOT/scripts/pak-hide-videos.py" "$RES/
 cp "$ROOT/runtime/install-p5s-bridge.sh" "$ROOT/runtime/amd_ags_x64.dll" "$RES/"
 cp "$ROOT/runtime/install-nioh-bridge.sh" "$ROOT/runtime/install-nioh3-bridge.sh" \
    "$ROOT/runtime/install-nier-bridge.sh" \
-   "$ROOT/runtime/install-kh-bridge.sh" "$RES/"
+   "$ROOT/runtime/install-kh-bridge.sh" \
+   "$ROOT/runtime/install-tmnt-fix.sh" "$RES/"
 cp "$ROOT/runtime/stage-codecs.sh" "$RES/"
 chmod +x "$RES/transcode-movies.sh" "$RES/pak-hide-videos.py" \
          "$RES/install-p5s-bridge.sh" "$RES/install-nioh-bridge.sh" \
          "$RES/install-nioh3-bridge.sh" "$RES/install-nier-bridge.sh" \
-         "$RES/install-kh-bridge.sh"
+         "$RES/install-kh-bridge.sh" "$RES/install-tmnt-fix.sh"
 
 # The runtime patch: the installer resolves the proxy and the PE reader next to
 # itself, so all three have to land in the same folder.
@@ -78,7 +79,7 @@ chmod +x "$RES/install-runtime-fix.sh" "$RES/install-dwo-bridge.sh" "$RES/pe.py"
 # One prebuilt carrier per game. Missing one disables that game's fix rather
 # than failing the build, so the app is still usable for the other.
 for dll in libogg_64.dll libxess.dll GfeSDK.dll amd_ags_x64-nioh3.dll dinput8-nier.dll \
-           dinput8-kh.dll; do
+           dinput8-kh.dll fmod-tmnt.dll; do
   if [ -f "$ROOT/runtime/$dll" ]; then
     cp "$ROOT/runtime/$dll" "$RES/"
   else

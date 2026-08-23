@@ -244,6 +244,10 @@ static HRESULT (WINAPI *r11_shared)(void *, HANDLE, REFIID, void **);
 static HRESULT (WINAPI *r11_fmt)(void *, UINT, UINT *);
 static HRESULT (WINAPI *r11_qi)(void *, REFIID, void **);
 
+/* IDxcCompiler3 = {228B4687-5A6A-4730-900C-9702B2203F54} */
+static const GUID IID_IDxcCompiler3_local =
+    { 0x228b4687, 0x5a6a, 0x4730, { 0x90, 0x0c, 0x97, 0x02, 0xb2, 0x20, 0x3f, 0x54 } };
+
 static const char *guid_text(REFIID iid)
 {
     static char buf[4][40];
@@ -578,6 +582,310 @@ static void watch_d3d12_device(void *dev)
     logf_("watching the D3D12 device");
 }
 
+/* ---------------------------------------------------------------- DXGI side */
+
+/*
+ * The adapter, and what the game is told about it.
+ *
+ * Between a D3D12 device being created and the first resource being made there
+ * is DXGI: enumerate the adapters, read their descriptions, make a swap chain.
+ * A game that dies in that window leaves no trace in anything above, and the
+ * description is not inert data -- engines branch on the vendor id, and some
+ * parse the name. A machine reporting itself as one vendor's hardware while
+ * behaving as another's is a decision made on a false premise.
+ *
+ * IDXGIObject: 3 SetPrivateData, 6 GetParent. IDXGIFactory: 7 EnumAdapters,
+ * 10 CreateSwapChain. IDXGIFactory1: 12 EnumAdapters1. IDXGIFactory2:
+ * 15 CreateSwapChainForHwnd. IDXGIAdapter: 8 GetDesc. IDXGIAdapter1: 10 GetDesc1.
+ *
+ * DXGI_ADAPTER_DESC: Description is 128 WCHARs at 0, VendorId at 256,
+ * DeviceId at 260, SubSysId 264, Revision 268.
+ */
+static HRESULT (WINAPI *rdxgi_enum)(void *, UINT, void **);
+static HRESULT (WINAPI *rdxgi_enum1)(void *, UINT, void **);
+static HRESULT (WINAPI *rdxgi_getdesc)(void *, void *);
+static HRESULT (WINAPI *rdxgi_getdesc1)(void *, void *);
+static HRESULT (WINAPI *rdxgi_swapchain)(void *, void *, HWND, const void *,
+                                         const void *, void *, void **);
+static HRESULT (WINAPI *rdxgi_swapchain_old)(void *, void *, void *, void **);
+
+static void describe_adapter(const void *desc, UINT which, const char *from)
+{
+    const WCHAR *w = (const WCHAR *)desc;
+    char name[132];
+    UINT i = 0, vendor, device;
+
+    if (!desc) return;
+    while (i < 128 && w[i]) { name[i] = (w[i] > 31 && w[i] < 127) ? (char)w[i] : '?'; ++i; }
+    name[i] = 0;
+    vendor = *(const UINT *)((const char *)desc + 256);
+    device = *(const UINT *)((const char *)desc + 260);
+    if (first_time(0x4001, which, vendor))
+        logf_("        adapter %u from %s: \"%s\"  vendor 0x%04x  device 0x%04x",
+              which, from, name, vendor, device);
+}
+
+static UINT last_adapter_index;
+
+static HRESULT WINAPI hdxgi_getdesc(void *self, void *desc)
+{
+    HRESULT hr = rdxgi_getdesc(self, desc);
+    if (SUCCEEDED(hr)) describe_adapter(desc, last_adapter_index, "GetDesc");
+    return hr;
+}
+static HRESULT WINAPI hdxgi_getdesc1(void *self, void *desc)
+{
+    HRESULT hr = rdxgi_getdesc1(self, desc);
+    if (SUCCEEDED(hr)) describe_adapter(desc, last_adapter_index, "GetDesc1");
+    return hr;
+}
+
+static void arm_adapter(void *ad, UINT index)
+{
+    last_adapter_index = index;
+    if (!ad) return;
+    if (!rdxgi_getdesc)  rdxgi_getdesc  = patch(ad,  8, hdxgi_getdesc);
+    if (!rdxgi_getdesc1) rdxgi_getdesc1 = patch(ad, 10, hdxgi_getdesc1);
+}
+
+static HRESULT WINAPI hdxgi_enum(void *self, UINT i, void **out)
+{
+    HRESULT hr = rdxgi_enum(self, i, out);
+    if (first_time(0x4002, i, (UINT)hr))
+        logf_("%s  EnumAdapters(%u) -> 0x%08lx",
+              FAILED(hr) ? "REFUSED " : "        ", i, (unsigned long)hr);
+    if (SUCCEEDED(hr) && out && *out) arm_adapter(*out, i);
+    return hr;
+}
+static HRESULT WINAPI hdxgi_enum1(void *self, UINT i, void **out)
+{
+    HRESULT hr = rdxgi_enum1(self, i, out);
+    if (first_time(0x4003, i, (UINT)hr))
+        logf_("%s  EnumAdapters1(%u) -> 0x%08lx",
+              FAILED(hr) ? "REFUSED " : "        ", i, (unsigned long)hr);
+    if (SUCCEEDED(hr) && out && *out) arm_adapter(*out, i);
+    return hr;
+}
+
+/* DXGI_SWAP_CHAIN_DESC1: Width 0, Height 4, Format 8, Stereo 12,
+ * SampleDesc 16, BufferUsage 24, BufferCount 28, Scaling 32, SwapEffect 36. */
+static HRESULT WINAPI hdxgi_swapchain(void *self, void *dev, HWND hwnd, const void *d,
+                                      const void *fs, void *restrict_out, void **out)
+{
+    HRESULT hr = rdxgi_swapchain(self, dev, hwnd, d, fs, restrict_out, out);
+    const UINT *u = (const UINT *)d;
+    logf_("%s  CreateSwapChainForHwnd(%ux%u format=%u buffers=%u effect=%u) -> 0x%08lx",
+          FAILED(hr) ? "REFUSED " : "        ",
+          d ? u[0] : 0, d ? u[1] : 0, d ? u[2] : 0, d ? u[7] : 0, d ? u[9] : 0,
+          (unsigned long)hr);
+    return hr;
+}
+static HRESULT WINAPI hdxgi_swapchain_old(void *self, void *dev, void *d, void **out)
+{
+    HRESULT hr = rdxgi_swapchain_old(self, dev, d, out);
+    logf_("%s  CreateSwapChain -> 0x%08lx",
+          FAILED(hr) ? "REFUSED " : "        ", (unsigned long)hr);
+    return hr;
+}
+
+static void watch_factory(void *f)
+{
+    if (!f) return;
+    if (!rdxgi_enum)      rdxgi_enum      = patch(f,  7, hdxgi_enum);
+    if (!rdxgi_swapchain_old) rdxgi_swapchain_old = patch(f, 10, hdxgi_swapchain_old);
+    if (!rdxgi_enum1)     rdxgi_enum1     = patch(f, 12, hdxgi_enum1);
+    if (!rdxgi_swapchain) rdxgi_swapchain = patch(f, 15, hdxgi_swapchain);
+    logf_("watching the DXGI factory");
+}
+
+static HRESULT (WINAPI *real_CreateDXGIFactory)(REFIID, void **);
+static HRESULT (WINAPI *real_CreateDXGIFactory1)(REFIID, void **);
+static HRESULT (WINAPI *real_CreateDXGIFactory2)(UINT, REFIID, void **);
+
+static HRESULT WINAPI my_CreateDXGIFactory(REFIID iid, void **out)
+{
+    HRESULT hr = real_CreateDXGIFactory(iid, out);
+    logf_("%s  CreateDXGIFactory -> 0x%08lx", FAILED(hr) ? "REFUSED " : "        ",
+          (unsigned long)hr);
+    if (SUCCEEDED(hr) && out && *out) watch_factory(*out);
+    return hr;
+}
+static HRESULT WINAPI my_CreateDXGIFactory1(REFIID iid, void **out)
+{
+    HRESULT hr = real_CreateDXGIFactory1(iid, out);
+    logf_("%s  CreateDXGIFactory1 -> 0x%08lx", FAILED(hr) ? "REFUSED " : "        ",
+          (unsigned long)hr);
+    if (SUCCEEDED(hr) && out && *out) watch_factory(*out);
+    return hr;
+}
+static HRESULT WINAPI my_CreateDXGIFactory2(UINT flags, REFIID iid, void **out)
+{
+    HRESULT hr = real_CreateDXGIFactory2(flags, iid, out);
+    logf_("%s  CreateDXGIFactory2(flags 0x%x) -> 0x%08lx",
+          FAILED(hr) ? "REFUSED " : "        ", flags, (unsigned long)hr);
+    if (SUCCEEDED(hr) && out && *out) watch_factory(*out);
+    return hr;
+}
+
+/* ------------------------------------------------- root signatures, as blobs */
+
+/*
+ * The two free functions in d3d12.dll that parse a container.
+ *
+ * These are not device methods, so nothing above sees them, and a game can
+ * reach the shader-container code through them long before it creates a
+ * pipeline. Both are logged BEFORE the call: if the parse takes the process
+ * down, the line naming it is already on disk.
+ */
+static HRESULT (WINAPI *real_rs_deserialize)(const void *, SIZE_T, REFIID, void **);
+static HRESULT (WINAPI *real_rs_deserialize_v)(const void *, SIZE_T, REFIID, void **);
+static HRESULT (WINAPI *real_rs_serialize)(const void *, UINT, void **, void **);
+static HRESULT (WINAPI *real_rs_serialize_v)(const void *, void **, void **);
+static LONG rs_deser, rs_ser;
+
+static HRESULT WINAPI my_rs_deserialize(const void *blob, SIZE_T len, REFIID iid, void **out)
+{
+    LONG which = InterlockedIncrement(&rs_deser);
+    HRESULT hr;
+    if (which <= 40)
+        logf_("RS    [#%ld] CreateRootSignatureDeserializer, %llu bytes, first dword 0x%08lx",
+              which, (unsigned long long)len,
+              (blob && len >= 4) ? *(const unsigned long *)blob : 0);
+    /* Keep a copy before the call. If the parse is what kills the process,
+     * the bytes that did it are on disk and can be read at leisure. */
+    if (which == 1 && blob && len)
+    {
+        HANDLE f = CreateFileA("C:\\rootsig-1.bin", GENERIC_WRITE, FILE_SHARE_READ,
+                               NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (f != INVALID_HANDLE_VALUE)
+        {
+            DWORD wrote;
+            WriteFile(f, blob, (DWORD)len, &wrote, NULL);
+            CloseHandle(f);
+            logf_("       blob written to C:\\rootsig-1.bin (%lu bytes)", wrote);
+        }
+    }
+    hr = real_rs_deserialize(blob, len, iid, out);
+    if (FAILED(hr) && which <= 40)
+        logf_("REFUSED  CreateRootSignatureDeserializer -> 0x%08lx", (unsigned long)hr);
+    return hr;
+}
+
+static HRESULT WINAPI my_rs_deserialize_v(const void *blob, SIZE_T len, REFIID iid, void **out)
+{
+    LONG which = InterlockedIncrement(&rs_deser);
+    HRESULT hr;
+    if (which <= 40)
+        logf_("RS    [#%ld] CreateVersionedRootSignatureDeserializer, %llu bytes, "
+              "first dword 0x%08lx", which, (unsigned long long)len,
+              (blob && len >= 4) ? *(const unsigned long *)blob : 0);
+    hr = real_rs_deserialize_v(blob, len, iid, out);
+    if (FAILED(hr) && which <= 40)
+        logf_("REFUSED  CreateVersionedRootSignatureDeserializer -> 0x%08lx",
+              (unsigned long)hr);
+    return hr;
+}
+
+static HRESULT WINAPI my_rs_serialize(const void *desc, UINT version, void **blob, void **err)
+{
+    LONG which = InterlockedIncrement(&rs_ser);
+    HRESULT hr;
+    if (which <= 40) logf_("RS    [#%ld] SerializeRootSignature(version %u)", which, version);
+    hr = real_rs_serialize(desc, version, blob, err);
+    if (FAILED(hr) && which <= 40)
+        logf_("REFUSED  SerializeRootSignature -> 0x%08lx", (unsigned long)hr);
+    return hr;
+}
+
+static HRESULT WINAPI my_rs_serialize_v(const void *desc, void **blob, void **err)
+{
+    LONG which = InterlockedIncrement(&rs_ser);
+    HRESULT hr;
+    if (which <= 40) logf_("RS    [#%ld] SerializeVersionedRootSignature", which);
+    hr = real_rs_serialize_v(desc, blob, err);
+    if (FAILED(hr) && which <= 40)
+        logf_("REFUSED  SerializeVersionedRootSignature -> 0x%08lx", (unsigned long)hr);
+    return hr;
+}
+
+/* ------------------------------------------------------------ shader compiler */
+
+/*
+ * What the game asks DXC to compile, and with what.
+ *
+ * A title that ships dxcompiler.dll builds its shaders while it runs, and the
+ * bytecode it produces is what the translation layer then has to convert. If
+ * that conversion is where a process dies, the last thing handed to the
+ * compiler names the shader that did it -- and the arguments name the feature
+ * that the converter could not follow, which is the part that might be
+ * negotiable.
+ *
+ * IDxcCompiler3: 0-2 IUnknown, 3 Compile, 4 Disassemble.
+ * Compile(const DxcBuffer *src, LPCWSTR *args, UINT32 argc,
+ *         IDxcIncludeHandler *inc, REFIID riid, void **result)
+ */
+static HRESULT (WINAPI *real_dxc_compile)(void *, const void *, const WCHAR **,
+                                          UINT32, void *, REFIID, void **);
+static LONG dxc_ok, dxc_bad, dxc_seen;
+
+static HRESULT WINAPI my_dxc_compile(void *self, const void *src, const WCHAR **args,
+                                     UINT32 argc, void *inc, REFIID iid, void **out)
+{
+    char line[512];
+    int at = 0;
+    UINT32 i;
+    HRESULT hr;
+    LONG which = InterlockedIncrement(&dxc_seen);
+
+    line[0] = 0;
+    for (i = 0; i < argc && args && at < (int)sizeof(line) - 8; ++i)
+    {
+        const WCHAR *w = args[i];
+        int k = 0;
+        if (!w) continue;
+        if (at < (int)sizeof(line) - 2) line[at++] = ' ';
+        while (w[k] && at < (int)sizeof(line) - 2)
+            line[at++] = (w[k] > 31 && w[k] < 127) ? (char)w[k++] : (++k, '?');
+        line[at] = 0;
+    }
+
+    /* Say it BEFORE the call. If the conversion takes the process down, the
+     * line already written is the one that names the shader. */
+    if (which <= 400)
+        logf_("DXC   [#%ld] compiling:%s", which, line);
+
+    hr = real_dxc_compile(self, src, args, argc, inc, iid, out);
+
+    if (SUCCEEDED(hr)) InterlockedIncrement(&dxc_ok);
+    else
+    {
+        InterlockedIncrement(&dxc_bad);
+        if (dxc_bad <= 20) logf_("REFUSED  DXC Compile [#%ld] -> 0x%08lx",
+                                 which, (unsigned long)hr);
+    }
+    return hr;
+}
+
+static HRESULT (WINAPI *real_DxcCreateInstance)(REFCLSID, REFIID, void **);
+
+static HRESULT WINAPI my_DxcCreateInstance(REFCLSID clsid, REFIID iid, void **out)
+{
+    HRESULT hr = real_DxcCreateInstance(clsid, iid, out);
+    if (SUCCEEDED(hr) && out && *out && !real_dxc_compile)
+    {
+        /* Only the compiler object has a Compile at slot 3; a utils or a
+         * library object would be patched wrongly, so check the interface. */
+        if (IsEqualGUID(iid, &IID_IDxcCompiler3_local))
+        {
+            real_dxc_compile = patch(*out, 3, my_dxc_compile);
+            logf_("watching DXC Compile: %s", real_dxc_compile ? "yes" : "NO");
+        }
+        else
+            logf_("        DxcCreateInstance for %s", guid_text(iid));
+    }
+    return hr;
+}
+
 /* --------------------------------------------------- where the devices come from */
 
 static HRESULT (WINAPI *real_D3D12CreateDevice)(void *, UINT, REFIID, void **);
@@ -649,6 +957,21 @@ static FARPROC WINAPI my_GetProcAddress(HMODULE mod, LPCSTR name)
         if (!real_D3D11CreateDevice) real_D3D11CreateDevice = (void *)p;
         return (FARPROC)my_D3D11CreateDevice;
     }
+    if (lstrcmpA(name, "CreateDXGIFactory") == 0)
+    {
+        if (!real_CreateDXGIFactory) real_CreateDXGIFactory = (void *)p;
+        return (FARPROC)my_CreateDXGIFactory;
+    }
+    if (lstrcmpA(name, "CreateDXGIFactory1") == 0)
+    {
+        if (!real_CreateDXGIFactory1) real_CreateDXGIFactory1 = (void *)p;
+        return (FARPROC)my_CreateDXGIFactory1;
+    }
+    if (lstrcmpA(name, "CreateDXGIFactory2") == 0)
+    {
+        if (!real_CreateDXGIFactory2) real_CreateDXGIFactory2 = (void *)p;
+        return (FARPROC)my_CreateDXGIFactory2;
+    }
     return p;
 }
 
@@ -668,6 +991,72 @@ static HMODULE WINAPI my_LoadLibraryExW(LPCWSTR name, HANDLE file, DWORD flags)
     return h;
 }
 
+/*
+ * Make a silent crash say something.
+ *
+ * A game that dies without a dialog, without a Wine backtrace and without a
+ * line in any log is the worst case to work on: every hypothesis is equally
+ * cheap and none can be tested. A vectored handler costs nothing while nothing
+ * is wrong and, when something is, names the code, the address and the module
+ * it happened in -- which usually names the component.
+ *
+ * Only genuinely fatal codes are reported. A running program raises C++
+ * exceptions and debugger notifications constantly and they are not faults.
+ */
+static void report(void);
+
+static const char *exception_name(DWORD code)
+{
+    switch (code)
+    {
+    case 0xC0000005: return "ACCESS_VIOLATION";
+    case 0xC000001D: return "ILLEGAL_INSTRUCTION";
+    case 0xC0000006: return "IN_PAGE_ERROR";
+    case 0xC000008C: return "ARRAY_BOUNDS_EXCEEDED";
+    case 0xC0000090: return "FLT_INVALID_OPERATION";
+    case 0xC0000094: return "INT_DIVIDE_BY_ZERO";
+    case 0xC0000096: return "PRIVILEGED_INSTRUCTION";
+    case 0xC00000FD: return "STACK_OVERFLOW";
+    case 0xC0000025: return "NONCONTINUABLE_EXCEPTION";
+    case 0xC0000374: return "HEAP_CORRUPTION";
+    default:         return NULL;
+    }
+}
+
+static LONG CALLBACK on_exception(EXCEPTION_POINTERS *info)
+{
+    static LONG told;
+    const char *what;
+    void *at;
+    char module[MAX_PATH] = "?";
+    HMODULE owner = NULL;
+
+    if (!info || !info->ExceptionRecord) return EXCEPTION_CONTINUE_SEARCH;
+    what = exception_name(info->ExceptionRecord->ExceptionCode);
+    if (!what) return EXCEPTION_CONTINUE_SEARCH;
+    if (InterlockedIncrement(&told) > 8) return EXCEPTION_CONTINUE_SEARCH;
+
+    at = info->ExceptionRecord->ExceptionAddress;
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                           | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)at, &owner) && owner)
+        GetModuleFileNameA(owner, module, sizeof(module) - 1);
+
+    logf_("CRASH    %s at %p", what, at);
+    logf_("         in %s%s", module,
+          owner ? "" : "  (no module -- executing outside any loaded image)");
+    if (owner)
+        logf_("         offset +0x%llx from that module's base",
+              (unsigned long long)((char *)at - (char *)owner));
+    if (info->ExceptionRecord->ExceptionCode == 0xC0000005
+        && info->ExceptionRecord->NumberParameters >= 2)
+        logf_("         %s address %p",
+              info->ExceptionRecord->ExceptionInformation[0] ? "writing to" : "reading from",
+              (void *)info->ExceptionRecord->ExceptionInformation[1]);
+    report();
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 static DWORD WINAPI worker(void *unused)
 {
     size_t i;
@@ -675,6 +1064,7 @@ static DWORD WINAPI worker(void *unused)
     (void)unused;
 
     logf_("gfx-observe: watching only. Nothing here changes what the game does.");
+    AddVectoredExceptionHandler(0, on_exception);   /* last in the chain */
 
     for (i = 0; i < sizeof(device_modules) / sizeof(device_modules[0]); ++i)
     {
@@ -691,6 +1081,44 @@ static DWORD WINAPI worker(void *unused)
         {
             real_D3D11CreateDevice = was;
             logf_("hooked %s!D3D11CreateDevice", device_modules[i]);
+        }
+    }
+
+    {
+        static const struct { const char *name; void *repl; void **slot; } dxgi[] = {
+            { "CreateDXGIFactory",  (void *)my_CreateDXGIFactory,  (void **)&real_CreateDXGIFactory },
+            { "CreateDXGIFactory1", (void *)my_CreateDXGIFactory1, (void **)&real_CreateDXGIFactory1 },
+            { "CreateDXGIFactory2", (void *)my_CreateDXGIFactory2, (void **)&real_CreateDXGIFactory2 },
+        };
+        size_t k;
+        for (k = 0; k < 3; ++k)
+        {
+            void *w = hook_import("dxgi.dll", dxgi[k].name, 0, dxgi[k].repl);
+            if (w) { *dxgi[k].slot = w; logf_("hooked dxgi.dll!%s", dxgi[k].name); }
+        }
+    }
+
+    {
+        void *w = hook_import("dxcompiler.dll", "DxcCreateInstance", 0,
+                              (void *)my_DxcCreateInstance);
+        if (w) { real_DxcCreateInstance = w; logf_("hooked dxcompiler.dll!DxcCreateInstance"); }
+    }
+    {
+        static const struct { const char *name; void *repl; void **slot; } rs[] = {
+            { "D3D12CreateRootSignatureDeserializer", (void *)my_rs_deserialize,
+              (void **)&real_rs_deserialize },
+            { "D3D12CreateVersionedRootSignatureDeserializer", (void *)my_rs_deserialize_v,
+              (void **)&real_rs_deserialize_v },
+            { "D3D12SerializeRootSignature", (void *)my_rs_serialize,
+              (void **)&real_rs_serialize },
+            { "D3D12SerializeVersionedRootSignature", (void *)my_rs_serialize_v,
+              (void **)&real_rs_serialize_v },
+        };
+        size_t k;
+        for (k = 0; k < 4; ++k)
+        {
+            void *w = hook_import("d3d12.dll", rs[k].name, 0, rs[k].repl);
+            if (w) { *rs[k].slot = w; logf_("hooked d3d12.dll!%s", rs[k].name); }
         }
     }
 
@@ -724,8 +1152,6 @@ static DWORD WINAPI worker(void *unused)
  * which is exactly what is lost. One line every half minute costs nothing and
  * survives any ending.
  */
-static void report(void);
-
 static DWORD WINAPI ticker(void *unused)
 {
     (void)unused;
@@ -752,6 +1178,11 @@ static void report(void)
     if (!any)
         logf_("  nothing was created through a watched call. Either the device "
               "never arrived, or it arrives somewhere this does not look.");
+    if (rs_deser || rs_ser)
+        logf_("  root signatures: %ld deserialised, %ld serialised", rs_deser, rs_ser);
+    if (dxc_seen)
+        logf_("  DXC shader compiles: %ld attempted, %ld ok, %ld refused",
+              dxc_seen, dxc_ok, dxc_bad);
     logf_("  resource barriers: %ld transition, %ld uav, %ld ALIASING%s",
           barriers_transition, barriers_uav, barriers_alias,
           barriers_alias ? "   << the game aliases memory"

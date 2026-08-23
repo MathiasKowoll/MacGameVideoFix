@@ -12,8 +12,13 @@ Makes Windows games show their cutscenes under CrossOver on Apple Silicon.
 > the other three is in the engine rather than in anything installed beside the
 > game.
 
-Thirteen entries, and more games than that: the two KINGDOM HEARTS packages
-hold seven playable titles between them. They install the same way: open the app, pick the game from
+Fourteen entries, and more games than that: the two KINGDOM HEARTS packages
+hold seven playable titles between them.
+
+Most of these are video faults, which is what the name says. One is not:
+Splintered Fate never reaches a cutscene because it does not start, and the
+call that stops it is guarded the same way everything else here is fixed — by
+answering it better. They install the same way: open the app, pick the game from
 the list, drop its folder on it, press Apply.
 
 | Game | Symptom | CrossOver |
@@ -31,6 +36,7 @@ the list, drop its folder on it, press Apply.
 | [**NieR Replicant ver.1.22474487139**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/NieR-Replicant) | Crashes when the first video starts | Preview 20260821 — not tried on 26.3 |
 | [**KINGDOM HEARTS Dream Drop Distance**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Kingdom-Hearts) | Cutscene runs with sound, picture solid green | Preview 20260821 — not tried on 26.3 |
 | [**KINGDOM HEARTS HD 1.5+2.5 ReMIX**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Kingdom-Hearts) | Cutscene runs with sound, picture solid green | Preview 20260821 — not tried on 26.3 |
+| [**TMNT: Splintered Fate**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/TMNT-Splintered-Fate) | Opens a window, then closes silently | Preview 20260821 — not tried on 26.3 |
 
 **This project targets `crossover-preview-arm64-20260821`**, and that is what
 "Preview" means in the column above and everywhere else in this file. Every title

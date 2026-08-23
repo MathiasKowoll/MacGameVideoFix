@@ -159,6 +159,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
     case woLong
     case kingdomHearts28
     case kingdomHearts1525
+    case tmntSplinteredFate
 
     var id: String { rawValue }
 
@@ -178,6 +179,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .woLong:            return "Wo Long: Fallen Dynasty"
         case .kingdomHearts28:   return "KINGDOM HEARTS Dream Drop Distance"
         case .kingdomHearts1525: return "KINGDOM HEARTS HD 1.5+2.5 ReMIX"
+        case .tmntSplinteredFate: return "TMNT: Splintered Fate"
         }
     }
 
@@ -196,6 +198,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .woLong:            return "Cutscene runs with sound, picture black"
         case .kingdomHearts28,
              .kingdomHearts1525: return "Cutscene runs with sound, picture solid green"
+        case .tmntSplinteredFate: return "Opens a window, then closes silently"
         }
     }
 
@@ -218,6 +221,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .woLong:            return "WoLong.exe"
         case .kingdomHearts28:   return "KINGDOM HEARTS Dream Drop Distance.exe"
         case .kingdomHearts1525: return "KINGDOM HEARTS HD 1.5+2.5 Launcher.exe"
+        case .tmntSplinteredFate: return "TMNTSF.exe"
         }
     }
 
@@ -229,6 +233,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
             return "the folder holding KINGDOM HEARTS Dream Drop Distance.exe"
         case .kingdomHearts1525:
             return "the package folder, the one holding the games' .exe files"
+        case .tmntSplinteredFate:
+            return "the folder holding TMNTSF.exe"
         default:               return "the game folder, the one with Engine inside"
         }
     }
@@ -251,6 +257,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
             return "…/steamapps/common/KINGDOM HEARTS HD 2.8 Final Chapter Prologue"
         case .kingdomHearts1525:
             return "…/steamapps/common/KINGDOM HEARTS -HD 1.5+2.5 ReMIX-"
+        case .tmntSplinteredFate:
+            return "…/steamapps/common/Teenage Mutant Ninja Turtles Splintered Fate"
         }
     }
 
@@ -260,6 +268,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
              .nioh, .nioh2, .nioh3,
              .nierReplicant, .woLong,
              .kingdomHearts28, .kingdomHearts1525:   return [.videoBridge]
+        case .tmntSplinteredFate:                   return [.guardCall]
         default:                                 return [.runtime]
         }
     }
@@ -288,6 +297,9 @@ enum SupportedGame: String, CaseIterable, Identifiable {
          * Birth by Sleep half of the package plays its cutscenes through
          * CriWare, which never reaches Media Foundation. */
         case .kingdomHearts28, .kingdomHearts1525: return "install-kh-bridge.sh"
+        /* Not a bridge and not about video: it guards one D3D12 call that ends
+         * the process instead of returning an error. */
+        case .tmntSplinteredFate: return "install-tmnt-fix.sh"
         default:               return "install-runtime-fix.sh"
         }
     }
@@ -352,7 +364,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         // pair fails to match rather than being accepted as the other.
         if self == .nioh || self == .nioh2 || self == .nioh3
             || self == .nierReplicant || self == .woLong
-            || self == .kingdomHearts28 || self == .kingdomHearts1525 {
+            || self == .kingdomHearts28 || self == .kingdomHearts1525
+            || self == .tmntSplinteredFate {
             guard let exe = executable else { return nil }
             var candidates = [url]
             if let subs = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
@@ -442,6 +455,9 @@ enum Title {
             atPath: c.appendingPathComponent("KINGDOM HEARTS HD 1.5+2.5 Launcher.exe").path) {
             return .bridgeGame(c, .kingdomHearts1525)
         }
+        for c in candidates where fm.fileExists(atPath: c.appendingPathComponent("TMNTSF.exe").path) {
+            return .bridgeGame(c, .tmntSplinteredFate)
+        }
         if let g = GameFolder.locate(from: url) { return .unrealVP9(g) }
         return nil
     }
@@ -453,6 +469,8 @@ enum Mode: String, CaseIterable, Identifiable {
     case runtime
     /// Carry the decoded frame from the D3D11 decoder to the D3D12 renderer.
     case videoBridge
+    /// Answer a D3D12 call that ends the process instead of returning an error.
+    case guardCall
 
     var id: String { rawValue }
 
@@ -460,6 +478,7 @@ enum Mode: String, CaseIterable, Identifiable {
         switch self {
         case .runtime:     return "Runtime patch"
         case .videoBridge: return "Video bridge"
+        case .guardCall:   return "Crash guard"
         }
     }
 
@@ -472,6 +491,10 @@ enum Mode: String, CaseIterable, Identifiable {
             return "Adds one small DLL beside the game's own. The game decodes "
                  + "video on a D3D11 device and draws with D3D12, and under "
                  + "D3DMetal the frame cannot cross between them; this carries it."
+        case .guardCall:
+            return "Adds one small DLL beside the game's own. The game asks D3D12 a "
+                 + "question whose answer, under D3DMetal, ends the process instead "
+                 + "of coming back; this answers it first."
         }
     }
 }
@@ -635,7 +658,7 @@ final class Runner: ObservableObject {
     var state: FixState {
         switch mode {
         case .runtime:     return runtimeState
-        case .videoBridge: return bridgeState
+        case .videoBridge, .guardCall: return bridgeState
         }
     }
 
@@ -644,7 +667,7 @@ final class Runner: ObservableObject {
     var otherState: FixState {
         switch mode {
         case .runtime:     return legacyReencode
-        case .videoBridge: return .notApplied
+        case .videoBridge, .guardCall: return .notApplied
         }
     }
 
@@ -850,14 +873,14 @@ final class Runner: ObservableObject {
     func apply() {
         switch mode {
         case .runtime:     applyRuntime()
-        case .videoBridge: runBridge(install: true)
+        case .videoBridge, .guardCall: runBridge(install: true)
         }
     }
 
     func revert() {
         switch mode {
         case .runtime:     revertRuntime()
-        case .videoBridge: runBridge(install: false)
+        case .videoBridge, .guardCall: runBridge(install: false)
         }
     }
 
@@ -2881,7 +2904,8 @@ extension SupportedGame {
         /// because it was being looked for in the Unreal place.
         switch self {
         case .dynastyWarriors, .personaStrikers, .nioh, .nioh2, .nioh3,
-             .nierReplicant, .woLong, .kingdomHearts28, .kingdomHearts1525:
+             .nierReplicant, .woLong, .kingdomHearts28, .kingdomHearts1525,
+             .tmntSplinteredFate:
             return FileManager.default.fileExists(
                 atPath: folder.appendingPathComponent(exe).path)
         default:
@@ -4400,6 +4424,7 @@ struct ContentView: View {
         switch runner.mode {
         case .runtime:     return "Install the proxy DLL that patches Electra at startup."
         case .videoBridge: return "Install the DLL that carries frames from the decoder to the renderer."
+        case .guardCall:   return "Install the DLL that answers the call which ends the process."
         }
     }
 

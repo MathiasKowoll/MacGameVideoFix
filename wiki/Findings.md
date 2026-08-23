@@ -160,6 +160,32 @@ Four words are used precisely: **measured** (observed directly here),
   texture passed to `VideoProcessorBlt`.
 - *Standing.* **Measured.**
 
+**`D3D12CreateRootSignatureDeserializer` ends the process when the container
+holds no root signature.**
+
+- *Observed.* Given a valid DXBC container with no `RTS0` part, the call does
+  not return an error. The process dies reading a field at offset 4 of a null
+  pointer, inside
+  `D3DMetal.framework/Versions/A/Resources/libmetalirconverter.dylib`, and
+  there is no dialog, no Wine backtrace and nothing in any log. On Windows the
+  same call returns `E_INVALIDARG`.
+- *Consequence.* Asking whether a compiled shader carries an embedded root
+  signature is an ordinary thing for an engine to do, and the answer for most
+  shaders is "no". A title that asks about the first shader it loads does not
+  start at all, and leaves nothing behind that says why. TEENAGE MUTANT NINJA
+  TURTLES: SPLINTERED FATE opens a window and closes about three seconds later.
+- *Reproduce.* Compile any shader without `[RootSignature(...)]` and pass the
+  whole container to `D3D12CreateRootSignatureDeserializer`. The one measured
+  here is 3224 bytes and holds `SFI0`, `ISG1`, `OSG1`, `PSV0`, `STAT`, `HASH`
+  and `DXIL` — seven parts, none of them `RTS0`.
+- *What would fix it.* Checking whether the part is present before reading it,
+  and returning `E_INVALIDARG` when it is not. The whole workaround this
+  project ships for it is that check: walk the container's part table, look for
+  `RTS0`, and answer without calling through when it is absent. Twelve lines,
+  and it turns a silent death into a game that plays.
+- *Standing.* **Measured**, with the container captured to disk before the
+  call that consumed it.
+
 **`ID3D12Device::CreateCommittedResource` with `DXGI_FORMAT_NV12` ends the
 process.**
 

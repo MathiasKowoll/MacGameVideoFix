@@ -75,6 +75,11 @@ GAMES = [
      "The Dream Drop Distance fix, unchanged -- six executables, same route",
      "D3DMetal", "11 + 12", "Preview -- not tried on 26.3",
      "Fixed", "Kingdom-Hearts"),
+    ("TMNT: Splintered Fate", "Rebirth, in-house",
+     "Opens a window, then closes silently",
+     "A guard on the D3D12 call that ends the process instead of failing",
+     "D3DMetal", "12", "Preview -- not tried on 26.3",
+     "Fixed", "TMNT-Splintered-Fate"),
 ]
 
 HEAD = ("| Game | Engine | Symptom | Fix | Backend | DX | CrossOver | Status |\n"
