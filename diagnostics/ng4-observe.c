@@ -942,7 +942,11 @@ static HRESULT (WINAPI *real_MFCreateDXGIDeviceManager)(UINT *, void **);
  * previous condition while looking like the new one. A build flag cannot do
  * that: the log line states which build is running, and it comes from the same
  * variable the code branches on. */
-static BOOL refuse_d3d_manager = FALSE;
+static BOOL refuse_d3d_manager;
+
+/* Whether to patch the D3D12 device and its resources at all. Off, because on
+ * the one build where the title works these patches are refused anyway. */
+static BOOL patch_d3d12;
 
 
 /* Follow the DXGI device manager, which is where this stops.
@@ -2513,6 +2517,19 @@ static HRESULT WINAPI my_D3D12CreateDevice(void *adapter, UINT level,
 {
     HRESULT hr = real_D3D12CreateDevice(adapter, level, iid, device);
     logf_("D3D12CreateDevice(featureLevel=0x%lx) -> 0x%08lx", level, hr);
+    /*
+     * Leave D3D12 alone.
+     *
+     * On CrossOver 26.3 every one of the patches below is refused --
+     * VirtualProtect returns error 87 against that vtable -- and the title
+     * reaches its menu. On Preview they all take, and it stalls immediately
+     * after the last of them. That is the cleanest remaining difference between
+     * a run that works and a run that does not, and it is ours rather than the
+     * system's, so it is the one to remove first.
+     *
+     * Set NG4_PATCH_D3D12=1 to put them back.
+     */
+    if (!patch_d3d12) { logf_("  d3d12: left untouched"); return hr; }
     if (SUCCEEDED(hr) && device && *device)
     {
         static void *qi, *cc;
@@ -3170,6 +3187,9 @@ static DWORD WINAPI worker(LPVOID unused)
         v[0] = 0;
         if (GetEnvironmentVariableA("NG4_ANSWER_MFT", v, sizeof(v)) && v[0] == '1')
             answer_mft_gate = TRUE;
+        v[0] = 0;
+        if (GetEnvironmentVariableA("NG4_PATCH_D3D12", v, sizeof(v)) && v[0] == '1')
+            patch_d3d12 = TRUE;
         v[0] = 0;
         if (GetEnvironmentVariableA("NG4_REFUSE_DSTORAGE", v, sizeof(v)) && v[0] == '1')
             refuse_dstorage_factory = TRUE;

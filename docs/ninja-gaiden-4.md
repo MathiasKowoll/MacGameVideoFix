@@ -38,9 +38,31 @@ the same place it always has: after `IMFDXGIDeviceManager::ResetDevice`, before
 any source reader. A control run with nothing of this project installed stalls
 identically, so the probe is not the cause.
 
-What separates the two is therefore upstream of the video and is not yet
-isolated. The remaining variables are the CrossOver version itself and
-winevideo's patched `winegstreamer` and `mfplat`.
+What separates the two is therefore upstream of the video. Four candidates were
+tried on Preview and none of them moved it:
+
+- the three byte-stream handlers registered exactly as winevideo registers them,
+- the `MFTEnumEx` gate answered,
+- `MFCreateDXGIDeviceManager` refused outright, so that decoding has to go to
+  software -- the lever that fixed two other titles the same day,
+- and every D3D12 vtable patch removed, since on 26.3 those patches are refused
+  by the system anyway and the title works there.
+
+Each time the title stops in the same place, and a control run with nothing of
+this project installed stops there too. The owner reports the same on every
+CrossOver they have tried except one patched with winevideo.
+
+So what remains is inside the binaries winevideo replaces -- `mfplat` and
+`winegstreamer` -- acting before any video call exists, in the gap between
+binding a device to the DXGI manager and opening the first file. Isolating which
+one would mean putting their binaries into a clean CrossOver a piece at a time,
+and that is patching CrossOver: the line this project does not cross.
+
+**What is not the blocker, established rather than assumed.** Not DirectStorage
+(fails on both builds, patched or not, and the working configuration simply
+disables it). Not the decoder announcement (the substitution returns what their
+real MFT returns). Not the byte-stream handlers (registered, never reached). And
+not the codec: Preview decodes VP9 in WebM, which DYNASTY WARRIORS demonstrates.
 
 One difference worth recording because it will matter elsewhere: on 26.3 the
 D3D12 vtable patches are refused -- `VirtualProtect` returns error 87 against
