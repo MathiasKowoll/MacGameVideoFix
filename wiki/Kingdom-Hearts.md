@@ -70,10 +70,13 @@ a picture on screen:
 | Re_Chain of Memories | `dt/KHCReSource/BIN/movie/RLP.mp4`, then three more | 1920×1080, then rebuilt at 1280×720 |
 | II FINAL MIX | `juefigs/KH2ReSource/zmovie/en/opn.mp4` | 1280×720 and 640×360 |
 | Birth by Sleep FINAL MIX | `juefigs/BBSReSource/movie/EN/LOP.mp4` | 1280×720 and 640×360 |
-| the launcher | `Mare/MOVIE/ReCoded/dt/hd501.mp4` | 1280×720 and 640×360 |
+| the launcher | `Mare/MOVIE/ReCoded/dt/hd501.mp4`, then `Mare/MOVIE/Days/dt/DOP.mp4` | 1280×720, then rebuilt at 1920×1080 |
 
-The launcher is not a formality here: it is what plays the film collections,
-the way 2.8's launcher plays Back Cover.
+The launcher is not a formality here: it is what plays **both** film
+collections, Re:coded and 358/2 Days, the way 2.8's launcher plays Back Cover.
+It also crosses a clip-size change between them, in the opposite direction from
+Re_Chain of Memories — 1280×720 up to 1920×1080 — which exercises the same
+re-arm the other way.
 
 All in software, all getting the shared handle back through
 `OpenSharedHandle`, all producing the plane pair the fix writes into.
@@ -210,10 +213,11 @@ distinct engine in both packages: Dream Drop Distance, 2.8's launcher playing
 Back Cover, FINAL MIX, Re_Chain of Memories, II FINAL MIX, Birth by Sleep
 FINAL MIX and 1.5+2.5's launcher.
 
-`KINGDOM HEARTS Theater.exe` is the one not observed. It carries the same
-import signature and the installer covers it, but the film collections were
-reached through the launcher rather than through it, so nothing here has seen
-it open a clip.
+`KINGDOM HEARTS Theater.exe` is the one not observed, and it now looks like it
+never will be: **both** film collections were reached through the launcher, so
+nothing in normal play appears to route through that executable at all. It
+carries the same import signature and the installer covers it regardless, which
+costs a registry key and removes the question.
 
 The launcher crashes on exit on this machine, inside `libobjc` by way of
 `winemac`, in a thread belonging to the launcher rather than the game. It is
