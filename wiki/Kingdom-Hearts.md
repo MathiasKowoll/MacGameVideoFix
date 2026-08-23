@@ -1,8 +1,23 @@
-# KINGDOM HEARTS Dream Drop Distance
+# KINGDOM HEARTS
 
-The twelfth title, and the first whose game wanted the decoder's own surface
-rather than a picture. The test that had settled the previous title's fault
-gave the opposite answer here, and that was what made the route clear.
+Seven titles across two packages, one fault and one fix. The first of them was
+the first game here that wanted the decoder's own surface rather than a
+picture, and the test that had settled the previous title's fault gave the
+opposite answer, which is what made the route clear.
+
+| Package | Fixed | Needs nothing |
+| --- | --- | --- |
+| HD 2.8 Final Chapter Prologue | Dream Drop Distance, χ Back Cover | 0.2 Birth by Sleep |
+| HD 1.5+2.5 ReMIX | FINAL MIX, Re_Chain of Memories, II FINAL MIX, Birth by Sleep FINAL MIX, the Theater | — |
+
+KINGDOM HEARTS III is not here either: it plays unaided. Both exceptions are
+the same case and are explained below.
+
+Everything measured below is from Dream Drop Distance, which is where the work
+happened. HD 1.5+2.5 ReMIX needed **no new code at all** — its six
+video-playing executables import the same five entry points and take the same
+route, and the fix reached them by widening one gate from two names to the
+family prefix.
 
 | | |
 | --- | --- |
@@ -13,10 +28,10 @@ gave the opposite answer here, and that was what made the route clear.
 | Backend | **D3DMetal**, D3D11 **and** D3D12 |
 | CrossOver | `crossover-preview-arm64-20260821`. Not tried on 26.3 |
 
-## One package, two games, one of them fixed
+## The two that need nothing, and why
 
-KINGDOM HEARTS HD 2.8 Final Chapter Prologue ships two executables behind a
-launcher. Only **Dream Drop Distance** is fixed here.
+KINGDOM HEARTS HD 2.8 Final Chapter Prologue ships two games behind a launcher,
+and only Dream Drop Distance needed fixing.
 
 **0.2 Birth by Sleep needs no fix: its cutscenes already play.** That is worth
 stating plainly, because the same package failing in one half and working in
@@ -35,6 +50,27 @@ the game decrypts it itself.
 
 A game that decodes its own video in software is the case that was never going
 to be a problem.
+
+## Six more, for the price of a prefix
+
+HD 1.5+2.5 ReMIX ships four games, a Theater and a launcher, and **all six
+executables that play video** import exactly the same five entry points as
+Dream Drop Distance: `dinput8`'s `DirectInput8Create`,
+`MFCreateSourceReaderFromURL`, `MFCreateDXGIDeviceManager`,
+`D3D11CreateDevice`, and `d3d12.dll` **ordinal 101**. Measured from the import
+tables before anything was installed.
+
+They take the same route too, confirmed on KINGDOM HEARTS FINAL MIX: the reader
+opens `STEAM/dt/KH1Movie/OPN.mp4` in software, the shared handle comes back
+through `OpenSharedHandle`, and the same plane pair appears at 1920×1080 and
+960×540.
+
+The only change any of this needed was to the gate that decides which titles
+take the plane route. It had been two executable names; eight is not a list any
+more, so it is the family prefix instead. That is safe in a way a shape match
+is not: this DLL exists only where an installer put it, and the capture also
+needs a clip opened through the hooked reader, which is why KINGDOM HEARTS III
+matches the prefix and can never arm.
 
 ## Back Cover plays too, and the launcher is what plays it
 
@@ -143,9 +179,12 @@ Do not use this on a game with anti-cheat. The fix patches a running process.
 
 Measured on Preview and D3DMetal only. 26.3 has not been tried.
 
-Only Dream Drop Distance. Selecting the package folder finds it by name; 0.2
-Birth by Sleep is a different executable and a different video path, and this
-does nothing for it.
+0.2 Birth by Sleep and KINGDOM HEARTS III are untouched by this and need to be.
+Both decode their own video in software.
+
+Of HD 1.5+2.5 ReMIX, FINAL MIX is the title the route was confirmed on. The
+other five executables are covered by the same installer and the same measured
+import signature, which is a strong argument and not a run.
 
 The launcher crashes on exit on this machine, inside `libobjc` by way of
 `winemac`, in a thread belonging to the launcher rather than the game. It is

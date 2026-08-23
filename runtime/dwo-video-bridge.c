@@ -755,23 +755,26 @@ static UINT64 bridge_row_bytes, bridge_total_bytes;
  *
  * Arming on the shape alone would mean writing luma into a texture the game
  * draws with, on three titles that work today, to serve one that does not.
- * Naming the executables costs a line per title and cannot do that.
+ *
+ * The prefix rather than a list of names, because the list stopped being one:
+ * HD 1.5+2.5 ReMIX ships six executables that play video -- four games, the
+ * Theater, and the launcher -- and 2.8 ships two. All eight import the same
+ * five entry points and take the same route, and the prefix separates them from
+ * every other title this bridge serves, which is all the gate has to do.
+ *
+ * It is not a wider net than it looks. This DLL is only present where an
+ * installer put it, and the capture additionally needs frame_width, which only
+ * a clip opened through the hooked source reader sets. KINGDOM HEARTS III
+ * matches the prefix and could never arm: its cutscenes are CriWare's and never
+ * reach that reader.
  */
 static BOOL plane_route_wanted(void)
 {
-    static const char *const titles[] = {
-        "KINGDOM HEARTS Dream Drop Distance.exe",
-        "KINGDOM HEARTS HD 2.8 Launcher.exe",       /* plays Back Cover */
-    };
     static int decided;
-    size_t i;
 
     if (!decided)
-    {
-        decided = -1;
-        for (i = 0; i < sizeof(titles) / sizeof(titles[0]); ++i)
-            if (lstrcmpiA(exe_tag_(), titles[i]) == 0) { decided = 1; break; }
-    }
+        decided = (CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, exe_tag_(), 15,
+                                  "KINGDOM HEARTS ", 15) == CSTR_EQUAL) ? 1 : -1;
     return decided == 1;
 }
 

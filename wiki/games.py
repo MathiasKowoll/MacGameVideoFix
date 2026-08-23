@@ -69,7 +69,12 @@ GAMES = [
      "Cutscene runs with sound, picture solid green",
      "Software decode, and the luma and chroma planes written into the game's own textures",
      "D3DMetal", "11 + 12", "Preview -- not tried on 26.3",
-     "Fixed", "Kingdom-Hearts-HD-2.8"),
+     "Fixed", "Kingdom-Hearts"),
+    ("KINGDOM HEARTS HD 1.5+2.5 ReMIX", "Square Enix, in-house",
+     "Cutscene runs with sound, picture solid green",
+     "The Dream Drop Distance fix, unchanged -- six executables, same route",
+     "D3DMetal", "11 + 12", "Preview -- not tried on 26.3",
+     "Fixed", "Kingdom-Hearts"),
 ]
 
 HEAD = ("| Game | Engine | Symptom | Fix | Backend | DX | CrossOver | Status |\n"

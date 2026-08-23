@@ -93,7 +93,8 @@ videos".
 | [Nioh 3](Nioh-3.md) | Koei Tecmo, in-house | Failed to play movie | The DYNASTY WARRIORS bridge, unchanged | D3DMetal | 12 | Preview -- not tried on 26.3 | Fixed |
 | [Wo Long: Fallen Dynasty](Wo-Long-Fallen-Dynasty.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | The DYNASTY WARRIORS bridge, unchanged | D3DMetal | 12 | Preview -- not tried on 26.3 | Fixed |
 | [NieR Replicant ver.1.22474487139](NieR-Replicant.md) | Toylogic, in-house | Crashes when the first video starts | Software decode, and the frame written into the game's target | D3DMetal | 11 | Preview -- not tried on 26.3 | Fixed |
-| [KINGDOM HEARTS Dream Drop Distance](Kingdom-Hearts-HD-2.8.md) | Square Enix, in-house | Cutscene runs with sound, picture solid green | Software decode, and the luma and chroma planes written into the game's own textures | D3DMetal | 11 + 12 | Preview -- not tried on 26.3 | Fixed |
+| [KINGDOM HEARTS Dream Drop Distance](Kingdom-Hearts.md) | Square Enix, in-house | Cutscene runs with sound, picture solid green | Software decode, and the luma and chroma planes written into the game's own textures | D3DMetal | 11 + 12 | Preview -- not tried on 26.3 | Fixed |
+| [KINGDOM HEARTS HD 1.5+2.5 ReMIX](Kingdom-Hearts.md) | Square Enix, in-house | Cutscene runs with sound, picture solid green | The Dream Drop Distance fix, unchanged -- six executables, same route | D3DMetal | 11 + 12 | Preview -- not tried on 26.3 | Fixed |
 
 **Backend and DX are not preferences, they are requirements.** Persona 5
 Strikers, Nioh and Nioh 2 only work on DXMT: all three need a shared D3D9
