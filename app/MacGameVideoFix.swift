@@ -3425,6 +3425,8 @@ struct ContentView: View {
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
+            codecBanner
+
             if runner.codecs.isEmpty {
                 Text("No bottles in ~/Library/Application Support/CrossOver/Bottles.")
                     .font(.callout).foregroundStyle(.secondary)
@@ -4331,10 +4333,17 @@ struct ContentView: View {
 
     private var planTable: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if runner.plan.contains(where: { $0.game.extraRequirement != nil }) {
-                codecBanner
-            }
-
+            // The codec banner used to sit here, above the scan results, whenever
+            // the plan held a title that needs a staged decoder. It does not
+            // belong in a list of games: staging is a property of a CrossOver and
+            // a bottle, not of anything that was scanned, and putting it here made
+            // it appear as a consequence of reading a library.
+            //
+            // It lives in the bottles sheet now, which is the one place that talks
+            // about engines and bottles and is where the action was always going
+            // to be taken. Nothing is lost by moving it: a staging that actually
+            // needs attention still raises `driftBanner` on the main window at
+            // launch, in either mode, with nothing scanned and nothing chosen.
             ScrollView {
                 VStack(spacing: 0) {
                     ForEach($runner.plan) { $hit in
