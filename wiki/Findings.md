@@ -1195,6 +1195,13 @@ In the repository rather than on the wiki:
 - [docs/upstreaming.md](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/upstreaming.md)
   — what of this could stop being per-game, and what should not be attempted.
 
+On the wiki:
+
+- [How the codec staging works](How-the-codec-staging-works.md) — what the app
+  does to put a VC-1 decoder in front of CrossOver without redistributing
+  anything or touching a CrossOver file, and why loading the plugin in place
+  crashes instead.
+
 ---
 
 Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md)

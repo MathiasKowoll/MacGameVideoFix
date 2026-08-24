@@ -83,3 +83,7 @@ naming a directory of decoders that CrossOver does not ship.
 This is the same staging Persona 5 Strikers and the Nioh titles need, which is
 worth saying plainly: it is not three more fixes, it is three more games covered
 by one that already existed.
+
+[How the codec staging works](How-the-codec-staging-works.md) explains what that
+staging actually does — why the decoder cannot simply be pointed at, what is
+copied and what is symlinked, and why each CrossOver gets its own directory.

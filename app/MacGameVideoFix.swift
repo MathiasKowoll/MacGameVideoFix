@@ -139,18 +139,14 @@ enum Requirements {
     ///
     /// A floor is the wrong shape for this. What the project supports is one
     /// build, and the honest sentence says so first.
+    /// GStreamer was mentioned here for a while, in a sentence appended to this
+    /// line. It said the right thing and nobody read it: a requirement that
+    /// blocks six games does not belong in a caption, it belongs in a card with
+    /// the button that resolves it. That is what the banner below does now, and
+    /// this line is back to one fact.
     static var note: String {
-        var text = "Measured on CrossOver Preview. Six of the eighteen entries also "
-                 + "work on stable 26.3; the rest are not verified there."
-        // Said here as well as in the codec banner, because it is a requirement
-        // rather than a repair: six titles borrow a decoder from GStreamer, and
-        // without it installed nothing downstream of this line can work for
-        // them. The banner offers the download; this says why it matters before
-        // anyone gets there.
-        text += Codecs.gstreamerInstalled
-            ? " GStreamer is installed, which six of them need."
-            : " GStreamer is NOT installed, and six of them need it."
-        return text
+        "Measured on CrossOver Preview. Six of the eighteen entries also work "
+      + "on stable 26.3; the rest are not verified there."
     }
 }
 
@@ -3318,6 +3314,10 @@ struct ContentView: View {
             // screen at launch, in either mode, with nothing chosen. The other
             // codec banner is drawn from the plan table and so cannot be
             // reached until bulk mode, a library, a scan and P5S in the plan.
+            // A requirement, presented the way the codec is: a card with the
+            // action in it. Above the codec banner because it comes first --
+            // there is nothing to stage until this exists.
+            if !Codecs.gstreamerInstalled { gstreamerBanner }
             if runner.needsCodecAttention { driftBanner }
             if runner.bulk {
                 bulkHeader
@@ -3888,6 +3888,36 @@ struct ContentView: View {
     /// scanning for colour read green and moved on.
     private var codecHealthy: Bool {
         Codecs.staged && driftRows.isEmpty && waitingRows.isEmpty
+    }
+
+    /// The one requirement that blocks six games, with its own download button.
+    ///
+    /// Shown only when it is missing. A card that says "installed" every time
+    /// the app opens is a card people stop seeing, and the codec banner below
+    /// already names the version it borrows from.
+    private var gstreamerBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("GStreamer is not installed")
+                    .font(.callout.weight(.medium))
+                Text("Six games borrow a VC-1 or WMV3 decoder from it, and nothing "
+                   + "can be staged until it is on this Mac. It is a normal macOS "
+                   + "installer, and nothing from it is redistributed.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button("Download GStreamer…") {
+                if let url = URL(string: Codecs.downloadPage) { NSWorkspace.shared.open(url) }
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Check again") { runner.refreshCodecs() }
+                .help("After installing it, check without restarting the app.")
+        }
+        .padding(12)
+        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
     }
 
     private var codecBanner: some View {
