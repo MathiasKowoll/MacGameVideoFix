@@ -124,6 +124,52 @@ and says which engines match. As this was written the framework was 1.24.14
 while Preview shipped 1.28.5 — a series apart, which usually works and is not
 the closest fit.
 
+## What the script does, step by step
+
+All of it is in
+[`runtime/stage-codecs.sh`](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/runtime/stage-codecs.sh),
+312 lines of shell with the reasoning in comments beside each decision. The app
+runs exactly this file — it ships a copy in its bundle and shells out to it, so
+what you read is what runs.
+
+    runtime/stage-codecs.sh x86_64                  every engine installed
+    runtime/stage-codecs.sh x86_64 26.3.0.39832     just that one
+
+What it does, in order:
+
+1. **Find the framework.** `/Library/Frameworks/GStreamer.framework/Versions/1.0`.
+   If it is not there the script stops and prints where to get it, naming the
+   1.24 runtime package as the version this was verified with.
+2. **Read its GStreamer version**, from the compatibility number in
+   `libgstreamer-1.0.0.dylib` rather than a plist — the number encodes
+   `1.MINOR.PATCH` directly.
+3. **Compare that against every installed CrossOver.** Each engine's own core is
+   read the same way, and the script says which ones are the same series and
+   which are not. A mismatch still stages, because GStreamer keeps its ABI
+   across 1.x, but it says so.
+4. **Find every CrossOver**, in `/Applications` and `~/Applications`, by whether
+   the bundle contains `Contents/SharedSupport/CrossOver` — not by its name.
+5. **For each engine**, skip it if `.built-against` already records this exact
+   version, unless forced. Otherwise build a fresh staging in a temporary
+   directory:
+   - copy `libgstlibav.dylib` and the FFmpeg libraries it needs
+   - walk the plugin's dependencies and, for each one CrossOver already has,
+     symlink to CrossOver's copy instead of taking the framework's
+   - write `.built-against`, then `.complete` **last**, so a half-built staging
+     never reads as finished
+6. **Swap it in.** The new directory is moved into place before the old one is
+   removed, not after: deleting first left the path a bottle points at absent for
+   as long as an `rm -rf` takes, and a game started in that window finds nothing.
+7. **Record it** in the version map, replacing that engine's line rather than
+   appending to it.
+8. **Print what is staged per engine**, which is what the app reads back.
+
+The two counts it prints at the end of each engine are the whole design in one
+line:
+
+    ffmpeg and friends copied : 7
+    CrossOver libraries linked: 12
+
 ## What it is not
 
 - Nothing is redistributed. The decoder is borrowed from a GStreamer the user

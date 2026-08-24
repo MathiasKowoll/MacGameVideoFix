@@ -2171,11 +2171,31 @@ enum Codecs {
         guard full.hasPrefix(root + "/") else { return nil }
         guard let first = full.dropFirst(root.count + 1).split(separator: "/").first
         else { return nil }
-        let parts = first.split(separator: ".", omittingEmptySubsequences: false)
+        let component = String(first)
+
+        // The directory is named after the CrossOver application, which is what
+        // stagedPath(forEngine:) writes and what stage-codecs.sh builds. So the
+        // way back is to ask which installed engine has that slug.
+        //
+        // This used to accept only dot-separated digits, from a version-named
+        // layout that no longer exists. The consequence was quiet and total: the
+        // app did not recognise a path it had written itself, classified every
+        // one of its own bottles as holding a foreign value, and reported "0
+        // bottle(s) point at the codec" on a machine where they all did. Nothing
+        // was broken -- the games worked -- but the only screen that says whether
+        // they are configured said no.
+        for (version, _) in installedEngines() where slug(forEngine: version) == component {
+            return version
+        }
+
+        // The old shape, still understood. An engine that has since been
+        // uninstalled cannot be resolved through the loop above, and a path
+        // naming one directly is still ours.
+        let parts = component.split(separator: ".", omittingEmptySubsequences: false)
         guard parts.count >= 2,
               parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) })
         else { return nil }
-        return String(first)
+        return component
     }
 
     /// Is this a value this app wrote -- either layout? What decides whether a
@@ -3314,10 +3334,13 @@ struct ContentView: View {
             // screen at launch, in either mode, with nothing chosen. The other
             // codec banner is drawn from the plan table and so cannot be
             // reached until bulk mode, a library, a scan and P5S in the plan.
-            // A requirement, presented the way the codec is: a card with the
-            // action in it. Above the codec banner because it comes first --
-            // there is nothing to stage until this exists.
-            if !Codecs.gstreamerInstalled { gstreamerBanner }
+            // Always on screen, green or orange. It was shown only when missing
+            // for a while, on the reasoning that a card saying "installed" every
+            // time is a card people stop seeing. That is true of a warning and
+            // not of a checklist: this is the first of two things that have to be
+            // right, and a step that vanishes when it passes leaves the other one
+            // looking like the whole story.
+            gstreamerBanner
             if runner.needsCodecAttention { driftBanner }
             if runner.bulk {
                 bulkHeader
@@ -3890,34 +3913,45 @@ struct ContentView: View {
         Codecs.staged && driftRows.isEmpty && waitingRows.isEmpty
     }
 
-    /// The one requirement that blocks six games, with its own download button.
+    /// The first of the two things that have to be right, shown either way.
     ///
-    /// Shown only when it is missing. A card that says "installed" every time
-    /// the app opens is a card people stop seeing, and the codec banner below
-    /// already names the version it borrows from.
+    /// Green when GStreamer is on this Mac, orange with the download when it is
+    /// not. Six games borrow a decoder from it, and nothing below can be staged
+    /// until it exists -- so it reads as a step that has passed or not, in the
+    /// same shape as the codec card underneath.
     private var gstreamerBanner: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
+        let have = Codecs.gstreamerInstalled
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: have ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(have ? Color.green : Color.orange)
             VStack(alignment: .leading, spacing: 3) {
-                Text("GStreamer is not installed")
+                Text(have
+                     ? (Codecs.version.map { "GStreamer \($0) installed" }
+                        ?? "GStreamer installed")
+                     : "GStreamer is not installed")
                     .font(.callout.weight(.medium))
-                Text("Six games borrow a VC-1 or WMV3 decoder from it, and nothing "
-                   + "can be staged until it is on this Mac. It is a normal macOS "
-                   + "installer, and nothing from it is redistributed.")
+                Text(have
+                     ? "The decoder six games need is borrowed from it. Nothing is "
+                       + "redistributed and no CrossOver file is touched."
+                     : "Six games borrow a VC-1 or WMV3 decoder from it, and nothing "
+                       + "can be staged until it is on this Mac. It is a normal macOS "
+                       + "installer, and nothing from it is redistributed.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
-            Button("Download GStreamer…") {
-                if let url = URL(string: Codecs.downloadPage) { NSWorkspace.shared.open(url) }
+            if !have {
+                Button("Download GStreamer…") {
+                    if let url = URL(string: Codecs.downloadPage) { NSWorkspace.shared.open(url) }
+                }
+                .keyboardShortcut(.defaultAction)
+                Button("Check again") { runner.refreshCodecs() }
+                    .help("After installing it, check without restarting the app.")
             }
-            .keyboardShortcut(.defaultAction)
-            Button("Check again") { runner.refreshCodecs() }
-                .help("After installing it, check without restarting the app.")
         }
         .padding(12)
-        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+        .background((have ? Color.green : Color.orange).opacity(0.12),
+                    in: RoundedRectangle(cornerRadius: 10))
     }
 
     private var codecBanner: some View {
