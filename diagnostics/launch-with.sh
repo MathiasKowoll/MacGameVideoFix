@@ -63,6 +63,51 @@ done
 echo "engine : $ENGINE ($(defaults read "$APP/Contents/Info" CFBundleShortVersionString 2>/dev/null))"
 echo "bottle : $BOTTLE"
 echo "winevideo (libgstvpx): $VPX"
+
+# The whole point of this script is to run a bottle under an engine other than
+# its own, and that has a consequence worth saying out loud rather than letting
+# somebody rediscover it.
+#
+# A bottle wired for the video fixes carries GST_PLUGIN_PATH pointing at a codec
+# staged for ONE engine. The staged tree reaches its libraries through symlinks
+# into that CrossOver's bundle, so loading the plugin under a different engine
+# pulls a second libgstreamer into a process that already has one. macOS says so
+# plainly -- "Class GstCocoaApplicationDelegate is implemented in both ... This
+# may cause spurious casting failures and mysterious crashes" -- and then the run
+# under test is measuring that, not whatever it was meant to measure.
+#
+# An afternoon went into a game that stalled at its loading screen before this
+# was noticed in the terminal output. Removing the variable took its frame rate
+# from 24 to 61. It was not the cause of that stall, but every measurement taken
+# before it was found had this sitting underneath.
+#
+# The app already prevents this in normal use: it writes the path for the engine
+# the bottle records, and re-points it when the bottle is migrated. Only this
+# script crosses the two deliberately, so only this script has to say so.
+CONF="$B/cxbottle.conf"
+GST="$(sed -n 's/^[[:space:]]*"GST_PLUGIN_PATH" = "\(.*\)"$/\1/p' "$CONF" 2>/dev/null | head -1)"
+if [ -n "$GST" ]; then
+  MAP="$HOME/Library/Application Support/MacGameVideoFix/gst-codecs/.map"
+  ENGVER="$(defaults read "$APP/Contents/Info" CFBundleVersion 2>/dev/null)"
+  MATCH="$(grep "^$ENGVER|" "$MAP" 2>/dev/null | cut -d'|' -f3 | head -1)"
+  if [ "$GST" = "$MATCH" ]; then
+    echo "codec  : staged for this engine"
+  else
+    echo
+    echo "  WARNING: this bottle's GST_PLUGIN_PATH was staged for a different engine."
+    echo "    bottle points at : $GST"
+    if [ -n "$MATCH" ]; then
+      echo "    this engine wants: $MATCH"
+      echo "    Run with GST_PLUGIN_PATH set to the second path, or accept that two"
+      echo "    copies of libgstreamer land in the process and the run is not clean."
+      GST_PLUGIN_PATH="$MATCH"; export GST_PLUGIN_PATH
+      echo "    -> overriding GST_PLUGIN_PATH for this run only."
+    else
+      echo "    no codec is staged for this engine ($ENGVER)."
+      echo "    Stage one from the app, or expect two libgstreamer copies in the process."
+    fi
+  fi
+fi
 echo
 
 STEAM='C:\Program Files (x86)\Steam\steam.exe'

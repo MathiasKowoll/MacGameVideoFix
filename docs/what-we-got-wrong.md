@@ -255,6 +255,45 @@ happens to be there. It was stripped before packaging, and the released guard
 touches only interfaces it looks up at runtime. Worth stating because the
 temptation was real: it worked.
 
+## Running a bottle under an engine it was not wired for
+
+An afternoon on a game that stalls at its loading screen was spent with two
+copies of libgstreamer in the process, and the terminal had been saying so from
+the first run:
+
+    Class GstCocoaApplicationDelegate is implemented in both
+      /Applications/CrossOver.app/.../libgstreamer-1.0.0.dylib
+      /Applications/CrossOver Preview.app/.../libgstreamer-1.0.0.dylib
+    This may cause spurious casting failures and mysterious crashes.
+
+The bottle was wired for Preview, correctly. The runs were launched with the
+stable engine, to see whether the engine made a difference. A staged codec tree
+reaches its libraries through symlinks into one CrossOver's bundle, so loading
+the plugin under a different engine drags that engine's libgstreamer in beside
+the running one. Removing the variable took the game from 24 fps to 61.
+
+It was not the cause of the stall. It was underneath every measurement taken
+before it was noticed, which is worse in its way -- an unclean run that still
+fails teaches nothing, and several conclusions were drawn from those runs.
+
+Two things about how this was diagnosed are worth keeping.
+
+**The app was blamed before it was read.** This was written up here, out loud, as
+"a published defect in this project": a bottle-wide variable pinned to one
+engine. Reading the code afterwards showed the app already resolves the staged
+path from the engine the bottle records, re-points it when the bottle migrates,
+and carries a `.map` of version to path for exactly this. The comment beside it
+even describes the failure -- "a bottle migrated to another CrossOver kept
+pointing at the previous engine's directory for good". The defect was diagnosed
+from the symptom and attributed without checking whether the thing being blamed
+already handled it.
+
+**The real gap was one level up.** `diagnostics/launch-with.sh` exists precisely
+to run a bottle under a different engine, and said nothing about the codec path.
+It now looks the engine up in `.map`, says whether the staged codec matches, and
+overrides `GST_PLUGIN_PATH` for that run when it does not. The tool built for
+crossing engines is the one that has to know what crossing them costs.
+
 ## Process
 
 - **`git add -A` swept a half-rewritten script into a commit.** Files are listed
