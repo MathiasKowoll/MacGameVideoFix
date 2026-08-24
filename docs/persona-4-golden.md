@@ -72,7 +72,78 @@ here, not a lack of leads.
   `P4G.exe` in place of Wine's (102 KB). Confirmed loaded from `system32`; the
   hang is unchanged.
 
-## The hang under stable, and why it was not chased further
+## It is not a hang, and it does load its archives
+
+Two things written above were wrong, and both were wrong the same way: a probe
+was pointed at one door, saw nothing, and the silence was written down as a fact
+about the game.
+
+**It is not frozen.** The window renders the game's own loading indicator at
+24-29 fps with the Metal HUD confirming GPU work, and its frame limiter -- read
+in the disassembly at +0x609c29: QueryPerformanceCounter, elapsed microseconds,
+Sleep -- runs normally. That only became visible when the Metal HUD was turned
+on, at the user's suggestion, after an afternoon of measuring CPU from outside.
+Removing the cross-engine GStreamer contamination described below took it from
+24 fps to 61.
+
+**It does open its data.** A file probe reported "167 files opened, and not one
+archive", which was repeated here as the headline finding. The arithmetic kills
+it: P4G.ini is 1374 bytes and was opened 163 times, which is 218 KB, while the
+same log counted 192 reads totalling 20 MB. Roughly 19.8 MB came from handles
+the probe never saw -- because it hooked `CreateFileW` and the game imports
+`CreateFileA` as well. The archives were being opened the whole time.
+
+The same error, twice more: a wait probe hooked only `WaitForSingleObjectEx` and
+recorded one wait while forty-six threads sat in waits, which was written up as
+"the protected binary bypasses kernel32". It does not; most code calls the plain
+form, which was not hooked. And a control build meant to prove the probes were
+innocent had its early return placed above `AddVectoredExceptionHandler`, so it
+ran with no fault handler at all and its empty log was very nearly read as "no
+crash happened".
+
+## Cross-engine GStreamer, which was ours
+
+Every run made with the stable engine had two copies of libgstreamer in the
+process, and the terminal said so from the first one:
+
+    Class GstCocoaApplicationDelegate is implemented in both
+      /Applications/CrossOver.app/.../libgstreamer-1.0.0.dylib
+      /Applications/CrossOver Preview.app/.../libgstreamer-1.0.0.dylib
+
+The bottle was wired for Preview, correctly, and the runs were launched with
+stable. A staged codec reaches its libraries through symlinks into one
+CrossOver's bundle, so loading it under another drags that engine's core in
+beside the running one -- the exact crash `stage-codecs.sh` was written to avoid,
+arrived at from the one direction it did not cover.
+
+It is not the cause: removing it changed the frame rate and nothing else, and on
+Preview -- where there is no duplicate, because the bottle points at Preview's
+own staging -- the game fails identically with `GST_PLUGIN_PATH` emptied. But it
+was underneath every stable-engine measurement taken before it was noticed, so
+those are worth less than they were credited with at the time.
+
+Two repairs came out of it, in `diagnostics/launch-with.sh` and
+`stage-codecs.sh`, and they are written up in
+[what we got wrong](what-we-got-wrong.md).
+
+## What was eliminated on the loading screen
+
+- **A controller.** A DualSense Edge was connected and `dinput8` frames jumped
+  from 2 to 24 between two captures. With it fully powered off, verified at zero
+  HID entries, the stall is identical.
+- **Disk.** No failed open, no failed read, no short read, no read outstanding.
+- **Audio.** `mmdevapi`, `winecoreaudio` and CoreAudio all load. The empty
+  `SoundDeviceID` in P4G.ini is the game's own shipped default.
+- **Steam.** `steam.exe` runs with `steam://run/1113000`; the process holds
+  `steam_api64.dll` and `steamclient64.dll`.
+- **Wine's partial `d3dx11_43`.** The native Microsoft build was overridden in
+  and confirmed loaded from `system32`; unchanged.
+- **The staged codec's version.** The plugin is gstreamer-libav 1.24.14 with
+  FFmpeg 6.0; Preview's core is 1.28.5. That mismatch is real and worth closing
+  on its own account, but emptying `GST_PLUGIN_PATH` on Preview changes nothing
+  here.
+
+## Why it was not chased further
 
 The game reaches a window and stops with 46 of 48 threads parked in `ntdll`,
 memory flat, roughly a tenth of one core busy. Nobody is working and nobody is

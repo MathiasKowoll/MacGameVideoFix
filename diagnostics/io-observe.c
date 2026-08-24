@@ -1,0 +1,2084 @@
+/*
+ * gfx-observe -- the first thing to put on a game that misbehaves.
+ *
+ * Not for one title. This answers the question every investigation here has
+ * started from: *what does this game ask the graphics stack for, and what is
+ * it told no about?*
+ *
+ * Every fault this project has fixed had that shape. A game asks for an
+ * interface that is not implemented and does not check the result. It asks for
+ * a texture format that cannot be created and carries on with a null. It is
+ * told a call succeeded when on Windows it would have failed, and walks off
+ * the end of a loop. From outside, all of those look like "the video is black"
+ * or "the characters are in a T-pose" -- and none of them can be told apart by
+ * watching the screen.
+ *
+ * So this logs refusals, and it logs answers. Not calls: a renderer makes
+ * millions, and a log of everything is a log of nothing. What is recorded is
+ *
+ *   - every call that FAILED, bounded per call site and deduplicated by shape;
+ *   - every capability query and the answer given, once per distinct query;
+ *   - every interface a game asks a device for and does not get;
+ *   - every module it loads, and every function it looks up and does not find;
+ *   - a ratio at the end, because "forty failures" means nothing without
+ *     knowing whether four hundred succeeded.
+ *
+ * It observes. It changes nothing, has no levers, and reads no environment
+ * variables -- a game started from a running Steam never sees a variable set
+ * afterwards, and a diagnostic that silently does not apply is worse than none.
+ *
+ * BUILDING. It rides in on a DLL the game already loads and that has nothing
+ * to do with rendering:
+ *
+ *     SOURCE=gfx-observe.c diagnostics/build-probe.sh <the game's carrier.dll>
+ *
+ * Good carriers seen so far: amd_ags_x64.dll, libxess.dll, libogg_64.dll,
+ * GfeSDK.dll, dinput8.dll. Prefer one imported statically -- it loads before
+ * the renderer starts.
+ *
+ * READING IT. An empty log is a finding: it means the graphics stack refused
+ * nothing, and whatever is wrong is not something a D3D hook can see. A game
+ * that skins on the CPU with wide SIMD would show a T-pose and leave this file
+ * silent.
+ *
+ * Part of MacGameVideoFix -- https://github.com/MathiasKowoll/MacGameVideoFix
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+#define COBJMACROS
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <stdarg.h>
+#include <stdio.h>
+
+#define LOGFILE "C:\\io-observe.log"
+
+/* ------------------------------------------------------------------ logging */
+
+static const char *exe_tag_(void)
+{
+    static char tag[64];
+    if (!tag[0])
+    {
+        char path[MAX_PATH];
+        const char *base = path, *p;
+        DWORD len = GetModuleFileNameA(NULL, path, sizeof(path) - 1);
+        if (!len) return "?";
+        path[len] = 0;
+        for (p = path; *p; ++p) if (*p == '\\' || *p == '/') base = p + 1;
+        lstrcpynA(tag, base, sizeof(tag));
+    }
+    return tag;
+}
+
+static CRITICAL_SECTION log_lock;
+static BOOL log_ready;
+
+static void logf_(const char *fmt, ...)
+{
+    char buf[1024], line[1152];
+    va_list ap;
+    HANDLE h;
+    DWORD wrote;
+    int n;
+
+    va_start(ap, fmt);
+    n = vsnprintf(buf, sizeof(buf) - 2, fmt, ap);
+    va_end(ap);
+    if (n < 0) return;
+    n = _snprintf(line, sizeof(line) - 2, "[%s] %s\r\n", exe_tag_(), buf);
+    if (n < 0) return;
+
+    if (log_ready) EnterCriticalSection(&log_lock);
+    h = CreateFileA(LOGFILE, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h != INVALID_HANDLE_VALUE)
+    {
+        SetFilePointer(h, 0, NULL, FILE_END);
+        WriteFile(h, line, (DWORD)n, &wrote, NULL);
+        CloseHandle(h);
+    }
+    if (log_ready) LeaveCriticalSection(&log_lock);
+}
+
+/*
+ * One line per distinct thing, not per call.
+ *
+ * Bounding by call count is the wrong bound for a renderer: the first two
+ * dozen calls are startup, and the one that matters happens later. Keyed on
+ * what actually distinguishes a case -- a call site plus two numbers -- every
+ * distinct case is reported once and the total stays bounded by how many
+ * distinct cases exist.
+ */
+static BOOL first_time(UINT tag, UINT a, UINT b)
+{
+    static struct { UINT tag, a, b; } seen[256];
+    static LONG count;
+    LONG i, n = count;
+
+    for (i = 0; i < n && i < 256; ++i)
+        if (seen[i].tag == tag && seen[i].a == a && seen[i].b == b) return FALSE;
+    if (n >= 256) return FALSE;
+    seen[n].tag = tag; seen[n].a = a; seen[n].b = b;
+    count = n + 1;
+    return TRUE;
+}
+
+/* Counters, reported as a ratio on the way out. */
+typedef struct { const char *what; LONG ok, bad; } tally;
+static tally counts[] = {
+    { "D3D11 CreateBuffer" }, { "D3D11 CreateTexture2D" }, { "D3D11 CreateTexture3D" },
+    { "D3D11 CreateInputLayout" }, { "D3D11 CreateVertexShader" },
+    { "D3D11 CreatePixelShader" }, { "D3D11 CreateComputeShader" },
+    { "D3D11 CreateUnorderedAccessView" }, { "D3D11 OpenSharedResource" },
+    { "D3D12 CreateCommittedResource" }, { "D3D12 CreateGraphicsPipelineState" },
+    { "D3D12 CreateComputePipelineState" }, { "D3D12 CreateRootSignature" },
+    { "D3D12 CreateCommandQueue" }, { "D3D12 CreateDescriptorHeap" },
+    { "D3D12 CreateHeap" }, { "D3D12 CreatePlacedResource" },
+    { "D3D12 OpenSharedHandle" },
+};
+enum {
+    C_BUFFER, C_TEX2D, C_TEX3D, C_LAYOUT, C_VS, C_PS, C_CS, C_UAV, C_SHARED11,
+    C_COMMITTED, C_GFXPSO, C_CSPSO, C_ROOTSIG, C_QUEUE, C_HEAPDESC, C_HEAP,
+    C_PLACED, C_SHARED12, C_COUNT
+};
+
+static HRESULT note(int which, HRESULT hr, const char *detail, UINT a, UINT b)
+{
+    if (SUCCEEDED(hr)) InterlockedIncrement(&counts[which].ok);
+    else
+    {
+        InterlockedIncrement(&counts[which].bad);
+        if (first_time((UINT)(0x1000 + which), a, b))
+            logf_("REFUSED  %-34s -> 0x%08lx   %s",
+                  counts[which].what, (unsigned long)hr, detail ? detail : "");
+    }
+    return hr;
+}
+
+/* ------------------------------------------------------------------ hooking */
+
+static void *patch(void *obj, int slot, void *replacement)
+{
+    void **vtbl = *(void ***)obj;
+    void *was = vtbl[slot];
+    DWORD old;
+    if (was == replacement) return NULL;
+    if (!VirtualProtect(&vtbl[slot], sizeof(void *), PAGE_READWRITE, &old)) return NULL;
+    vtbl[slot] = replacement;
+    VirtualProtect(&vtbl[slot], sizeof(void *), old, &old);
+    return was;
+}
+
+/*
+ * Rewrite one imported function in this process's own import table, by name or
+ * by ordinal.
+ *
+ * By ordinal matters and is easy to forget: Wo Long imports d3d12 as ordinal
+ * 101 with no name anywhere, and a by-name walk finds nothing at all.
+ */
+static void *hook_import(const char *dll, const char *func, WORD ordinal, void *repl)
+{
+    HMODULE base = GetModuleHandleA(NULL);
+    IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;
+    IMAGE_NT_HEADERS *nt;
+    IMAGE_IMPORT_DESCRIPTOR *imp;
+    DWORD rva;
+
+    if (!dos || dos->e_magic != IMAGE_DOS_SIGNATURE) return NULL;
+    nt = (IMAGE_NT_HEADERS *)((char *)base + dos->e_lfanew);
+    rva = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+    if (!rva) return NULL;
+
+    for (imp = (IMAGE_IMPORT_DESCRIPTOR *)((char *)base + rva); imp->Name; ++imp)
+    {
+        IMAGE_THUNK_DATA *orig, *iat;
+        if (lstrcmpiA((const char *)base + imp->Name, dll) != 0) continue;
+        orig = (IMAGE_THUNK_DATA *)((char *)base + (imp->OriginalFirstThunk
+                                    ? imp->OriginalFirstThunk : imp->FirstThunk));
+        iat  = (IMAGE_THUNK_DATA *)((char *)base + imp->FirstThunk);
+        for (; orig->u1.AddressOfData; ++orig, ++iat)
+        {
+            BOOL match;
+            if (IMAGE_SNAP_BY_ORDINAL(orig->u1.Ordinal))
+                match = ordinal && IMAGE_ORDINAL(orig->u1.Ordinal) == ordinal;
+            else
+            {
+                IMAGE_IMPORT_BY_NAME *n =
+                    (IMAGE_IMPORT_BY_NAME *)((char *)base + orig->u1.AddressOfData);
+                match = func && lstrcmpiA((const char *)n->Name, func) == 0;
+            }
+            if (!match) continue;
+            {
+                DWORD old;
+                void *was;
+                if (!VirtualProtect(&iat->u1.Function, sizeof(void *),
+                                    PAGE_READWRITE, &old)) continue;
+                was = (void *)(ULONG_PTR)iat->u1.Function;
+                iat->u1.Function = (ULONG_PTR)repl;
+                VirtualProtect(&iat->u1.Function, sizeof(void *), old, &old);
+                return was;
+            }
+        }
+    }
+    return NULL;
+}
+
+/* --------------------------------------------------------------- D3D11 side */
+
+/*
+ * ID3D11Device: 3 CreateBuffer, 5 CreateTexture2D, 6 CreateTexture3D,
+ * 8 CreateUnorderedAccessView, 11 CreateInputLayout, 12 CreateVertexShader,
+ * 15 CreatePixelShader, 18 CreateComputeShader, 28 OpenSharedResource,
+ * 29 CheckFormatSupport.
+ */
+static HRESULT (WINAPI *r11_buffer)(void *, const void *, const void *, void **);
+static HRESULT (WINAPI *r11_tex2d)(void *, const void *, const void *, void **);
+static HRESULT (WINAPI *r11_tex3d)(void *, const void *, const void *, void **);
+static HRESULT (WINAPI *r11_uav)(void *, void *, const void *, void **);
+static HRESULT (WINAPI *r11_layout)(void *, const void *, UINT, const void *, SIZE_T, void **);
+static HRESULT (WINAPI *r11_vs)(void *, const void *, SIZE_T, void *, void **);
+static HRESULT (WINAPI *r11_ps)(void *, const void *, SIZE_T, void *, void **);
+static HRESULT (WINAPI *r11_cs)(void *, const void *, SIZE_T, void *, void **);
+static HRESULT (WINAPI *r11_shared)(void *, HANDLE, REFIID, void **);
+static HRESULT (WINAPI *r11_fmt)(void *, UINT, UINT *);
+static HRESULT (WINAPI *r11_qi)(void *, REFIID, void **);
+
+/* IDxcCompiler3 = {228B4687-5A6A-4730-900C-9702B2203F54} */
+static const GUID IID_IDxcCompiler3_local =
+    { 0x228b4687, 0x5a6a, 0x4730, { 0x90, 0x0c, 0x97, 0x02, 0xb2, 0x20, 0x3f, 0x54 } };
+
+static const char *guid_text(REFIID iid)
+{
+    static char buf[4][40];
+    static LONG turn;
+    char *out = buf[InterlockedIncrement(&turn) & 3];
+    const GUID *g = (const GUID *)iid;
+    if (!g) return "(null)";
+    _snprintf(out, sizeof(buf[0]),
+              "%08lx-%04x-%04x-%02x%02x%02x%02x%02x%02x%02x%02x",
+              (unsigned long)g->Data1, g->Data2, g->Data3,
+              g->Data4[0], g->Data4[1], g->Data4[2], g->Data4[3],
+              g->Data4[4], g->Data4[5], g->Data4[6], g->Data4[7]);
+    return out;
+}
+
+/* EXPERIMENT THREE. Nothing is rewritten any more -- the memory figures and the
+ * vendor id were each replaced and the crash did not move a byte, so neither is
+ * what this game trips over.
+ *
+ * What the last run did show is when it dies. The thirty-second tally caught it
+ * with 27 textures and one view; by the end there were 424 and 396. So it runs
+ * quietly for over half a minute and then dies inside a burst of resource
+ * creation. This logs every one of them in order, so the last thing it asked
+ * for before the fault is visible rather than guessed at.
+ *
+ * D3D11_TEXTURE2D_DESC: Width 0, Height 4, MipLevels 8, ArraySize 12, Format 16,
+ * SampleDesc.Count 20, Quality 24, Usage 28, BindFlags 32, CPUAccess 36, Misc 40.
+ * D3D11_UNORDERED_ACCESS_VIEW_DESC: Format 0, ViewDimension 4, then a union. */
+static LONG make_seq;
+
+static HRESULT WINAPI h11_tex2d(void *s, const void *d, const void *init, void **o)
+{
+    const UINT *u = (const UINT *)d;
+    char detail[96];
+    HRESULT hr = r11_tex2d(s, d, init, o);
+    if (d) _snprintf(detail, sizeof(detail), "%ux%u format=%u bind=0x%x misc=0x%x",
+                     u[0], u[1], u[4], u[8], u[10]);
+    else detail[0] = 0;
+    if (d && InterlockedIncrement(&make_seq) % 100 == 0)
+        logf_("#%-4ld tex2d  %ux%u format=%u bind=0x%x  (every 100th, to keep the "
+              "Map lines readable)", make_seq, u[0], u[1], u[4], u[8]);
+    return note(C_TEX2D, hr, detail, d ? u[4] : 0, d ? (u[8] | (u[10] << 16)) : 0);
+}
+static HRESULT WINAPI h11_tex3d(void *s, const void *d, const void *i, void **o)
+{ return note(C_TEX3D, r11_tex3d(s, d, i, o), "", d ? ((const UINT *)d)[3] : 0, 0); }
+static HRESULT WINAPI h11_buffer(void *s, const void *d, const void *i, void **o)
+{
+    const UINT *u = (const UINT *)d;
+    char detail[80];
+    HRESULT hr = r11_buffer(s, d, i, o);
+    if (d) _snprintf(detail, sizeof(detail), "%u bytes usage=%u bind=0x%x misc=0x%x",
+                     u[0], u[1], u[2], u[4]);
+    else detail[0] = 0;
+    return note(C_BUFFER, hr, detail, d ? u[2] : 0, d ? u[4] : 0);
+}
+static HRESULT WINAPI h11_uav(void *s, void *r, const void *d, void **o)
+{
+    HRESULT hr = r11_uav(s, r, d, o);
+    const UINT *u = (const UINT *)d;
+    if (InterlockedIncrement(&make_seq) % 100 == 0)
+        logf_("#%-4ld uav    resource=%p format=%u dimension=%u", make_seq, r,
+              u ? u[0] : 0, u ? u[1] : 0);
+    return note(C_UAV, hr, "", u ? u[0] : 0, 0);
+}
+static HRESULT WINAPI h11_layout(void *s, const void *e, UINT n, const void *b, SIZE_T l, void **o)
+{ return note(C_LAYOUT, r11_layout(s, e, n, b, l, o), "", n, (UINT)l); }
+static HRESULT WINAPI h11_vs(void *s, const void *b, SIZE_T l, void *k, void **o)
+{ return note(C_VS, r11_vs(s, b, l, k, o), "", (UINT)l, 0); }
+static HRESULT WINAPI h11_ps(void *s, const void *b, SIZE_T l, void *k, void **o)
+{ return note(C_PS, r11_ps(s, b, l, k, o), "", (UINT)l, 0); }
+static HRESULT WINAPI h11_cs(void *s, const void *b, SIZE_T l, void *k, void **o)
+{ return note(C_CS, r11_cs(s, b, l, k, o), "", (UINT)l, 0); }
+static HRESULT WINAPI h11_shared(void *s, HANDLE h, REFIID iid, void **o)
+{ return note(C_SHARED11, r11_shared(s, h, iid, o), guid_text(iid), 0, 0); }
+
+/* The answer is the interesting half: a format the game is told it cannot
+ * sample is a path it will take without saying so. */
+static HRESULT WINAPI h11_fmt(void *s, UINT fmt, UINT *support)
+{
+    HRESULT hr = r11_fmt(s, fmt, support);
+    if (first_time(0x2001, fmt, 0))
+        logf_("CheckFormatSupport(%u) -> 0x%08lx  support=0x%08lx",
+              fmt, (unsigned long)hr,
+              (SUCCEEDED(hr) && support) ? (unsigned long)*support : 0);
+    return hr;
+}
+
+/*
+ * The adapter a game reaches through its device, rather than through the
+ * factory.
+ *
+ * Enumerating adapters is one way to get one; asking the device you already
+ * have is another, and a probe that only watches the first sees nothing at all
+ * on a game that uses the second. IDXGIDevice::GetAdapter is slot 7, and the
+ * adapter it hands back is the one whose outputs and display modes matter.
+ */
+static HRESULT (WINAPI *rdxgi_getadapter)(void *, void **);
+static void arm_adapter(void *ad, UINT index);
+
+static HRESULT WINAPI hdxgi_getadapter(void *self, void **out)
+{
+    HRESULT hr = rdxgi_getadapter(self, out);
+    static LONG told;
+    if (InterlockedIncrement(&told) <= 4)
+        logf_("%s  IDXGIDevice::GetAdapter -> 0x%08lx",
+              FAILED(hr) ? "REFUSED " : "        ", (unsigned long)hr);
+    if (SUCCEEDED(hr) && out && *out) arm_adapter(*out, 0);
+    return hr;
+}
+
+/* Every interface the game asks the device for, and whether it got one. */
+static HRESULT WINAPI h11_qi(void *s, REFIID iid, void **o)
+{
+    HRESULT hr = r11_qi(s, iid, o);
+    const GUID *g = (const GUID *)iid;
+    if (g && first_time(0x2002, (UINT)g->Data1, (UINT)(g->Data2 | (g->Data3 << 16))))
+        logf_("%s  D3D11 device QueryInterface %s -> 0x%08lx",
+              FAILED(hr) ? "REFUSED " : "        ", guid_text(iid), (unsigned long)hr);
+    /* IDXGIDevice, IDXGIDevice1..4 all start the same way, so slot 7 is
+     * GetAdapter on any of them. */
+    if (SUCCEEDED(hr) && o && *o && g && g->Data1 == 0x54ec77fa && !rdxgi_getadapter)
+        rdxgi_getadapter = patch(*o, 7, hdxgi_getadapter);
+    return hr;
+}
+
+static void watch_d3d11_device(void *dev)
+{
+    return;   /* CONTROL: hooks disabled on purpose */
+    if (!dev) return;
+    r11_qi     = patch(dev,  0, h11_qi);
+    r11_buffer = patch(dev,  3, h11_buffer);
+    r11_tex2d  = patch(dev,  5, h11_tex2d);
+    r11_tex3d  = patch(dev,  6, h11_tex3d);
+    r11_uav    = patch(dev,  8, h11_uav);
+    r11_layout = patch(dev, 11, h11_layout);
+    r11_vs     = patch(dev, 12, h11_vs);
+    r11_ps     = patch(dev, 15, h11_ps);
+    r11_cs     = patch(dev, 18, h11_cs);
+    r11_shared = patch(dev, 28, h11_shared);
+    r11_fmt    = patch(dev, 29, h11_fmt);
+    logf_("watching the D3D11 device");
+}
+
+/* --------------------------------------------------------------- D3D12 side */
+
+/*
+ * ID3D12Device: 8 CreateCommandQueue, 10 CreateGraphicsPipelineState,
+ * 11 CreateComputePipelineState, 13 CheckFeatureSupport,
+ * 14 CreateDescriptorHeap, 16 CreateRootSignature, 27 CreateCommittedResource,
+ * 28 CreateHeap, 29 CreatePlacedResource, 32 OpenSharedHandle.
+ */
+static HRESULT (WINAPI *r12_queue)(void *, const void *, REFIID, void **);
+static HRESULT (WINAPI *r12_gfxpso)(void *, const void *, REFIID, void **);
+static HRESULT (WINAPI *r12_cspso)(void *, const void *, REFIID, void **);
+static HRESULT (WINAPI *r12_feature)(void *, UINT, void *, UINT);
+static HRESULT (WINAPI *r12_heapdesc)(void *, const void *, REFIID, void **);
+static HRESULT (WINAPI *r12_rootsig)(void *, UINT, const void *, SIZE_T, REFIID, void **);
+static HRESULT (WINAPI *r12_committed)(void *, const void *, UINT, const void *, UINT,
+                                       const void *, REFIID, void **);
+static HRESULT (WINAPI *r12_heap)(void *, const void *, REFIID, void **);
+static HRESULT (WINAPI *r12_placed)(void *, void *, UINT64, const void *, UINT,
+                                    const void *, REFIID, void **);
+static HRESULT (WINAPI *r12_shared)(void *, HANDLE, REFIID, void **);
+static HRESULT (WINAPI *r12_qi)(void *, REFIID, void **);
+
+/* D3D12_RESOURCE_DESC: Dimension 0, Width 16 (UINT64), Height 24, Format 32,
+ * Layout 44, Flags 48. */
+static void describe_resource(const void *desc, char *out, size_t n)
+{
+    const char *d = (const char *)desc;
+    if (!desc) { if (n) out[0] = 0; return; }
+    _snprintf(out, n, "%ux%u format=%u dim=%u flags=0x%x",
+              (UINT)(*(const UINT64 *)(d + 16)), *(const UINT *)(d + 24),
+              *(const UINT *)(d + 32), *(const UINT *)(d + 0), *(const UINT *)(d + 48));
+}
+
+static HRESULT WINAPI h12_committed(void *s, const void *heap, UINT hf, const void *desc,
+                                    UINT state, const void *clear, REFIID iid, void **o)
+{
+    char detail[96];
+    HRESULT hr = r12_committed(s, heap, hf, desc, state, clear, iid, o);
+    describe_resource(desc, detail, sizeof(detail));
+    return note(C_COMMITTED, hr, detail,
+                desc ? *(const UINT *)((const char *)desc + 32) : 0,
+                desc ? *(const UINT *)((const char *)desc + 48) : 0);
+}
+/*
+ * Does this game put two resources in the same memory?
+ *
+ * A placed resource is the caller taking responsibility for its own
+ * allocation, and a caller that reuses a range for a second resource is
+ * aliasing -- legal, common in engines that manage their own heaps, and
+ * correct only if an aliasing barrier separates the two uses. A barrier that
+ * is ignored produces data that is right sometimes and stale other times,
+ * varying with the allocation pattern rather than with anything on screen.
+ *
+ * That is a different fault from a mistranslated shader, and the two are told
+ * apart by exactly one question: does the game alias at all? So count it.
+ * Sixty-four slots per heap is enough to catch the practice without pretending
+ * to track the whole allocator.
+ */
+/*
+ * Counting overlaps by hand was wrong twice over: sizes were guessed -- taken
+ * only for buffers, left at zero for textures, so everything at offset zero
+ * looked like it collided -- and freed heaps were never removed, so an
+ * allocator reusing an address looked like aliasing. Both produced confident
+ * nonsense.
+ *
+ * The direct signal costs nothing to read: a game that aliases must issue an
+ * aliasing barrier, and barriers go through one call on the command list.
+ * Counting those answers the question without knowing a single resource size.
+ */
+static LONG barriers_alias, barriers_transition, barriers_uav;
+
+static HRESULT WINAPI h12_placed(void *s, void *hp, UINT64 off, const void *desc, UINT st,
+                                 const void *cv, REFIID iid, void **o)
+{
+    char detail[96];
+    HRESULT hr = r12_placed(s, hp, off, desc, st, cv, iid, o);
+    describe_resource(desc, detail, sizeof(detail));
+    if (SUCCEEDED(hr) && desc)
+    {
+    }
+    return note(C_PLACED, hr, detail,
+                desc ? *(const UINT *)((const char *)desc + 32) : 0, 0);
+}
+static HRESULT WINAPI h12_gfxpso(void *s, const void *d, REFIID iid, void **o)
+{
+    HRESULT hr = r12_gfxpso(s, d, iid, o);
+    char detail[64];
+    _snprintf(detail, sizeof(detail), "VS %llu bytes",
+              (unsigned long long)(d ? *(const SIZE_T *)((const char *)d + 16) : 0));
+    return note(C_GFXPSO, hr, detail, 0, 0);
+}
+static HRESULT WINAPI h12_cspso(void *s, const void *d, REFIID iid, void **o)
+{
+    HRESULT hr = r12_cspso(s, d, iid, o);
+    char detail[64];
+    _snprintf(detail, sizeof(detail), "CS %llu bytes",
+              (unsigned long long)(d ? *(const SIZE_T *)((const char *)d + 16) : 0));
+    return note(C_CSPSO, hr, detail, 0, 0);
+}
+static HRESULT WINAPI h12_rootsig(void *s, UINT n, const void *b, SIZE_T l, REFIID iid, void **o)
+{ return note(C_ROOTSIG, r12_rootsig(s, n, b, l, iid, o), "", (UINT)l, 0); }
+static HRESULT WINAPI h12_queue(void *s, const void *d, REFIID iid, void **o)
+{ return note(C_QUEUE, r12_queue(s, d, iid, o), "", d ? ((const UINT *)d)[0] : 0, 0); }
+static HRESULT WINAPI h12_heapdesc(void *s, const void *d, REFIID iid, void **o)
+{ return note(C_HEAPDESC, r12_heapdesc(s, d, iid, o), "", d ? ((const UINT *)d)[0] : 0, 0); }
+static HRESULT WINAPI h12_heap(void *s, const void *d, REFIID iid, void **o)
+{ return note(C_HEAP, r12_heap(s, d, iid, o), "", 0, 0); }
+static HRESULT WINAPI h12_shared(void *s, HANDLE h, REFIID iid, void **o)
+{ return note(C_SHARED12, r12_shared(s, h, iid, o), guid_text(iid), 0, 0); }
+
+/*
+ * The name of a feature id, for the ones worth reading at a glance.
+ *
+ * Not a complete table -- the numbers are stable and the header has them all.
+ * These are the ones whose answers have changed an investigation here.
+ */
+static const char *feature_name(UINT f)
+{
+    switch (f)
+    {
+    case 0:  return "D3D12_OPTIONS";
+    case 1:  return "ARCHITECTURE";
+    case 2:  return "FEATURE_LEVELS";
+    case 3:  return "FORMAT_SUPPORT";
+    case 4:  return "MULTISAMPLE_QUALITY_LEVELS";
+    case 6:  return "GPU_VIRTUAL_ADDRESS_SUPPORT";
+    case 7:  return "SHADER_MODEL";
+    case 8:  return "D3D12_OPTIONS1";
+    case 12: return "ROOT_SIGNATURE";
+    case 16: return "ARCHITECTURE1";
+    case 18: return "D3D12_OPTIONS2";
+    case 21: return "D3D12_OPTIONS3";
+    case 23: return "D3D12_OPTIONS4";
+    case 27: return "D3D12_OPTIONS5";
+    case 29: return "D3D12_OPTIONS6";
+    case 31: return "D3D12_OPTIONS7";
+    case 39: return "D3D12_OPTIONS10";
+    case 41: return "D3D12_OPTIONS12";
+    case 46: return "D3D12_OPTIONS17";
+    default: return "";
+    }
+}
+
+/*
+ * The whole structure, not its first field.
+ *
+ * "First dword 1" for D3D12_OPTIONS1 says wave operations are supported and
+ * stops exactly where it gets interesting: the two fields after it are
+ * WaveLaneCountMin and WaveLaneCountMax, and a shader written for one wave
+ * width running at another produces results that are wrong rather than
+ * missing. That is the difference between a character in its bind pose and a
+ * character whose limbs are in the wrong places, and the first dword cannot
+ * tell them apart.
+ *
+ * Sixteen dwords covers every structure in the enum.
+ */
+static HRESULT WINAPI h12_feature(void *s, UINT feature, void *data, UINT size)
+{
+    HRESULT hr = r12_feature(s, feature, data, size);
+
+    if (first_time(0x2003, feature, size))
+    {
+        char dump[220];
+        int at = 0;
+        UINT i, words = size / 4;
+        if (words > 16) words = 16;
+        dump[0] = 0;
+        if (SUCCEEDED(hr) && data)
+            for (i = 0; i < words && at < (int)sizeof(dump) - 12; ++i)
+                at += _snprintf(dump + at, sizeof(dump) - at, "%08lx ",
+                                ((const unsigned long *)data)[i]);
+        logf_("%s  CheckFeatureSupport %2u %-27s %3u bytes -> 0x%08lx  %s",
+              FAILED(hr) ? "REFUSED " : "        ",
+              feature, feature_name(feature), size, (unsigned long)hr, dump);
+    }
+    return hr;
+}
+
+static HRESULT WINAPI h12_qi(void *s, REFIID iid, void **o)
+{
+    HRESULT hr = r12_qi(s, iid, o);
+    const GUID *g = (const GUID *)iid;
+    if (g && first_time(0x2004, (UINT)g->Data1, (UINT)(g->Data2 | (g->Data3 << 16))))
+        logf_("%s  D3D12 device QueryInterface %s -> 0x%08lx",
+              FAILED(hr) ? "REFUSED " : "        ", guid_text(iid), (unsigned long)hr);
+    return hr;
+}
+
+static void (WINAPI *r12_barrier)(void *, UINT, const void *);
+
+/* D3D12_RESOURCE_BARRIER: Type at 0, Flags at 4, union from 8.
+ * Type 0 TRANSITION, 1 ALIASING, 2 UAV. Each element is 32 bytes wide. */
+static void WINAPI h12_barrier(void *self, UINT count, const void *bar)
+{
+    UINT i;
+    const char *b = (const char *)bar;
+    for (i = 0; b && i < count; ++i)
+    {
+        UINT type = *(const UINT *)(b + (size_t)i * 32);
+        if (type == 1)
+        {
+            if (InterlockedIncrement(&barriers_alias) == 1)
+                logf_("the game issues ALIASING barriers -- it reuses memory "
+                      "between resources, and correctness depends on those "
+                      "barriers being honoured");
+        }
+        else if (type == 2) InterlockedIncrement(&barriers_uav);
+        else InterlockedIncrement(&barriers_transition);
+    }
+    r12_barrier(self, count, bar);
+}
+
+static HRESULT (WINAPI *r12_cmdlist)(void *, UINT, UINT, void *, void *, REFIID, void **);
+
+static HRESULT WINAPI h12_cmdlist(void *s, UINT node, UINT type, void *alloc,
+                                  void *pso, REFIID iid, void **out)
+{
+    HRESULT hr = r12_cmdlist(s, node, type, alloc, pso, iid, out);
+    if (SUCCEEDED(hr) && out && *out && !r12_barrier)
+    {
+        r12_barrier = patch(*out, 26, h12_barrier);
+        logf_("watching resource barriers: %s", r12_barrier ? "yes" : "NO");
+    }
+    return hr;
+}
+
+static void watch_d3d12_device(void *dev)
+{
+    return;   /* CONTROL: hooks disabled on purpose */
+    if (!dev) return;
+    r12_qi        = patch(dev,  0, h12_qi);
+    r12_queue     = patch(dev,  8, h12_queue);
+    r12_gfxpso    = patch(dev, 10, h12_gfxpso);
+    r12_cspso     = patch(dev, 11, h12_cspso);
+    r12_feature   = patch(dev, 13, h12_feature);
+    r12_heapdesc  = patch(dev, 14, h12_heapdesc);
+    r12_rootsig   = patch(dev, 16, h12_rootsig);
+    r12_committed = patch(dev, 27, h12_committed);
+    r12_heap      = patch(dev, 28, h12_heap);
+    r12_placed    = patch(dev, 29, h12_placed);
+    r12_shared    = patch(dev, 32, h12_shared);
+    r12_cmdlist   = patch(dev, 12, h12_cmdlist);   /* CreateCommandList */
+    logf_("watching the D3D12 device");
+}
+
+/* ---------------------------------------------------------------- DXGI side */
+
+/*
+ * The adapter, and what the game is told about it.
+ *
+ * Between a D3D12 device being created and the first resource being made there
+ * is DXGI: enumerate the adapters, read their descriptions, make a swap chain.
+ * A game that dies in that window leaves no trace in anything above, and the
+ * description is not inert data -- engines branch on the vendor id, and some
+ * parse the name. A machine reporting itself as one vendor's hardware while
+ * behaving as another's is a decision made on a false premise.
+ *
+ * IDXGIObject: 3 SetPrivateData, 6 GetParent. IDXGIFactory: 7 EnumAdapters,
+ * 10 CreateSwapChain. IDXGIFactory1: 12 EnumAdapters1. IDXGIFactory2:
+ * 15 CreateSwapChainForHwnd. IDXGIAdapter: 8 GetDesc. IDXGIAdapter1: 10 GetDesc1.
+ *
+ * DXGI_ADAPTER_DESC: Description is 128 WCHARs at 0, VendorId at 256,
+ * DeviceId at 260, SubSysId 264, Revision 268.
+ */
+static HRESULT (WINAPI *rdxgi_enum)(void *, UINT, void **);
+static HRESULT (WINAPI *rdxgi_enum1)(void *, UINT, void **);
+static HRESULT (WINAPI *rdxgi_getdesc)(void *, void *);
+static HRESULT (WINAPI *rdxgi_getdesc1)(void *, void *);
+static HRESULT (WINAPI *rdxgi_swapchain)(void *, void *, HWND, const void *,
+                                         const void *, void *, void **);
+static HRESULT (WINAPI *rdxgi_swapchain_old)(void *, void *, void *, void **);
+
+/*
+ * The whole adapter description, not the name and the vendor.
+ *
+ * An engine does not pick the first adapter it is offered: it enumerates,
+ * filters and keeps the best. Every field below is something a filter can
+ * reject on -- a software adapter, one with no dedicated memory, one whose
+ * vendor it does not recognise -- and a filter that rejects the only adapter
+ * leaves an empty list. Reading "the last one" out of an empty list is a read
+ * eight bytes below zero, which is what a crash at 0xfffffffffffffff8 is.
+ *
+ * DXGI_ADAPTER_DESC1: Description 0 (128 WCHARs), VendorId 256, DeviceId 260,
+ * SubSysId 264, Revision 268, DedicatedVideoMemory 272, DedicatedSystemMemory
+ * 280, SharedSystemMemory 288, AdapterLuid 296, Flags 304.
+ */
+static void describe_adapter(const void *desc, UINT which, const char *from, BOOL is_desc1)
+{
+    const char *d = (const char *)desc;
+    const WCHAR *w = (const WCHAR *)desc;
+    char name[132];
+    UINT i = 0;
+
+    if (!desc) return;
+    while (i < 128 && w[i]) { name[i] = (w[i] > 31 && w[i] < 127) ? (char)w[i] : '?'; ++i; }
+    name[i] = 0;
+    if (!first_time(0x4001, which, *(const UINT *)(d + 256))) return;
+
+    logf_("        adapter %u from %s: \"%s\"", which, from, name);
+    logf_("          vendor 0x%04x  device 0x%04x  subsys 0x%08lx  revision %u",
+          *(const UINT *)(d + 256), *(const UINT *)(d + 260),
+          (unsigned long)*(const UINT *)(d + 264), *(const UINT *)(d + 268));
+    logf_("          dedicated video %llu MB, dedicated system %llu MB, shared %llu MB",
+          (unsigned long long)(*(const UINT64 *)(d + 272) >> 20),
+          (unsigned long long)(*(const UINT64 *)(d + 280) >> 20),
+          (unsigned long long)(*(const UINT64 *)(d + 288) >> 20));
+    if (is_desc1)
+    {
+        UINT flags = *(const UINT *)(d + 304);
+        logf_("          flags 0x%x%s%s", flags,
+              (flags & 1) ? "  REMOTE" : "",
+              (flags & 2) ? "  SOFTWARE -- an engine that skips software adapters "
+                            "would skip this one" : "");
+    }
+}
+
+static UINT last_adapter_index;
+
+/* EXPERIMENT ONLY. This file is not shipped and nothing here belongs in a fix.
+ *
+ * The adapter this machine reports has three memory figures that are equal and
+ * enormous -- 38338 MB of dedicated video, dedicated system and shared alike --
+ * where a real card reports dedicated system memory as zero and a shared figure
+ * unrelated to the other two. A game that does arithmetic on those can compute
+ * an offset that is nowhere.
+ *
+ * So this hands back believable numbers instead and nothing else changes. If
+ * the crash address or the address being written to moves, the memory figures
+ * feed the computation. If both stay exactly where they were, they do not, and
+ * this experiment is over -- which is just as useful, because it is one fewer
+ * thing to wonder about.
+ *
+ * DXGI_ADAPTER_DESC1: Description 0 (128 WCHAR), VendorId 256, DeviceId 260,
+ * SubSysId 264, Revision 268, DedicatedVideoMemory 272, DedicatedSystemMemory
+ * 280, SharedSystemMemory 288, AdapterLuid 296, Flags 304. DXGI_ADAPTER_DESC is
+ * the same without the trailing Flags. */
+#define MB_ (1024ULL * 1024ULL)
+
+/* EXPERIMENT TWO. The memory figures were rewritten and nothing moved -- same
+ * crash address, same address written to, identical resource counts -- so they
+ * are not what this game trips over. Ruled out.
+ *
+ * What is left in the description is a contradiction. The adapter calls itself
+ * "AMD Compatibility Mode", its device id 0x66af is AMD's Radeon VII, and its
+ * vendor id is 0x10de, which is NVIDIA. Two of the three say AMD. Engines
+ * branch on the vendor id constantly -- 0x1002 AMD, 0x10de NVIDIA, 0x8086
+ * Intel -- and a game taking an NVIDIA path on hardware that answers like an
+ * AMD card in every other respect is a plausible way to end up somewhere no
+ * pointer should be.
+ *
+ * So this makes the description agree with itself and changes nothing else. */
+static void consistent_vendor(void *desc)
+{
+    unsigned char *d = (unsigned char *)desc;
+    unsigned int was = *(unsigned int *)(d + 256);
+
+    if (was != 0x1002u)
+    {
+        *(unsigned int *)(d + 256) = 0x1002u;          /* AMD, to match the rest */
+        { static LONG told;
+          if (InterlockedIncrement(&told) <= 2)
+              logf_("EXPERIMENT rewrote adapter vendor: 0x%04x -> 0x1002 (AMD), "
+                    "device 0x%04x left alone", was, *(unsigned int *)(d + 260)); }
+    }
+}
+
+static HRESULT WINAPI hdxgi_getdesc(void *self, void *desc)
+{
+    HRESULT hr = rdxgi_getdesc(self, desc);
+    if (SUCCEEDED(hr)) { /* rewrites ruled out */ (void)0;
+                         describe_adapter(desc, last_adapter_index, "GetDesc", FALSE); }
+    return hr;
+}
+static HRESULT WINAPI hdxgi_getdesc1(void *self, void *desc)
+{
+    HRESULT hr = rdxgi_getdesc1(self, desc);
+    if (SUCCEEDED(hr)) { /* rewrites ruled out */ (void)0;
+                         describe_adapter(desc, last_adapter_index, "GetDesc1", TRUE); }
+    return hr;
+}
+
+static HRESULT (WINAPI *rdxgi_enumout)(void *, UINT, void **);
+static HRESULT WINAPI hdxgi_enumout(void *, UINT, void **);
+
+static void arm_adapter(void *ad, UINT index)
+{
+    last_adapter_index = index;
+    if (!ad) return;
+    if (!rdxgi_enumout)  rdxgi_enumout  = patch(ad,  7, hdxgi_enumout);
+    if (!rdxgi_getdesc)  rdxgi_getdesc  = patch(ad,  8, hdxgi_getdesc);
+    if (!rdxgi_getdesc1) rdxgi_getdesc1 = patch(ad, 10, hdxgi_getdesc1);
+}
+
+/*
+ * Outputs and their display modes.
+ *
+ * A game that picks a resolution searches a list of modes for the one it wants
+ * and uses the result as an index. When the search fails Unreal returns
+ * INDEX_NONE, which is -1, and an engine that does not check indexes the list
+ * with it -- reading below the start of an array, or below zero when the array
+ * was never allocated.
+ *
+ * So the two questions are whether there are any outputs at all, and whether
+ * the mode the game is looking for is among the ones it is given.
+ *
+ * IDXGIAdapter: 7 EnumOutputs. IDXGIOutput: 7 GetDesc, 8 GetDisplayModeList,
+ * 9 FindClosestMatchingMode.
+ * DXGI_MODE_DESC is 28 bytes, not 20: Width 0, Height 4, RefreshRate numerator
+ * 8 and denominator 12, Format 16, ScanlineOrdering 20, Scaling 24. Walking
+ * this array at the wrong stride does not look like an error -- it looks like
+ * data, and it reports resolutions nobody offered. That mistake was made here
+ * and it cost two hypotheses; see docs/what-we-got-wrong.md.
+ */
+#define MODE_DESC_UINTS 7
+static HRESULT (WINAPI *rdxgi_modelist)(void *, UINT, UINT, UINT *, void *);
+static HRESULT (WINAPI *rdxgi_closest)(void *, const void *, void *, void *);
+
+static HRESULT WINAPI hdxgi_modelist(void *self, UINT fmt, UINT flags, UINT *count, void *modes)
+{
+    HRESULT hr = rdxgi_modelist(self, fmt, flags, count, modes);
+    if (first_time(0x4005, fmt, modes ? 1 : 0))
+        logf_("%s  GetDisplayModeList(format %u, %s) -> 0x%08lx  %u modes",
+              FAILED(hr) ? "REFUSED " : "        ", fmt,
+              modes ? "filling" : "counting", (unsigned long)hr, count ? *count : 0);
+    if (SUCCEEDED(hr) && modes && count && *count)
+    {
+        const UINT *m = (const UINT *)modes;
+        UINT k, shown = *count < 4 ? *count : 4;
+        UINT widest = 0, tallest = 0;
+        for (k = 0; k < *count; ++k)
+        {
+            const UINT *e = m + (size_t)k * MODE_DESC_UINTS;
+            if (e[0] > widest)  widest  = e[0];
+            if (e[1] > tallest) tallest = e[1];
+        }
+        for (k = 0; k < shown; ++k)
+        {
+            const UINT *e = m + (size_t)k * MODE_DESC_UINTS;
+            if (first_time(0x4006, e[0], e[1]))
+                logf_("            mode %ux%u @ %u/%u  format %u",
+                      e[0], e[1], e[2], e[3], e[4]);
+        }
+        if (first_time(0x4007, widest, tallest))
+            logf_("            largest of the %u modes offered: %ux%u",
+                  *count, widest, tallest);
+    }
+    return hr;
+}
+
+static HRESULT WINAPI hdxgi_closest(void *self, const void *want, void *got, void *dev)
+{
+    HRESULT hr = rdxgi_closest(self, want, got, dev);
+    const UINT *w = (const UINT *)want;
+    if (first_time(0x4007, w ? w[0] : 0, w ? w[1] : 0))
+        logf_("%s  FindClosestMatchingMode(%ux%u) -> 0x%08lx",
+              FAILED(hr) ? "REFUSED " : "        ",
+              w ? w[0] : 0, w ? w[1] : 0, (unsigned long)hr);
+    return hr;
+}
+
+static HRESULT WINAPI hdxgi_enumout(void *self, UINT i, void **out)
+{
+    HRESULT hr = rdxgi_enumout(self, i, out);
+    if (first_time(0x4004, i, (UINT)hr))
+        logf_("%s  EnumOutputs(%u) -> 0x%08lx%s",
+              FAILED(hr) ? "REFUSED " : "        ", i, (unsigned long)hr,
+              (FAILED(hr) && i == 0) ? "   << no monitor at all" : "");
+    if (SUCCEEDED(hr) && out && *out)
+    {
+        if (!rdxgi_modelist) rdxgi_modelist = patch(*out, 8, hdxgi_modelist);
+        if (!rdxgi_closest)  rdxgi_closest  = patch(*out, 9, hdxgi_closest);
+    }
+    return hr;
+}
+
+static HRESULT WINAPI hdxgi_enum(void *self, UINT i, void **out)
+{
+    HRESULT hr = rdxgi_enum(self, i, out);
+    if (first_time(0x4002, i, (UINT)hr))
+        logf_("%s  EnumAdapters(%u) -> 0x%08lx",
+              FAILED(hr) ? "REFUSED " : "        ", i, (unsigned long)hr);
+    if (SUCCEEDED(hr) && out && *out) arm_adapter(*out, i);
+    return hr;
+}
+static HRESULT WINAPI hdxgi_enum1(void *self, UINT i, void **out)
+{
+    HRESULT hr = rdxgi_enum1(self, i, out);
+    if (first_time(0x4003, i, (UINT)hr))
+        logf_("%s  EnumAdapters1(%u) -> 0x%08lx",
+              FAILED(hr) ? "REFUSED " : "        ", i, (unsigned long)hr);
+    if (SUCCEEDED(hr) && out && *out) arm_adapter(*out, i);
+    return hr;
+}
+
+/* DXGI_SWAP_CHAIN_DESC1: Width 0, Height 4, Format 8, Stereo 12,
+ * SampleDesc 16, BufferUsage 24, BufferCount 28, Scaling 32, SwapEffect 36. */
+static HRESULT WINAPI hdxgi_swapchain(void *self, void *dev, HWND hwnd, const void *d,
+                                      const void *fs, void *restrict_out, void **out)
+{
+    HRESULT hr = rdxgi_swapchain(self, dev, hwnd, d, fs, restrict_out, out);
+    const UINT *u = (const UINT *)d;
+    logf_("%s  CreateSwapChainForHwnd(%ux%u format=%u buffers=%u effect=%u) -> 0x%08lx",
+          FAILED(hr) ? "REFUSED " : "        ",
+          d ? u[0] : 0, d ? u[1] : 0, d ? u[2] : 0, d ? u[7] : 0, d ? u[9] : 0,
+          (unsigned long)hr);
+    return hr;
+}
+static HRESULT WINAPI hdxgi_swapchain_old(void *self, void *dev, void *d, void **out)
+{
+    HRESULT hr = rdxgi_swapchain_old(self, dev, d, out);
+    logf_("%s  CreateSwapChain -> 0x%08lx",
+          FAILED(hr) ? "REFUSED " : "        ", (unsigned long)hr);
+    return hr;
+}
+
+static void watch_factory(void *f)
+{
+    if (!f) return;
+    if (!rdxgi_enum)      rdxgi_enum      = patch(f,  7, hdxgi_enum);
+    if (!rdxgi_swapchain_old) rdxgi_swapchain_old = patch(f, 10, hdxgi_swapchain_old);
+    if (!rdxgi_enum1)     rdxgi_enum1     = patch(f, 12, hdxgi_enum1);
+    if (!rdxgi_swapchain) rdxgi_swapchain = patch(f, 15, hdxgi_swapchain);
+    logf_("watching the DXGI factory");
+}
+
+static HRESULT (WINAPI *real_CreateDXGIFactory)(REFIID, void **);
+static HRESULT (WINAPI *real_CreateDXGIFactory1)(REFIID, void **);
+static HRESULT (WINAPI *real_CreateDXGIFactory2)(UINT, REFIID, void **);
+
+static HRESULT WINAPI my_CreateDXGIFactory(REFIID iid, void **out)
+{
+    HRESULT hr = real_CreateDXGIFactory(iid, out);
+    logf_("%s  CreateDXGIFactory -> 0x%08lx", FAILED(hr) ? "REFUSED " : "        ",
+          (unsigned long)hr);
+    if (SUCCEEDED(hr) && out && *out) watch_factory(*out);
+    return hr;
+}
+static HRESULT WINAPI my_CreateDXGIFactory1(REFIID iid, void **out)
+{
+    HRESULT hr = real_CreateDXGIFactory1(iid, out);
+    logf_("%s  CreateDXGIFactory1 -> 0x%08lx", FAILED(hr) ? "REFUSED " : "        ",
+          (unsigned long)hr);
+    if (SUCCEEDED(hr) && out && *out) watch_factory(*out);
+    return hr;
+}
+static HRESULT WINAPI my_CreateDXGIFactory2(UINT flags, REFIID iid, void **out)
+{
+    HRESULT hr = real_CreateDXGIFactory2(flags, iid, out);
+    logf_("%s  CreateDXGIFactory2(flags 0x%x) -> 0x%08lx",
+          FAILED(hr) ? "REFUSED " : "        ", flags, (unsigned long)hr);
+    if (SUCCEEDED(hr) && out && *out) watch_factory(*out);
+    return hr;
+}
+
+/* ------------------------------------------------- root signatures, as blobs */
+
+/*
+ * The two free functions in d3d12.dll that parse a container.
+ *
+ * These are not device methods, so nothing above sees them, and a game can
+ * reach the shader-container code through them long before it creates a
+ * pipeline. Both are logged BEFORE the call: if the parse takes the process
+ * down, the line naming it is already on disk.
+ */
+static HRESULT (WINAPI *real_rs_deserialize)(const void *, SIZE_T, REFIID, void **);
+static HRESULT (WINAPI *real_rs_deserialize_v)(const void *, SIZE_T, REFIID, void **);
+static HRESULT (WINAPI *real_rs_serialize)(const void *, UINT, void **, void **);
+static HRESULT (WINAPI *real_rs_serialize_v)(const void *, void **, void **);
+static LONG rs_deser, rs_ser;
+
+static HRESULT WINAPI my_rs_deserialize(const void *blob, SIZE_T len, REFIID iid, void **out)
+{
+    LONG which = InterlockedIncrement(&rs_deser);
+    HRESULT hr;
+    if (which <= 40)
+        logf_("RS    [#%ld] CreateRootSignatureDeserializer, %llu bytes, first dword 0x%08lx",
+              which, (unsigned long long)len,
+              (blob && len >= 4) ? *(const unsigned long *)blob : 0);
+    /* Keep a copy before the call. If the parse is what kills the process,
+     * the bytes that did it are on disk and can be read at leisure. */
+    if (which == 1 && blob && len)
+    {
+        HANDLE f = CreateFileA("C:\\rootsig-1.bin", GENERIC_WRITE, FILE_SHARE_READ,
+                               NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (f != INVALID_HANDLE_VALUE)
+        {
+            DWORD wrote;
+            WriteFile(f, blob, (DWORD)len, &wrote, NULL);
+            CloseHandle(f);
+            logf_("       blob written to C:\\rootsig-1.bin (%lu bytes)", wrote);
+        }
+    }
+    hr = real_rs_deserialize(blob, len, iid, out);
+    if (FAILED(hr) && which <= 40)
+        logf_("REFUSED  CreateRootSignatureDeserializer -> 0x%08lx", (unsigned long)hr);
+    return hr;
+}
+
+static HRESULT WINAPI my_rs_deserialize_v(const void *blob, SIZE_T len, REFIID iid, void **out)
+{
+    LONG which = InterlockedIncrement(&rs_deser);
+    HRESULT hr;
+    if (which <= 40)
+        logf_("RS    [#%ld] CreateVersionedRootSignatureDeserializer, %llu bytes, "
+              "first dword 0x%08lx", which, (unsigned long long)len,
+              (blob && len >= 4) ? *(const unsigned long *)blob : 0);
+    hr = real_rs_deserialize_v(blob, len, iid, out);
+    if (FAILED(hr) && which <= 40)
+        logf_("REFUSED  CreateVersionedRootSignatureDeserializer -> 0x%08lx",
+              (unsigned long)hr);
+    return hr;
+}
+
+static HRESULT WINAPI my_rs_serialize(const void *desc, UINT version, void **blob, void **err)
+{
+    LONG which = InterlockedIncrement(&rs_ser);
+    HRESULT hr;
+    if (which <= 40) logf_("RS    [#%ld] SerializeRootSignature(version %u)", which, version);
+    hr = real_rs_serialize(desc, version, blob, err);
+    if (FAILED(hr) && which <= 40)
+        logf_("REFUSED  SerializeRootSignature -> 0x%08lx", (unsigned long)hr);
+    return hr;
+}
+
+static HRESULT WINAPI my_rs_serialize_v(const void *desc, void **blob, void **err)
+{
+    LONG which = InterlockedIncrement(&rs_ser);
+    HRESULT hr;
+    if (which <= 40) logf_("RS    [#%ld] SerializeVersionedRootSignature", which);
+    hr = real_rs_serialize_v(desc, blob, err);
+    if (FAILED(hr) && which <= 40)
+        logf_("REFUSED  SerializeVersionedRootSignature -> 0x%08lx", (unsigned long)hr);
+    return hr;
+}
+
+/* ------------------------------------------------------------ shader compiler */
+
+/*
+ * What the game asks DXC to compile, and with what.
+ *
+ * A title that ships dxcompiler.dll builds its shaders while it runs, and the
+ * bytecode it produces is what the translation layer then has to convert. If
+ * that conversion is where a process dies, the last thing handed to the
+ * compiler names the shader that did it -- and the arguments name the feature
+ * that the converter could not follow, which is the part that might be
+ * negotiable.
+ *
+ * IDxcCompiler3: 0-2 IUnknown, 3 Compile, 4 Disassemble.
+ * Compile(const DxcBuffer *src, LPCWSTR *args, UINT32 argc,
+ *         IDxcIncludeHandler *inc, REFIID riid, void **result)
+ */
+static HRESULT (WINAPI *real_dxc_compile)(void *, const void *, const WCHAR **,
+                                          UINT32, void *, REFIID, void **);
+static LONG dxc_ok, dxc_bad, dxc_seen;
+
+static HRESULT WINAPI my_dxc_compile(void *self, const void *src, const WCHAR **args,
+                                     UINT32 argc, void *inc, REFIID iid, void **out)
+{
+    char line[512];
+    int at = 0;
+    UINT32 i;
+    HRESULT hr;
+    LONG which = InterlockedIncrement(&dxc_seen);
+
+    line[0] = 0;
+    for (i = 0; i < argc && args && at < (int)sizeof(line) - 8; ++i)
+    {
+        const WCHAR *w = args[i];
+        int k = 0;
+        if (!w) continue;
+        if (at < (int)sizeof(line) - 2) line[at++] = ' ';
+        while (w[k] && at < (int)sizeof(line) - 2)
+            line[at++] = (w[k] > 31 && w[k] < 127) ? (char)w[k++] : (++k, '?');
+        line[at] = 0;
+    }
+
+    /* Say it BEFORE the call. If the conversion takes the process down, the
+     * line already written is the one that names the shader. */
+    if (which <= 400)
+        logf_("DXC   [#%ld] compiling:%s", which, line);
+
+    hr = real_dxc_compile(self, src, args, argc, inc, iid, out);
+
+    if (SUCCEEDED(hr)) InterlockedIncrement(&dxc_ok);
+    else
+    {
+        InterlockedIncrement(&dxc_bad);
+        if (dxc_bad <= 20) logf_("REFUSED  DXC Compile [#%ld] -> 0x%08lx",
+                                 which, (unsigned long)hr);
+    }
+    return hr;
+}
+
+static HRESULT (WINAPI *real_DxcCreateInstance)(REFCLSID, REFIID, void **);
+
+static HRESULT WINAPI my_DxcCreateInstance(REFCLSID clsid, REFIID iid, void **out)
+{
+    HRESULT hr = real_DxcCreateInstance(clsid, iid, out);
+    if (SUCCEEDED(hr) && out && *out && !real_dxc_compile)
+    {
+        /* Only the compiler object has a Compile at slot 3; a utils or a
+         * library object would be patched wrongly, so check the interface. */
+        if (IsEqualGUID(iid, &IID_IDxcCompiler3_local))
+        {
+            real_dxc_compile = patch(*out, 3, my_dxc_compile);
+            logf_("watching DXC Compile: %s", real_dxc_compile ? "yes" : "NO");
+        }
+        else
+            logf_("        DxcCreateInstance for %s", guid_text(iid));
+    }
+    return hr;
+}
+
+/* ------------------------------------------------- display modes, the GDI way */
+
+/*
+ * Where a resolution list actually comes from, on the engines that do not use
+ * DXGI for it.
+ *
+ * Unreal has two paths and the choice is visible in the import table: a title
+ * importing EnumDisplaySettingsW builds its resolution list from GDI, and every
+ * DXGI hook in this file will watch an empty road while it does. The list it
+ * builds is an array of {width, height, refresh} -- twelve bytes an entry --
+ * and a search through it that finds nothing returns INDEX_NONE.
+ *
+ * DEVMODEW: dmBitsPerPel at 168, dmPelsWidth 172, dmPelsHeight 176,
+ * dmDisplayFrequency 184.
+ */
+/*
+ * The monitor list, which is built right after the swap chain.
+ *
+ * Unreal walks EnumDisplayMonitors, asks GetMonitorInfo about each one and
+ * keeps the one flagged primary. A walk that visits nothing, or that visits
+ * monitors none of which is primary, leaves the index of the primary at -1 --
+ * and an index of -1 into an array that was never filled reads below zero.
+ *
+ * MONITORINFO: cbSize 0, rcMonitor 4..19, rcWork 20..35, dwFlags 36
+ * (MONITORINFOF_PRIMARY is 1).
+ */
+static BOOL (WINAPI *real_EnumDisplayMonitors)(HDC, const RECT *, MONITORENUMPROC, LPARAM);
+static BOOL (WINAPI *real_GetMonitorInfoW)(HMONITOR, void *);
+static LONG monitors_visited, monitors_primary, monitorinfo_ok, monitorinfo_bad;
+
+static MONITORENUMPROC real_monitor_proc;
+
+static BOOL CALLBACK my_monitor_proc(HMONITOR mon, HDC dc, LPRECT r, LPARAM data)
+{
+    LONG which = InterlockedIncrement(&monitors_visited);
+    if (which <= 8 && r)
+        logf_("        monitor %ld at %ld,%ld %ldx%ld", which,
+              (long)r->left, (long)r->top,
+              (long)(r->right - r->left), (long)(r->bottom - r->top));
+    return real_monitor_proc(mon, dc, r, data);
+}
+
+static BOOL WINAPI my_EnumDisplayMonitors(HDC dc, const RECT *clip,
+                                          MONITORENUMPROC proc, LPARAM data)
+{
+    BOOL ok;
+    LONG before = monitors_visited;
+    real_monitor_proc = proc;
+    ok = real_EnumDisplayMonitors(dc, clip, proc ? my_monitor_proc : proc, data);
+    logf_("%s  EnumDisplayMonitors -> %s, visited %ld%s",
+          ok ? "        " : "REFUSED ", ok ? "TRUE" : "FALSE",
+          monitors_visited - before,
+          (monitors_visited == before) ? "   << not one monitor" : "");
+    return ok;
+}
+
+static BOOL WINAPI my_GetMonitorInfoW(HMONITOR mon, void *info)
+{
+    BOOL ok = real_GetMonitorInfoW(mon, info);
+    if (ok)
+    {
+        DWORD flags = *(const DWORD *)((const char *)info + 36);
+        InterlockedIncrement(&monitorinfo_ok);
+        if (flags & 1) InterlockedIncrement(&monitors_primary);
+        if (monitorinfo_ok <= 8)
+            logf_("        GetMonitorInfo -> flags 0x%lx%s",
+                  (unsigned long)flags, (flags & 1) ? "  PRIMARY" : "");
+    }
+    else
+    {
+        InterlockedIncrement(&monitorinfo_bad);
+        if (monitorinfo_bad <= 4) logf_("REFUSED  GetMonitorInfoW returned FALSE");
+    }
+    return ok;
+}
+
+static BOOL (WINAPI *real_EnumDisplaySettingsW)(const WCHAR *, DWORD, void *);
+static BOOL (WINAPI *real_EnumDisplayDevicesW)(const WCHAR *, DWORD, void *, DWORD);
+static LONG modes_asked, modes_given;
+
+static BOOL WINAPI my_EnumDisplaySettingsW(const WCHAR *device, DWORD which, void *dm)
+{
+    BOOL ok = real_EnumDisplaySettingsW(device, which, dm);
+    InterlockedIncrement(&modes_asked);
+    if (ok)
+    {
+        const char *d = (const char *)dm;
+        InterlockedIncrement(&modes_given);
+        if (modes_given <= 12)
+            logf_("        display mode %lu: %ux%u @ %u Hz, %u bpp",
+                  (unsigned long)which,
+                  *(const DWORD *)(d + 172), *(const DWORD *)(d + 176),
+                  *(const DWORD *)(d + 184), *(const DWORD *)(d + 168));
+    }
+    else if (modes_asked <= 4 || which == 0)
+        logf_("REFUSED  EnumDisplaySettingsW(mode %lu) returned FALSE%s",
+              (unsigned long)which,
+              which == 0 ? "   << not one mode, so the resolution list is empty" : "");
+    return ok;
+}
+
+static BOOL WINAPI my_EnumDisplayDevicesW(const WCHAR *device, DWORD which,
+                                          void *dd, DWORD flags)
+{
+    BOOL ok = real_EnumDisplayDevicesW(device, which, dd, flags);
+    if (first_time(0x5001, which, ok))
+    {
+        char name[36];
+        int i = 0;
+        const WCHAR *w = (const WCHAR *)((const char *)dd + 4);   /* DeviceName */
+        if (ok && dd) while (i < 32 && w[i]) { name[i] = (char)(w[i] & 0x7f); ++i; }
+        name[ok && dd ? i : 0] = 0;
+        logf_("%s  EnumDisplayDevicesW(%lu) -> %s%s%s",
+              ok ? "        " : "REFUSED ", (unsigned long)which,
+              ok ? "TRUE" : "FALSE", ok ? "  " : "", ok ? name : "");
+    }
+    return ok;
+}
+
+/* --------------------------------------------------- where the devices come from */
+
+static HRESULT (WINAPI *real_D3D12CreateDevice)(void *, UINT, REFIID, void **);
+static HRESULT (WINAPI *real_D3D11CreateDevice)(void *, UINT, HMODULE, UINT, const UINT *,
+                                                UINT, UINT, void **, UINT *, void **);
+/*
+ * The combined form, which is easy to miss and common in older engines.
+ *
+ * A game that calls this creates its device and its swap chain in one go, and a
+ * probe watching only D3D11CreateDevice sees neither -- while the DXGI factory
+ * hook still reports the swap chain that appears inside it. The result is a log
+ * showing a swap chain with no device behind it, which reads as impossible and
+ * is really just a missing hook.
+ */
+static HRESULT (WINAPI *real_D3D11CreateDeviceAndSwapChain)(void *, UINT, HMODULE, UINT,
+        const UINT *, UINT, UINT, const void *, void **, void **, UINT *, void **);
+static BOOL seen11, seen12;
+
+/* EXPERIMENT FOUR. Everything so far watched the DEVICE, which is why the
+ * barrier line has been reporting zero of everything all along: the work goes
+ * through the immediate CONTEXT and nothing here was looking at it.
+ *
+ * Map is the one call in D3D11 that hands the game a raw address to write to.
+ * The fault is a WRITE to 0xFFFFFFF22D819090 -- an address with rubbish in its
+ * top half, which is what a bad mapped pointer looks like, and is not what
+ * running off the end of a sane allocation looks like. If Map returns success
+ * with a pointer like that, or fails while the game writes anyway, this will
+ * say so.
+ *
+ * ID3D11DeviceContext: 14 Map, 15 Unmap. D3D11_MAPPED_SUBRESOURCE is
+ * { void *pData; UINT RowPitch; UINT DepthPitch; }. */
+static HRESULT (WINAPI *r11_map)(void *, void *, UINT, UINT, UINT, void *);
+static void    (WINAPI *r11_unmap)(void *, void *, UINT);
+static LONG map_seq, map_failed;
+
+static HRESULT WINAPI h11_map(void *ctx, void *res, UINT sub, UINT type, UINT flags, void *out)
+{
+    HRESULT hr = r11_map(ctx, res, sub, type, flags, out);
+    LONG i = InterlockedIncrement(&map_seq);
+    if (FAILED(hr))
+    {
+        InterlockedIncrement(&map_failed);
+        logf_("M%-4ld REFUSED Map(resource=%p sub=%u type=%u flags=0x%x) -> 0x%08lx"
+              "   <-- the game may write regardless", i, res, sub, type, flags,
+              (unsigned long)hr);
+        return hr;
+    }
+    {
+        void *p = out ? *(void **)out : NULL;
+        UINT row = out ? *(const UINT *)((const char *)out + 8) : 0;
+        UINT dep = out ? *(const UINT *)((const char *)out + 12) : 0;
+        /* A pointer whose top 16 bits are set is not a user-space address on
+         * this platform. Say so loudly rather than leaving it to be noticed. */
+        BOOL wild = ((ULONG_PTR)p >> 48) != 0;
+        logf_("M%-4ld Map(resource=%p sub=%u type=%u) -> %p  row=%u depth=%u%s",
+              i, res, sub, type, p, row, dep, wild ? "   <-- NOT A USABLE ADDRESS" : "");
+    }
+    return hr;
+}
+
+static void WINAPI h11_unmap(void *ctx, void *res, UINT sub)
+{
+    r11_unmap(ctx, res, sub);
+}
+
+static void watch_d3d11_context(void *ctx)
+{
+    return;   /* CONTROL: hooks disabled on purpose */
+    void **vtbl;
+    DWORD old;
+    if (!ctx || r11_map) return;
+    vtbl = *(void ***)ctx;
+    if (VirtualProtect(&vtbl[14], sizeof(void *) * 2, PAGE_READWRITE, &old))
+    {
+        r11_map = (void *)vtbl[14];   vtbl[14] = (void *)h11_map;
+        r11_unmap = (void *)vtbl[15]; vtbl[15] = (void *)h11_unmap;
+        VirtualProtect(&vtbl[14], sizeof(void *) * 2, old, &old);
+        logf_("watching the D3D11 immediate context: every Map is now logged");
+    }
+    else logf_("could not patch the context vtable -- Map stays invisible");
+}
+
+static HRESULT WINAPI my_D3D12CreateDevice(void *adapter, UINT level, REFIID iid, void **dev)
+{
+    HRESULT hr = real_D3D12CreateDevice(adapter, level, iid, dev);
+    logf_("%s  D3D12CreateDevice(min level 0x%x) -> 0x%08lx",
+          FAILED(hr) ? "REFUSED " : "        ", level, (unsigned long)hr);
+    if (SUCCEEDED(hr) && dev && *dev && !seen12) { seen12 = TRUE; watch_d3d12_device(*dev); }
+    return hr;
+}
+
+static HRESULT WINAPI my_D3D11CreateDeviceAndSwapChain(void *adapter, UINT type, HMODULE sw,
+        UINT flags, const UINT *levels, UINT nlevels, UINT sdk, const void *scd,
+        void **swap, void **dev, UINT *got, void **ctx)
+{
+    HRESULT hr = real_D3D11CreateDeviceAndSwapChain(adapter, type, sw, flags, levels,
+                                                    nlevels, sdk, scd, swap, dev, got, ctx);
+    logf_("%s  D3D11CreateDeviceAndSwapChain(flags 0x%x) -> 0x%08lx  level 0x%x  "
+          "device %s  swapchain %s",
+          FAILED(hr) ? "REFUSED " : "        ", flags, (unsigned long)hr, got ? *got : 0,
+          (dev && *dev) ? "yes" : "NONE", (swap && *swap) ? "yes" : "NONE");
+    if (SUCCEEDED(hr) && dev && *dev && !seen11) { seen11 = TRUE; watch_d3d11_device(*dev); }
+    if (SUCCEEDED(hr) && ctx && *ctx) watch_d3d11_context(*ctx);
+    return hr;
+}
+
+static HRESULT WINAPI my_D3D11CreateDevice(void *adapter, UINT type, HMODULE sw, UINT flags,
+                                           const UINT *levels, UINT nlevels, UINT sdk,
+                                           void **dev, UINT *got, void **ctx)
+{
+    HRESULT hr = real_D3D11CreateDevice(adapter, type, sw, flags, levels, nlevels, sdk,
+                                        dev, got, ctx);
+    logf_("%s  D3D11CreateDevice(flags 0x%x, adapter %s) -> 0x%08lx  level 0x%x",
+          FAILED(hr) ? "REFUSED " : "        ", flags, adapter ? "given" : "default",
+          (unsigned long)hr, got ? *got : 0);
+    /*
+     * The adapter the engine hands in here is the one its RHI keeps, and the
+     * one whose outputs it later asks for. Arming it at this point needs no
+     * guess about which enumeration API the engine used to find it -- it is
+     * simply the argument.
+     */
+    if (adapter) arm_adapter(adapter, 0);
+    if (SUCCEEDED(hr) && dev && *dev && !seen11) { seen11 = TRUE; watch_d3d11_device(*dev); }
+    if (SUCCEEDED(hr) && ctx && *ctx) watch_d3d11_context(*ctx);
+    return hr;
+}
+
+/*
+ * A device does not have to arrive through d3d11.dll or d3d12.dll.
+ *
+ * NVIDIA Streamline ships sl.interposer.dll, a drop-in exporting both
+ * D3D11CreateDevice and D3D12CreateDevice, and a game linked against it has no
+ * import of the real thing at all -- Nioh 3 and Marvel's Spider-Man 2 both do
+ * this. Hooking only the obvious module finds nothing and looks like a game
+ * that never made a device.
+ */
+static const char *const device_modules[] = {
+    "d3d12.dll", "d3d11.dll", "sl.interposer.dll", "nvngx.dll", "amd_fidelityfx_dx12.dll",
+};
+
+static FARPROC (WINAPI *real_GetProcAddress)(HMODULE, LPCSTR);
+static HMODULE (WINAPI *real_LoadLibraryExW)(LPCWSTR, HANDLE, DWORD);
+
+static FARPROC WINAPI my_GetProcAddress(HMODULE mod, LPCSTR name)
+{
+    FARPROC p = real_GetProcAddress(mod, name);
+
+    if (!name || (ULONG_PTR)name <= 0xffff) return p;
+
+    /* A lookup that comes back empty is a capability the game just learned it
+     * does not have, and it will not say so. */
+    if (!p && first_time(0x3001, (UINT)(ULONG_PTR)name, 0))
+    {
+        char who[MAX_PATH] = "?";
+        GetModuleFileNameA(mod, who, sizeof(who) - 1);
+        logf_("REFUSED  GetProcAddress(%s) in %s", name, who);
+        return p;
+    }
+    if (!p) return p;
+
+    if (lstrcmpA(name, "D3D12CreateDevice") == 0)
+    {
+        if (!real_D3D12CreateDevice) real_D3D12CreateDevice = (void *)p;
+        return (FARPROC)my_D3D12CreateDevice;
+    }
+    if (lstrcmpA(name, "D3D11CreateDevice") == 0)
+    {
+        if (!real_D3D11CreateDevice) real_D3D11CreateDevice = (void *)p;
+        return (FARPROC)my_D3D11CreateDevice;
+    }
+    if (lstrcmpA(name, "D3D11CreateDeviceAndSwapChain") == 0)
+    {
+        if (!real_D3D11CreateDeviceAndSwapChain)
+            real_D3D11CreateDeviceAndSwapChain = (void *)p;
+        return (FARPROC)my_D3D11CreateDeviceAndSwapChain;
+    }
+    if (lstrcmpA(name, "CreateDXGIFactory") == 0)
+    {
+        if (!real_CreateDXGIFactory) real_CreateDXGIFactory = (void *)p;
+        return (FARPROC)my_CreateDXGIFactory;
+    }
+    if (lstrcmpA(name, "CreateDXGIFactory1") == 0)
+    {
+        if (!real_CreateDXGIFactory1) real_CreateDXGIFactory1 = (void *)p;
+        return (FARPROC)my_CreateDXGIFactory1;
+    }
+    if (lstrcmpA(name, "CreateDXGIFactory2") == 0)
+    {
+        if (!real_CreateDXGIFactory2) real_CreateDXGIFactory2 = (void *)p;
+        return (FARPROC)my_CreateDXGIFactory2;
+    }
+    return p;
+}
+
+/* Which middleware actually loads, and which fails to. */
+static HMODULE WINAPI my_LoadLibraryExW(LPCWSTR name, HANDLE file, DWORD flags)
+{
+    HMODULE h = real_LoadLibraryExW(name, file, flags);
+    if (name && !h)
+    {
+        char narrow[MAX_PATH];
+        int i = 0;
+        while (i < MAX_PATH - 1 && name[i]) { narrow[i] = (char)(name[i] & 0x7f); ++i; }
+        narrow[i] = 0;
+        if (first_time(0x3002, (UINT)(ULONG_PTR)name, 0))
+            logf_("REFUSED  LoadLibrary(%s) -- not found or not loadable", narrow);
+    }
+    return h;
+}
+
+/*
+ * Make a silent crash say something.
+ *
+ * A game that dies without a dialog, without a Wine backtrace and without a
+ * line in any log is the worst case to work on: every hypothesis is equally
+ * cheap and none can be tested. A vectored handler costs nothing while nothing
+ * is wrong and, when something is, names the code, the address and the module
+ * it happened in -- which usually names the component.
+ *
+ * Only genuinely fatal codes are reported. A running program raises C++
+ * exceptions and debugger notifications constantly and they are not faults.
+ */
+static void report(void);
+
+static const char *exception_name(DWORD code)
+{
+    switch (code)
+    {
+    case 0xC0000005: return "ACCESS_VIOLATION";
+    case 0xC000001D: return "ILLEGAL_INSTRUCTION";
+    case 0xC0000006: return "IN_PAGE_ERROR";
+    case 0xC000008C: return "ARRAY_BOUNDS_EXCEEDED";
+    case 0xC0000090: return "FLT_INVALID_OPERATION";
+    case 0xC0000094: return "INT_DIVIDE_BY_ZERO";
+    case 0xC0000096: return "PRIVILEGED_INSTRUCTION";
+    case 0xC00000FD: return "STACK_OVERFLOW";
+    case 0xC0000025: return "NONCONTINUABLE_EXCEPTION";
+    case 0xC0000374: return "HEAP_CORRUPTION";
+    default:         return NULL;
+    }
+}
+
+static const char *base_name_of(const char *path)
+{
+    const char *p = path, *last = path;
+    for (; *p; ++p) if (*p == '\\' || *p == '/') last = p + 1;
+    return last;
+}
+
+static LONG CALLBACK on_exception(EXCEPTION_POINTERS *info)
+{
+    static LONG told;
+    const char *what;
+    void *at;
+    char module[MAX_PATH] = "?";
+    HMODULE owner = NULL;
+
+    if (!info || !info->ExceptionRecord) return EXCEPTION_CONTINUE_SEARCH;
+    what = exception_name(info->ExceptionRecord->ExceptionCode);
+    if (!what) return EXCEPTION_CONTINUE_SEARCH;
+    if (InterlockedIncrement(&told) > 8) return EXCEPTION_CONTINUE_SEARCH;
+
+    at = info->ExceptionRecord->ExceptionAddress;
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                           | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)at, &owner) && owner)
+        GetModuleFileNameA(owner, module, sizeof(module) - 1);
+
+    logf_("CRASH    %s at %p", what, at);
+    logf_("         in %s%s", module,
+          owner ? "" : "  (no module -- executing outside any loaded image)");
+    if (owner)
+        logf_("         offset +0x%llx from that module's base",
+              (unsigned long long)((char *)at - (char *)owner));
+    if (info->ExceptionRecord->ExceptionCode == 0xC0000005
+        && info->ExceptionRecord->NumberParameters >= 2)
+        logf_("         %s address %p",
+              info->ExceptionRecord->ExceptionInformation[0] ? "writing to" : "reading from",
+              (void *)info->ExceptionRecord->ExceptionInformation[1]);
+
+    /* EXPERIMENT FIVE. The executable is packed -- its code is encrypted on
+     * disk and only exists in the clear once it is running -- so it cannot be
+     * disassembled the usual way. This handler runs INSIDE the process after
+     * the decryption, so the instruction is there to be read.
+     *
+     * Order matters here and the first attempt got it wrong: reading the bytes
+     * at the faulting address was done first, and a run came back with the
+     * whole tail of the log missing, which is what it looks like when the thing
+     * doing the reporting is what dies. Registers are cheap and cannot fault,
+     * so they go first and reach the disk before anything risky is attempted. */
+    if (info->ContextRecord)
+    {
+        const CONTEXT *c = info->ContextRecord;
+        logf_("         rax=%016llx rbx=%016llx rcx=%016llx rdx=%016llx",
+              (unsigned long long)c->Rax, (unsigned long long)c->Rbx,
+              (unsigned long long)c->Rcx, (unsigned long long)c->Rdx);
+        logf_("         rsi=%016llx rdi=%016llx rbp=%016llx rsp=%016llx",
+              (unsigned long long)c->Rsi, (unsigned long long)c->Rdi,
+              (unsigned long long)c->Rbp, (unsigned long long)c->Rsp);
+        logf_("         r8 =%016llx r9 =%016llx r10=%016llx r11=%016llx",
+              (unsigned long long)c->R8, (unsigned long long)c->R9,
+              (unsigned long long)c->R10, (unsigned long long)c->R11);
+        logf_("         r12=%016llx r13=%016llx r14=%016llx r15=%016llx",
+              (unsigned long long)c->R12, (unsigned long long)c->R13,
+              (unsigned long long)c->R14, (unsigned long long)c->R15);
+
+        /* Only now, and only if the page really is committed and readable.
+         * VirtualQuery asks the kernel rather than guessing. */
+        {
+            MEMORY_BASIC_INFORMATION mbi;
+            if (VirtualQuery(at, &mbi, sizeof(mbi)) == sizeof(mbi)
+                && mbi.State == MEM_COMMIT
+                && (mbi.Protect & (PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE
+                                   | PAGE_EXECUTE_WRITECOPY | PAGE_READONLY
+                                   | PAGE_READWRITE)))
+            {
+                const unsigned char *code = (const unsigned char *)at;
+                char hex[3 * 32 + 1];
+                int i, n = 0;
+
+                /* The instruction itself decoded as
+                 *   A2 <8 bytes>  =  mov [0xFFFFFFF22D819090], al
+                 * an absolute address written into the instruction rather than
+                 * computed. So the question is no longer "what arithmetic went
+                 * wrong" -- there is none -- but "is this real code that means
+                 * to die, or is the processor walking through data".
+                 *
+                 * What settles it is the 32 bytes BEFORE. Real code decodes
+                 * backwards into a coherent stream that arrives here; data does
+                 * not. And the stack says who called. */
+                {
+                    MEMORY_BASIC_INFORMATION before;
+                    const unsigned char *back = code - 32;
+                    if (VirtualQuery(back, &before, sizeof(before)) == sizeof(before)
+                        && before.State == MEM_COMMIT)
+                    {
+                        for (i = 0, n = 0; i < 32; ++i)
+                            n += _snprintf(hex + n, sizeof(hex) - n, "%02x ", back[i]);
+                        logf_("         32 bytes before: %s", hex);
+                    }
+                }
+                for (i = 0, n = 0; i < 32; ++i)
+                    n += _snprintf(hex + n, sizeof(hex) - n, "%02x ", code[i]);
+                logf_("         at the fault:    %s", hex);
+
+                /* Anything on the stack that points into a loaded module is a
+                 * plausible return address, and names who got us here. */
+                {
+                    const ULONG_PTR *sp = (const ULONG_PTR *)c->Rsp;
+                    MEMORY_BASIC_INFORMATION m;
+                    int shown = 0;
+                    for (i = 0; i < 64 && shown < 8; ++i)
+                    {
+                        ULONG_PTR v;
+                        HMODULE owner = NULL;
+                        char name[MAX_PATH];
+                        if (VirtualQuery(&sp[i], &m, sizeof(m)) != sizeof(m)
+                            || m.State != MEM_COMMIT) break;
+                        v = sp[i];
+                        if (!v) continue;
+                        if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                                                | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                                (LPCSTR)v, &owner) || !owner) continue;
+                        GetModuleFileNameA(owner, name, sizeof(name) - 1);
+                        logf_("         stack[+%03d] %016llx  in %s +0x%llx",
+                              i * 8, (unsigned long long)v, base_name_of(name),
+                              (unsigned long long)(v - (ULONG_PTR)owner));
+                        ++shown;
+                    }
+                }
+            }
+            else logf_("         the faulting page is not readable (protect 0x%lx)",
+                       (unsigned long)mbi.Protect);
+        }
+    }
+    report();
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+/* Reservation refusals, and only the refusals. A success is unremarkable and
+ * there will be thousands; a refusal is the whole point, and the size asked for
+ * is the part that matters. */
+static void *(WINAPI *real_VirtualAlloc)(void *, SIZE_T, DWORD, DWORD);
+static void *(WINAPI *real_VirtualAllocEx)(HANDLE, void *, SIZE_T, DWORD, DWORD);
+static LONG alloc_ok, alloc_failed;
+static SIZE_T biggest_ok, biggest_failed;
+
+static void *WINAPI my_VirtualAlloc(void *addr, SIZE_T size, DWORD type, DWORD prot)
+{
+    void *p = real_VirtualAlloc(addr, size, type, prot);
+    if (!p)
+    {
+        DWORD e = GetLastError();
+        InterlockedIncrement(&alloc_failed);
+        if (size > biggest_failed) biggest_failed = size;
+        if (alloc_failed <= 24)
+            logf_("REFUSED  VirtualAlloc(at %p, %llu KB, type 0x%lx, protect 0x%lx) "
+                  "-> NULL, error %lu", addr, (unsigned long long)(size / 1024),
+                  (unsigned long)type, (unsigned long)prot, (unsigned long)e);
+    }
+    else { InterlockedIncrement(&alloc_ok); if (size > biggest_ok) biggest_ok = size; }
+    return p;
+}
+
+static void *WINAPI my_VirtualAllocEx(HANDLE proc, void *addr, SIZE_T size,
+                                      DWORD type, DWORD prot)
+{
+    void *p = real_VirtualAllocEx(proc, addr, size, type, prot);
+    if (!p)
+    {
+        DWORD e = GetLastError();
+        InterlockedIncrement(&alloc_failed);
+        if (size > biggest_failed) biggest_failed = size;
+        if (alloc_failed <= 24)
+            logf_("REFUSED  VirtualAllocEx(at %p, %llu KB, type 0x%lx) -> NULL, "
+                  "error %lu", addr, (unsigned long long)(size / 1024),
+                  (unsigned long)type, (unsigned long)e);
+    }
+    else { InterlockedIncrement(&alloc_ok); if (size > biggest_ok) biggest_ok = size; }
+    return p;
+}
+
+/* What the loading screen is waiting for.
+ *
+ * The window renders at 24 fps with the game's own loading indicator spinning,
+ * so nothing is deadlocked and nothing graphical is wrong -- it is the data that
+ * never arrives. This watches files instead: what gets opened, what gets read,
+ * what is refused, and which read is outstanding when the tally runs.
+ *
+ * Nothing is altered. Every call is passed straight through. */
+static HANDLE (WINAPI *real_CreateFileW)(const WCHAR *, DWORD, DWORD, void *, DWORD, DWORD, HANDLE);
+static BOOL   (WINAPI *real_ReadFile)(HANDLE, void *, DWORD, DWORD *, void *);
+static LONG opens_ok, opens_failed, reads_ok, reads_failed, reads_short;
+static ULONGLONG bytes_read;
+static WCHAR last_open[MAX_PATH];
+static HANDLE  reading_now;
+static DWORD   reading_since, reading_size;
+
+static const char *whole_of(const WCHAR *w)
+{
+    static char buf[2][300];
+    static LONG turn;
+    char *out = buf[InterlockedIncrement(&turn) & 1];
+    int i;
+    if (!w) return "(null)";
+    for (i = 0; w[i] && i < 295; ++i) out[i] = (char)w[i];
+    out[i] = 0;
+    return out;
+}
+
+static const char *tail_of(const WCHAR *w)
+{
+    static char buf[4][160];
+    static LONG turn;
+    char *out = buf[InterlockedIncrement(&turn) & 3];
+    int i = 0, start = 0, n;
+    if (!w) return "(null)";
+    for (n = 0; w[n]; ++n) if (w[n] == '\\' || w[n] == '/') start = n + 1;
+    for (i = 0; w[start + i] && i < 155; ++i) out[i] = (char)w[start + i];
+    out[i] = 0;
+    return out;
+}
+
+static HANDLE WINAPI my_CreateFileW(const WCHAR *name, DWORD access, DWORD share,
+                                    void *sa, DWORD disp, DWORD flags, HANDLE tmpl)
+{
+    HANDLE h = real_CreateFileW(name, access, share, sa, disp, flags, tmpl);
+    if (h == INVALID_HANDLE_VALUE)
+    {
+        DWORD e = GetLastError();
+        InterlockedIncrement(&opens_failed);
+        if (opens_failed <= 20)
+            logf_("REFUSED  CreateFileW(%s) -> error %lu", tail_of(name), (unsigned long)e);
+    }
+    else
+    {
+        InterlockedIncrement(&opens_ok);
+        if (name) lstrcpynW(last_open, name, MAX_PATH);
+        if (opens_ok <= 400) logf_("open  #%-3ld %s", opens_ok, tail_of(name));
+    }
+    return h;
+}
+
+static BOOL WINAPI my_ReadFile(HANDLE h, void *buf, DWORD want, DWORD *got, void *ov)
+{
+    BOOL r;
+    reading_now = h; reading_size = want; reading_since = GetTickCount();
+    r = real_ReadFile(h, buf, want, got, ov);
+    reading_now = NULL;
+    if (!r)
+    {
+        DWORD e = GetLastError();
+        if (e != 997 /* pending */)
+        {
+            InterlockedIncrement(&reads_failed);
+            if (reads_failed <= 20)
+                logf_("REFUSED  ReadFile(%lu bytes) -> error %lu",
+                      (unsigned long)want, (unsigned long)e);
+        }
+    }
+    else
+    {
+        InterlockedIncrement(&reads_ok);
+        if (got) bytes_read += *got;
+        if (got && *got == 0 && want > 0)
+        {
+            InterlockedIncrement(&reads_short);
+            if (reads_short <= 12)
+                logf_("ReadFile asked for %lu bytes and got 0 -- end of file where "
+                      "the caller did not expect one", (unsigned long)want);
+        }
+    }
+    return r;
+}
+
+static void report_io(void)
+{
+    logf_("files: %ld opened, %ld REFUSED. reads: %ld ok (%llu MB), %ld refused, "
+          "%ld returned zero", opens_ok, opens_failed, reads_ok,
+          (unsigned long long)(bytes_read / (1024 * 1024)), reads_failed, reads_short);
+    logf_("  last file opened: %s", whole_of(last_open));
+    if (reading_now)
+        logf_("  A READ IS OUTSTANDING: %lu bytes, %lu ms so far",
+              (unsigned long)reading_size, (unsigned long)(GetTickCount() - reading_since));
+    else
+        logf_("  no read is outstanding -- it is not waiting on the disk");
+}
+
+/* Waits, this time through the doors the code actually uses.
+ *
+ * An earlier version of this hooked only WaitForSingleObjectEx and
+ * WaitForMultipleObjectsEx and recorded exactly one wait while 46 threads sat
+ * waiting. That was read as "the binary bypasses kernel32", which was wrong:
+ * most code calls the plain forms, and those were never hooked. Both are here
+ * now, and so is Sleep, because a poll loop shows up there and nowhere else. */
+/* Who is polling.
+ *
+ * Seventeen thousand untimed waits and four thousand Sleeps in eighty seconds,
+ * while the thread pool sits idle and no data file is ever opened: something is
+ * spinning on a condition that never comes true. The counts do not say who, but
+ * the return address does -- resolve it to a module and an offset and the caller
+ * names itself. steam_api64 polling is a different problem from the game
+ * polling, and both are different from the protector polling. */
+static void name_caller(const char *what, void *ret)
+{
+    static struct { void *ret; } seen[48];
+    static LONG seen_n;
+    HMODULE owner = NULL;
+    char path[MAX_PATH];
+    LONG i, n = seen_n;
+    for (i = 0; i < n && i < 48; ++i) if (seen[i].ret == ret) return;
+    if (n < 48) { seen[n].ret = ret; InterlockedIncrement(&seen_n); } else return;
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                           | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)ret, &owner) && owner)
+    {
+        GetModuleFileNameA(owner, path, sizeof(path) - 1);
+        logf_("%s called from %s +0x%llx", what, base_name_of(path),
+              (unsigned long long)((char *)ret - (char *)owner));
+    }
+    else logf_("%s called from %p, which is in no loaded module", what, ret);
+}
+
+static DWORD (WINAPI *real_WaitForSingleObject)(HANDLE, DWORD);
+static DWORD (WINAPI *real_WaitForMultipleObjects)(DWORD, const HANDLE *, BOOL, DWORD);
+static void  (WINAPI *real_Sleep)(DWORD);
+static LONG w_single, w_multi, w_sleep, w_forever;
+#define STUCK_SLOTS 64
+static struct { DWORD th; HANDLE h; DWORD t0; LONG live; } stuck[STUCK_SLOTS];
+
+static int stuck_in(HANDLE h, DWORD ms)
+{
+    int i;
+    if (ms != INFINITE) return -1;
+    InterlockedIncrement(&w_forever);
+    for (i = 0; i < STUCK_SLOTS; ++i)
+        if (InterlockedCompareExchange(&stuck[i].live, 1, 0) == 0)
+        { stuck[i].th = GetCurrentThreadId(); stuck[i].h = h;
+          stuck[i].t0 = GetTickCount(); return i; }
+    return -1;
+}
+static void stuck_out(int i) { if (i >= 0) InterlockedExchange(&stuck[i].live, 0); }
+
+static DWORD WINAPI my_WaitForSingleObject(HANDLE h, DWORD ms)
+{
+    int i; DWORD r;
+    InterlockedIncrement(&w_single);
+    name_caller("wait", __builtin_return_address(0));
+    i = stuck_in(h, ms);
+    r = real_WaitForSingleObject(h, ms);
+    stuck_out(i);
+    return r;
+}
+static DWORD WINAPI my_WaitForMultipleObjects(DWORD n, const HANDLE *h, BOOL all, DWORD ms)
+{
+    int i; DWORD r;
+    InterlockedIncrement(&w_multi);
+    i = stuck_in(n ? h[0] : NULL, ms);
+    r = real_WaitForMultipleObjects(n, h, all, ms);
+    stuck_out(i);
+    return r;
+}
+static void WINAPI my_Sleep(DWORD ms)
+{
+    InterlockedIncrement(&w_sleep);
+    name_caller("Sleep", __builtin_return_address(0));
+    real_Sleep(ms);
+}
+
+static void report_stuck(void)
+{
+    DWORD now = GetTickCount();
+    int i, n = 0;
+    logf_("waits: %ld single, %ld multiple, %ld Sleep, %ld with no timeout",
+          w_single, w_multi, w_sleep, w_forever);
+    for (i = 0; i < STUCK_SLOTS; ++i)
+        if (stuck[i].live && (now - stuck[i].t0) > 3000)
+        {
+            logf_("  STUCK  thread %lu on handle %p for %lu ms",
+                  (unsigned long)stuck[i].th, stuck[i].h,
+                  (unsigned long)(now - stuck[i].t0));
+            if (++n >= 10) break;
+        }
+    if (!n) logf_("  no untimed wait has been outstanding for more than 3 s");
+}
+
+static DWORD WINAPI worker(void *unused)
+{
+    /* CONTROL RUN. Every hook is off. The only thing left in this build is the
+     * vectored exception handler, which installs no patches anywhere -- it just
+     * asks Windows to be told when something faults.
+     *
+     * The point is to find out whether the crash we have been measuring for
+     * nine runs is the game's own, or is the anti-tamper protection reacting to
+     * the fact that we put a DLL in the process and patched vtables. If the
+     * fault lands at the same address with nothing hooked, our watching is
+     * innocent and the finding stands. If it does not, then several of those
+     * runs measured our own interference and I have to say so. */
+    size_t i;
+    void *was;
+    (void)unused;
+
+    /* The handler goes in FIRST, and the early return goes AFTER it. The first
+     * attempt at this control put the return above this line, so the run had no
+     * fault handler at all -- and an empty log was then very nearly read as
+     * "the game did not crash". A control that observes nothing does not
+     * control anything. */
+    AddVectoredExceptionHandler(0, on_exception);   /* last in the chain */
+
+    /* The control settled it: with nothing hooked at all, the fault lands at
+     * the same address with the same sixteen register values. The process is
+     * not reacting to being watched.
+     *
+     * rax held 0x80000002 -- E_OUTOFMEMORY in its old OLE form -- and this
+     * executable declares a SizeOfImage of 888 MB with a 474 MB section that is
+     * almost entirely virtual. It wants a great deal of address space. So the
+     * question worth asking now is whether a reservation is being refused, and
+     * that is answered the way everything else here is answered: by logging the
+     * refusals rather than the calls.
+     *
+     * Only memory reservation is watched. Nothing is altered. */
+    was = (void *)GetProcAddress(GetModuleHandleA("kernel32.dll"), "VirtualAlloc");
+    if (was) real_VirtualAlloc = was;
+    hook_import("KERNEL32.dll", "VirtualAlloc", 0, (void *)my_VirtualAlloc);
+    was = (void *)GetProcAddress(GetModuleHandleA("kernel32.dll"), "VirtualAllocEx");
+    if (was) real_VirtualAllocEx = was;
+    hook_import("KERNEL32.dll", "VirtualAllocEx", 0, (void *)my_VirtualAllocEx);
+
+    was = (void *)GetProcAddress(GetModuleHandleA("kernel32.dll"), "CreateFileW");
+    if (was) real_CreateFileW = was;
+    hook_import("KERNEL32.dll", "CreateFileW", 0, (void *)my_CreateFileW);
+    was = (void *)GetProcAddress(GetModuleHandleA("kernel32.dll"), "ReadFile");
+    if (was) real_ReadFile = was;
+    hook_import("KERNEL32.dll", "ReadFile", 0, (void *)my_ReadFile);
+
+    was = (void *)GetProcAddress(GetModuleHandleA("kernel32.dll"), "WaitForSingleObject");
+    if (was) real_WaitForSingleObject = was;
+    hook_import("KERNEL32.dll", "WaitForSingleObject", 0, (void *)my_WaitForSingleObject);
+    was = (void *)GetProcAddress(GetModuleHandleA("kernel32.dll"), "WaitForMultipleObjects");
+    if (was) real_WaitForMultipleObjects = was;
+    hook_import("KERNEL32.dll", "WaitForMultipleObjects", 0, (void *)my_WaitForMultipleObjects);
+    was = (void *)GetProcAddress(GetModuleHandleA("kernel32.dll"), "Sleep");
+    if (was) real_Sleep = was;
+    hook_import("KERNEL32.dll", "Sleep", 0, (void *)my_Sleep);
+
+    logf_("watching files and waits -- the plain forms this time, not only the "
+          "Ex ones. Nothing is altered.");
+    return 0;
+
+    for (i = 0; i < sizeof(device_modules) / sizeof(device_modules[0]); ++i)
+    {
+        was = hook_import(device_modules[i], "D3D12CreateDevice", 101,
+                          (void *)my_D3D12CreateDevice);
+        if (was && !real_D3D12CreateDevice)
+        {
+            real_D3D12CreateDevice = was;
+            logf_("hooked %s!D3D12CreateDevice", device_modules[i]);
+        }
+        was = hook_import(device_modules[i], "D3D11CreateDevice", 0,
+                          (void *)my_D3D11CreateDevice);
+        if (was && !real_D3D11CreateDevice)
+        {
+            real_D3D11CreateDevice = was;
+            logf_("hooked %s!D3D11CreateDevice", device_modules[i]);
+        }
+        was = hook_import(device_modules[i], "D3D11CreateDeviceAndSwapChain", 0,
+                          (void *)my_D3D11CreateDeviceAndSwapChain);
+        if (was && !real_D3D11CreateDeviceAndSwapChain)
+        {
+            real_D3D11CreateDeviceAndSwapChain = was;
+            logf_("hooked %s!D3D11CreateDeviceAndSwapChain", device_modules[i]);
+        }
+    }
+
+    {
+        static const struct { const char *name; void *repl; void **slot; } dxgi[] = {
+            { "CreateDXGIFactory",  (void *)my_CreateDXGIFactory,  (void **)&real_CreateDXGIFactory },
+            { "CreateDXGIFactory1", (void *)my_CreateDXGIFactory1, (void **)&real_CreateDXGIFactory1 },
+            { "CreateDXGIFactory2", (void *)my_CreateDXGIFactory2, (void **)&real_CreateDXGIFactory2 },
+        };
+        size_t k;
+        for (k = 0; k < 3; ++k)
+        {
+            void *w = hook_import("dxgi.dll", dxgi[k].name, 0, dxgi[k].repl);
+            if (w) { *dxgi[k].slot = w; logf_("hooked dxgi.dll!%s", dxgi[k].name); }
+        }
+    }
+
+    {
+        void *w = hook_import("dxcompiler.dll", "DxcCreateInstance", 0,
+                              (void *)my_DxcCreateInstance);
+        if (w) { real_DxcCreateInstance = w; logf_("hooked dxcompiler.dll!DxcCreateInstance"); }
+    }
+    {
+        static const struct { const char *name; void *repl; void **slot; } rs[] = {
+            { "D3D12CreateRootSignatureDeserializer", (void *)my_rs_deserialize,
+              (void **)&real_rs_deserialize },
+            { "D3D12CreateVersionedRootSignatureDeserializer", (void *)my_rs_deserialize_v,
+              (void **)&real_rs_deserialize_v },
+            { "D3D12SerializeRootSignature", (void *)my_rs_serialize,
+              (void **)&real_rs_serialize },
+            { "D3D12SerializeVersionedRootSignature", (void *)my_rs_serialize_v,
+              (void **)&real_rs_serialize_v },
+        };
+        size_t k;
+        for (k = 0; k < 4; ++k)
+        {
+            void *w = hook_import("d3d12.dll", rs[k].name, 0, rs[k].repl);
+            if (w) { *rs[k].slot = w; logf_("hooked d3d12.dll!%s", rs[k].name); }
+        }
+    }
+
+    {
+        void *w = hook_import("USER32.dll", "EnumDisplaySettingsW", 0,
+                              (void *)my_EnumDisplaySettingsW);
+        if (w) { real_EnumDisplaySettingsW = w; logf_("hooked USER32!EnumDisplaySettingsW"); }
+        w = hook_import("USER32.dll", "EnumDisplayDevicesW", 0,
+                        (void *)my_EnumDisplayDevicesW);
+        if (w) { real_EnumDisplayDevicesW = w; logf_("hooked USER32!EnumDisplayDevicesW"); }
+        w = hook_import("USER32.dll", "EnumDisplayMonitors", 0,
+                        (void *)my_EnumDisplayMonitors);
+        if (w) { real_EnumDisplayMonitors = w; logf_("hooked USER32!EnumDisplayMonitors"); }
+        w = hook_import("USER32.dll", "GetMonitorInfoW", 0, (void *)my_GetMonitorInfoW);
+        if (w) { real_GetMonitorInfoW = w; logf_("hooked USER32!GetMonitorInfoW"); }
+    }
+
+    real_GetProcAddress = (void *)GetProcAddress(GetModuleHandleA("kernel32.dll"),
+                                                 "GetProcAddress");
+    real_LoadLibraryExW = (void *)GetProcAddress(GetModuleHandleA("kernel32.dll"),
+                                                 "LoadLibraryExW");
+    hook_import("KERNEL32.dll", "GetProcAddress", 0, (void *)my_GetProcAddress);
+    hook_import("KERNEL32.dll", "LoadLibraryExW", 0, (void *)my_LoadLibraryExW);
+
+    logf_("D3D11 %s, D3D12 %s -- anything not imported statically is caught "
+          "through GetProcAddress",
+          real_D3D11CreateDevice ? "hooked at startup" : "not imported",
+          real_D3D12CreateDevice ? "hooked at startup" : "not imported");
+    return 0;
+}
+
+/*
+ * The ratio, on the way out.
+ *
+ * This is the line to read first. A call with failures and no successes is a
+ * capability that is simply absent; one with both is a game asking for
+ * something specific and being refused only that. The difference decides what
+ * to look at next, and neither number means anything alone.
+ */
+/*
+ * Report on a timer, not only on the way out.
+ *
+ * A game closed from Steam, or killed, or crashed, never runs DLL_PROCESS_DETACH,
+ * and the totals are the half of this file that says what did NOT happen --
+ * which is exactly what is lost. One line every half minute costs nothing and
+ * survives any ending.
+ */
+static DWORD WINAPI ticker(void *unused)
+{
+    (void)unused;
+    for (;;)
+    {
+        Sleep(30000);
+        report();
+    }
+}
+
+static void report(void)
+{
+    report_io();
+    report_stuck();
+    int i;
+    BOOL any = FALSE;
+    logf_("---- totals ----");
+    for (i = 0; i < C_COUNT; ++i)
+    {
+        if (!counts[i].ok && !counts[i].bad) continue;
+        any = TRUE;
+        logf_("  %-34s %6ld ok  %6ld refused%s",
+              counts[i].what, counts[i].ok, counts[i].bad,
+              counts[i].bad && !counts[i].ok ? "   << never once succeeded" : "");
+    }
+    if (!any)
+        logf_("  nothing was created through a watched call. Either the device "
+              "never arrived, or it arrives somewhere this does not look.");
+    if (monitors_visited || monitorinfo_ok || monitorinfo_bad)
+        logf_("  monitors: %ld visited, %ld described, %ld refused, %ld flagged primary%s",
+              monitors_visited, monitorinfo_ok, monitorinfo_bad, monitors_primary,
+              monitors_primary ? "" : "   << none primary, which is an index of -1");
+    if (modes_asked)
+        logf_("  display modes: %ld asked for, %ld returned%s", modes_asked, modes_given,
+              modes_given ? "" : "   << not one, so any search through the list fails");
+    if (rs_deser || rs_ser)
+        logf_("  root signatures: %ld deserialised, %ld serialised", rs_deser, rs_ser);
+    if (dxc_seen)
+        logf_("  DXC shader compiles: %ld attempted, %ld ok, %ld refused",
+              dxc_seen, dxc_ok, dxc_bad);
+    logf_("  resource barriers: %ld transition, %ld uav, %ld ALIASING%s",
+          barriers_transition, barriers_uav, barriers_alias,
+          barriers_alias ? "   << the game aliases memory"
+          : (barriers_transition || barriers_uav)
+              ? "   << none, and barriers ARE being counted"
+              : "   << none of any kind, so this was not watching");
+}
+
+BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
+{
+    (void)reserved;
+    if (reason == DLL_PROCESS_ATTACH)
+    {
+        InitializeCriticalSection(&log_lock);
+        log_ready = TRUE;
+        DisableThreadLibraryCalls(inst);
+        CloseHandle(CreateThread(NULL, 0, worker, NULL, 0, NULL));
+        CloseHandle(CreateThread(NULL, 0, ticker, NULL, 0, NULL));
+    }
+    else if (reason == DLL_PROCESS_DETACH)
+        report();
+    return TRUE;
+}
