@@ -2190,6 +2190,26 @@ enum Codecs {
         return "\(name) (\(version))"
     }
 
+    /// Is this engine a Preview build?
+    ///
+    /// Every fix in this project is measured on Preview and only on Preview. A
+    /// few titles happen to work on stable and the wiki says which, but that is
+    /// an observation, not a promise, and nothing here is verified there. A
+    /// person pointing a bottle at stable deserves to be told that before they
+    /// wonder why a fix did nothing, so this exists to put it on screen instead
+    /// of leaving it in a README nobody opens twice.
+    ///
+    /// The name is the one the bundle declares, so a Preview living under some
+    /// other file name still answers correctly -- one of the installs on this
+    /// machine is a Preview build inside Crossover_patched.app. The distinction
+    /// stops being useful on the day Preview becomes stable, and on that day
+    /// this and the caution it drives should both go.
+    static func isPreview(_ version: String) -> Bool {
+        _ = installedEngines()
+        guard let name = cachedEngineNames?[version] else { return false }
+        return name.localizedCaseInsensitiveContains("preview")
+    }
+
     private static var cachedStaged: Bool?
 
     /// True when every installed engine has a staging of its own.
@@ -3459,6 +3479,25 @@ struct ContentView: View {
                                     .foregroundStyle(.orange)
                                 Text("CrossOver has been updated since this codec was "
                                    + "staged. Apply to build it again.")
+                                    .font(.caption).foregroundStyle(.orange)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        // Scope, said where the choice is made.
+                        //
+                        // Every fix here is measured on Preview. Some titles do work on
+                        // stable and the wiki says which, but that is an observation rather
+                        // than a promise, and a bottle on stable is a bottle nothing was
+                        // verified against. Saying so beside the picker costs one line and
+                        // saves somebody concluding a fix is broken when it was simply never
+                        // tried where they are running it.
+                        if let engine = picked.target, !Codecs.isPreview(engine) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "exclamationmark.triangle")
+                                    .foregroundStyle(.orange)
+                                Text("This bottle runs a stable CrossOver. Every fix here is "
+                                   + "measured on CrossOver Preview; a few titles also work on "
+                                   + "stable and the wiki says which. Nothing is verified here.")
                                     .font(.caption).foregroundStyle(.orange)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
