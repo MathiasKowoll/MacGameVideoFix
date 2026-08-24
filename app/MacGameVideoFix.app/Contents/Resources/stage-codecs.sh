@@ -170,6 +170,14 @@ stage_one() {
     echo
     echo "engine    : $ENGINE  ($VER, $ARCH)"
     echo "staging   : already built from this CrossOver, left untouched"
+    # Replace this engine's line rather than append to it. The rebuild path
+    # further down already did this; this one did not, so re-staging a single
+    # engine that was already built appended a second answer for the same
+    # version -- and the map is what tells a bottle which directory is its own.
+    if [ -f "$ROOT/.map" ]; then
+      grep -v "^$VER|" "$ROOT/.map" > "$ROOT/.map.new" 2>/dev/null || true
+      mv "$ROOT/.map.new" "$ROOT/.map"
+    fi
     printf '%s|%s|%s\n' "$VER" "$ENGINE" "$OUT/gstreamer-1.0" >> "$ROOT/.map"
     return 0
   fi

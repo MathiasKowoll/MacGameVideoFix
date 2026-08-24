@@ -128,12 +128,29 @@ private final class ProcessBox: @unchecked Sendable {
 /// Strikers, WMV3 for the two Nioh games -- and that is said on their own rows
 /// rather than as a blanket requirement.
 enum Requirements {
+    /// What this was measured on, said without softening.
+    ///
+    /// This used to read "CrossOver 26.2 or later on Apple Silicon. Nothing
+    /// else, for most games", and the comment beside it already conceded the
+    /// text was not accurate. It is worse than inaccurate: a version floor
+    /// invites someone on a stable build to read "you are fine", when every fix
+    /// here is measured on Preview and only three of the eighteen entries are
+    /// known to work anywhere else.
+    ///
+    /// A floor is the wrong shape for this. What the project supports is one
+    /// build, and the honest sentence says so first.
     static var note: String {
-        // Most, not all: five of these were validated on Preview, which decodes
-        // their formats itself. Three stage their own decoder and so depend on
-        // no engine in particular -- Persona 5 Strikers is the one of those
-        // measured on a stable build too.
-        "CrossOver 26.2 or later on Apple Silicon. Nothing else, for most games."
+        var text = "Measured on CrossOver Preview. Six of the eighteen entries also "
+                 + "work on stable 26.3; the rest are not verified there."
+        // Said here as well as in the codec banner, because it is a requirement
+        // rather than a repair: six titles borrow a decoder from GStreamer, and
+        // without it installed nothing downstream of this line can work for
+        // them. The banner offers the download; this says why it matters before
+        // anyone gets there.
+        text += Codecs.gstreamerInstalled
+            ? " GStreamer is installed, which six of them need."
+            : " GStreamer is NOT installed, and six of them need it."
+        return text
     }
 }
 
@@ -326,6 +343,24 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .personaStrikers: return "Also needs the VC-1 codec staged."
         case .nioh, .nioh2:    return "Also needs the WMV3 codec staged."
         default:               return nil
+        }
+    }
+
+    /// Has this title been run on a stable CrossOver, or only on Preview?
+    ///
+    /// The same three the published table names, and no more. Every other entry
+    /// was measured on Preview and nowhere else -- which is not a claim that it
+    /// fails on stable, only that nobody has looked. Saying "not verified" is
+    /// the whole point: the alternative is a version floor, which reads as
+    /// permission.
+    ///
+    /// Keep this in step with the CrossOver column in wiki/games.py. They are
+    /// two statements of one fact, and the day they disagree the app is the one
+    /// people believe.
+    var verifiedOnStable: Bool {
+        switch self {
+        case .mortalShell2, .beastOfReincarnation, .personaStrikers: return true
+        default:                                                     return false
         }
     }
 
@@ -983,6 +1018,15 @@ final class Runner: ObservableObject {
     /// it is still scanned as it is, exactly as before; this is only what lets
     /// the screen say so, and what makes an empty result explain itself.
     @Published var libraryIsOdd = false
+
+    /// The bottle whose Steam declared the library being scanned, when the
+    /// library came from the survey rather than from a folder the user picked.
+    ///
+    /// It is the only way to know which CrossOver these games would actually run
+    /// under, and therefore the only honest basis for telling someone a title
+    /// has not been verified where they are. A folder chosen by hand leaves this
+    /// nil, and the app then says nothing rather than guessing.
+    @Published var libraryBottle: String?
     /// nil means no scan has run against the folder currently chosen.
     ///
     /// The empty string used to carry that meaning as well as "a scan is
@@ -1274,6 +1318,29 @@ final class Runner: ObservableObject {
     /// only then is the bottle re-pointed. A staging that fails or is stopped
     /// leaves the bottle exactly as it was, because `configure` is never
     /// reached.
+    /// Takes the codec pointer back out of one bottle, at the user's request.
+    ///
+    /// Applying is a decision about one bottle, so unapplying has to be one too.
+    /// Without this a line written once could only ever be re-pointed, and the
+    /// app was the only thing able to put it there -- which made it the only
+    /// thing unable to take it away.
+    ///
+    /// Codecs.unconfigure removes the value only when it points into our own
+    /// staging root: a path the user set by hand is theirs, and quietly deleting
+    /// somebody's configuration is a worse bug than the mess it tidies.
+    func unwire(_ bottle: Codecs.BottleState) {
+        guard !busy else { return }
+        if Codecs.unconfigure(bottle: bottle.url) {
+            note("\(bottle.name) no longer points at a staged codec.")
+            status = "Removed from \(bottle.name)."
+        } else {
+            note("\(bottle.name) holds no codec path of ours — nothing was changed.")
+            status = "Nothing to remove."
+        }
+        Codecs.setChoice(nil, forBottle: bottle.name)
+        refreshCodecs()
+    }
+
     func selectEngine(_ engine: String?, forBottle bottle: Codecs.BottleState) {
         guard !busy else { return }
         guard let engine else {
@@ -1503,10 +1570,10 @@ final class Runner: ObservableObject {
             if touched.isEmpty {
                 // Not a failure. The decoder is built and waiting; there is
                 // simply no bottle yet that has any use for it.
-                note("Codec staged. No bottle needs it yet — Persona 5 Strikers "
-                   + "has not run in any of them.")
-                note("Run the game once and press Re-apply, or pick a bottle "
-                   + "yourself under Bottles.")
+                note("Codec staged, and no bottle needed changing — every one "
+                   + "already points at the codec for the CrossOver it runs.")
+                note("Nothing else to do. Pick a bottle under Bottles if you want "
+                   + "to point one somewhere else by hand.")
                 status = "Codec ready, not wired anywhere."
             } else {
                 note("Codec staged, and \(touched.count) bottle(s) pointed at it.")
@@ -1563,6 +1630,7 @@ final class Runner: ObservableObject {
         }
         cancelScan()
         let (root, looksLikeLibrary) = SteamLibrary.normalise(url)
+        libraryBottle = nil
         libraryRoot = root
         libraryIsOdd = !looksLikeLibrary
         plan = []
@@ -1579,6 +1647,17 @@ final class Runner: ObservableObject {
         // the survey and the click must not become step 2's problem to explain.
         guard lib.ready else { return }
         chooseLibrary(lib.common)
+        // After, because the URL form clears it: a library from the survey knows
+        // its bottle and a folder dropped by hand does not.
+        libraryBottle = lib.bottle
+    }
+
+    /// The CrossOver the games about to be scanned would run under, when that is
+    /// knowable. Nil for a hand-picked folder, and nil when the bottle records
+    /// no engine.
+    var engineOfLibrary: String? {
+        guard let name = libraryBottle else { return nil }
+        return codecs.first { $0.name == name }?.runs
     }
 
     /// Back to step 1 with all three ways in. The plan goes with it: a plan
@@ -2169,6 +2248,40 @@ enum Codecs {
                           "Contents/Info.plist")),
                       let version = plist["CFBundleVersion"] as? String
                 else { continue }
+
+                // Two installs can declare the SAME CFBundleVersion, and this map
+                // is keyed by it. On the machine this was found on,
+                // CrossOver.app and CrossOver-winevideo-0.5.app both say
+                // 26.3.0.39832 -- one is a build kept for comparing winevideo
+                // against, and it is a real CrossOver, so it cannot simply be
+                // filtered out.
+                //
+                // Whichever won was previously decided by directory order, which
+                // is not a decision. When the loser was the one with a staging,
+                // `staged(forEngine:)` answered no about an engine that was
+                // staged: the banner never turned green after a successful run,
+                // and a single-engine re-stage reported "Staging did not finish"
+                // over a directory it had just confirmed was complete.
+                //
+                // So ties are broken by what is on disk. An install that already
+                // has a staging wins, which also makes this agree with the shell
+                // script -- it dedupes by version too, and the app now resolves
+                // to whichever install the script actually built for. Read
+                // directly rather than through staged(forEngine:), which would
+                // call back into here.
+                if let sitting = found[version] {
+                    func hasStaging(_ u: URL) -> Bool {
+                        let name = u.deletingPathExtension().lastPathComponent
+                        let slug = String(name.map { c -> Character in
+                            c.isLetter || c.isNumber || c == "." || c == "_" || c == "-" ? c : "-"
+                        })
+                        let marker = ((stagedRoot as NSString).appendingPathComponent(slug)
+                                      as NSString).appendingPathComponent("x86_64/.complete")
+                        return fm.fileExists(atPath: marker)
+                    }
+                    if hasStaging(sitting) || !hasStaging(app) { continue }
+                }
+
                 found[version] = app
                 names[version] = (plist["CFBundleName"] as? String)
                     ?? app.deletingPathExtension().lastPathComponent
@@ -2291,15 +2404,33 @@ enum Codecs {
 
         /// Whether the codec belongs in this bottle at all.
         ///
-        /// One of the six titles needs it and no other. Writing GST_PLUGIN_PATH
-        /// into every bottle on the machine was harmless in the sense that
-        /// nothing loaded it, and harmful in every other: it is the user's
-        /// configuration, it changes plugin resolution for whatever else lives
-        /// there, and every one of those bottles then drifts the moment it
-        /// changes CrossOver -- producing a screenful of warnings about bottles
-        /// the codec was never for. Measured on the machine this was written
-        /// on: eight bottles carried it, six had drifted, none needed it.
-        var wanted: Bool { hostsProject || choice != nil }
+        /// It used to depend on whether a game that needs the decoder had ever
+        /// run here, detected from its save folder. That was wrong in a way that
+        /// only showed up once the list of titles grew: RE Engine games keep
+        /// their saves in Steam Cloud and leave nothing in the bottle, so a
+        /// bottle where Devil May Cry 5 had been played and crashed was reported
+        /// as needing nothing, and the app refused to write the one line that
+        /// would have fixed it. The gate did not fail loudly -- it printed
+        /// "no bottle needs it yet" and named a game the user does not own.
+        ///
+        /// Staging a codec is configuration of an environment, not a fact about
+        /// what has been launched. It is idempotent, it costs a line in a conf
+        /// file, and making it conditional on a save folder made it wrong the
+        /// day a game saved somewhere else.
+        ///
+        /// So the two halves are separated. Staging builds a codec for every
+        /// installed engine and keeps them apart -- global, idempotent, and no
+        /// business of any game. Wiring writes one line into one bottle, and the
+        /// person choosing that bottle is the user, in the Bottles sheet.
+        ///
+        /// Which leaves this asking a narrow question: is this bottle one the
+        /// app has any business writing to unasked? Yes if it already carries
+        /// the variable, because then keeping it pointed at the right engine is
+        /// repair rather than configuration. Yes if the user picked it. Never
+        /// because a save folder was found, and never for every bottle on the
+        /// machine -- the measurement that killed that idea still stands: eight
+        /// bottles carried it here once, six had drifted, none needed it.
+        var wanted: Bool { pointsAt != nil || choice != nil }
     }
 
     /// The verdicts. Separate cases rather than a bool, because the repair is
@@ -3194,14 +3325,22 @@ struct ContentView: View {
                 stepScan
                 stepPatch
             } else {
+                // One landing screen: find everything, and stage the codec.
+                //
+                // The game picker and the drop zone that used to sit here are
+                // gone. They existed to point the app at one title, and the bulk
+                // scan already does everything they did and more -- pointing it at
+                // a single game folder scans that game's library, because
+                // SteamLibrary.normalise walks up to `common`, and a folder that
+                // does not look like a library can still be scanned on request.
+                // Two ways in, one of them strictly weaker, is a choice the user
+                // should not have had to make.
+                //
+                // The codec goes here rather than in the scan results. It is a
+                // property of a CrossOver and a bottle, not of anything scanned,
+                // and this is the screen that is about setting the machine up.
                 allAtOnce
-                supported
-                dropZone
-                if let t = runner.title {
-                    if runner.legacyReencode != .notApplied { legacyBanner }
-                    if t.modes.count > 1 { modePicker(t) }
-                    actions
-                }
+                codecBanner
             }
             if runner.busy || runner.progress > 0 { progressBar }
             logView
@@ -3518,6 +3657,18 @@ struct ContentView: View {
                 .keyboardShortcut(.defaultAction)
                 .disabled(runner.busy || picked == nil || pickedEngine == nil)
 
+                // Offered only for a bottle that actually carries a pointer, so
+                // the control is absent rather than disabled when there is
+                // nothing to undo -- a greyed button invites the question of what
+                // would make it work.
+                if let picked, picked.pointsAt != nil {
+                    Button("Remove") { runner.unwire(picked) }
+                        .disabled(runner.busy)
+                        .help("Take GST_PLUGIN_PATH back out of this bottle. Only a "
+                              + "path this app wrote is removed; one you set yourself "
+                              + "is left alone.")
+                }
+
                 if runner.busy {
                     Button("Stop") { runner.stopCodecs() }
                         .help("Stops now. A codec that was still being staged is left "
@@ -3668,111 +3819,9 @@ struct ContentView: View {
     }
 
 
-    /// Pick the game first. The folder to look for depends on it, and saying
-    /// so up front is the difference between guidance and a guessing game.
-    private var supported: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 10) {
-                Text("Game")
-                    .font(.callout)
-                Picker("", selection: $runner.chosen) {
-                    ForEach(SupportedGame.allCases) { g in Text(g.name).tag(g) }
-                }
-                .labelsHidden()
-                .frame(maxWidth: 340)
-                .disabled(runner.busy)
-                Spacer()
-            }
-            Text(runner.chosen.symptom)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
 
-    private var dropZone: some View {
-        RoundedRectangle(cornerRadius: 10)
-            .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
-            .foregroundStyle(dropping ? Color.accentColor : Color.secondary.opacity(0.5))
-            .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(dropping ? Color.accentColor.opacity(0.08) : Color.clear)
-            )
-            .frame(height: 88)
-            .overlay(
-                VStack(spacing: 6) {
-                    if let path = runner.title?.path {
-                        Text(path)
-                            .font(.system(size: 13, design: .monospaced))
-                            .lineLimit(2)
-                            .truncationMode(.head)
-                            .multilineTextAlignment(.center)
-                    } else {
-                        Text("Drop \(runner.chosen.folderHint) here")
-                            .font(.system(size: 13))
-                            .multilineTextAlignment(.center)
-                        Text(runner.chosen.example)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    }
-                    Button("Choose…") { chooseFolder() }
-                        .buttonStyle(.link)
-                        .disabled(runner.busy)
-                }
-                .padding(.horizontal, 16)
-            )
-            .onDrop(of: [.fileURL], isTargeted: $dropping) { providers in
-                guard !runner.busy, let p = providers.first else { return false }
-                _ = p.loadObject(ofClass: URL.self) { url, _ in
-                    guard let url else { return }
-                    Task { @MainActor in runner.select(url) }
-                }
-                return true
-            }
-    }
 
-    private func modePicker(_ t: Title) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Picker("", selection: $runner.mode) {
-                ForEach(t.modes) { m in Text(m.title).tag(m) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .disabled(runner.busy)
 
-            Text(runner.runtimeUnavailable && runner.mode == .runtime
-                 ? "This game ships no libogg, so the runtime patch has nothing to load from. Use the other mode."
-                 : runner.mode.blurb)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    /// Only ever seen by someone who ran the re-encode mode before it was
-    /// removed. Their cutscenes are H.264 and their pak index is edited, and
-    /// the runtime patch cannot go in on top of that, so this is the way out.
-    private var legacyBanner: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "clock.arrow.circlepath")
-                .foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Re-encoded cutscenes from an older version")
-                    .font(.callout.weight(.medium))
-                Text("This copy still has H.264 cutscenes and an edited pak index. "
-                   + "That mode has been removed — the runtime patch replaces it and "
-                   + "leaves your original VP9 files alone. Undo it to switch over.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer()
-            Button("Undo") { runner.undoLegacyReencode() }
-                .disabled(runner.busy)
-        }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 10)
-            .fill(Color.orange.opacity(0.08)))
-    }
 
     /// The plan, which is also the result.
     ///
@@ -3869,10 +3918,17 @@ struct ContentView: View {
                               ? "Re-stage for every CrossOver installed and point each bottle at "
                                 + "the one it runs under. Use this after switching CrossOver."
                               : "Borrow the VC-1 decoder from your GStreamer install.")
-                } else if !Codecs.staged {
+                } else {
                     /// The button that resolves the problem, rather than a URL
                     /// to copy out by hand. It is the only thing standing
                     /// between this row and a working game.
+                    ///
+                    /// Offered whenever the framework is absent, not only when
+                    /// nothing has been staged yet. A staging made before the
+                    /// framework was removed leaves symlinks pointing into a
+                    /// directory that is gone, which looks staged and decodes
+                    /// nothing -- and the old condition hid the one button that
+                    /// fixes it in exactly that case.
                     Button("Get GStreamer…") {
                         if let url = URL(string: Codecs.downloadPage) {
                             NSWorkspace.shared.open(url)
@@ -3898,9 +3954,16 @@ struct ContentView: View {
     }
 
     private var codecBannerTitle: String {
-        if codecHealthy { return "VC-1 codec staged" }
-        if Codecs.staged { return "VC-1 codec staged, but some bottles point at the wrong one" }
-        return "Persona 5 Strikers needs a VC-1 codec"
+        if !Codecs.gstreamerInstalled && !Codecs.staged {
+            return "GStreamer is not installed, and six games need a decoder from it"
+        }
+        if codecHealthy { return "Codec staged" }
+        if Codecs.staged { return "Codec staged, but some bottles point at the wrong one" }
+        // It named Persona 5 Strikers alone, which was true when it was written
+        // and stopped being true the day Devil May Cry 5, RESIDENT EVIL 2 and
+        // RESIDENT EVIL 3 turned out to want the same decoder. A count does not
+        // go stale the next time one is added.
+        return "Six games need a decoder CrossOver does not ship"
     }
 
     /// Built as a plain string rather than inline: the compiler gave up
@@ -3962,7 +4025,11 @@ struct ContentView: View {
                 Spacer()
                 // Not locked during a scan. `leaveBulk` cancels it, and a probe
                 // that hangs would otherwise leave this window with no way out.
-                Button("One game at a time") { runner.leaveBulk() }
+                // "One game at a time" named a mode that no longer exists: the
+                // single-game picker and its drop zone are gone, and this button
+                // returns to the landing screen. Naming the destination is what a
+                // back button does.
+                Button("Back") { runner.leaveBulk() }
                     .disabled(runner.busy)
             }
             // Bulk mode's one always-drawn sentence. It used to live at the
@@ -4461,23 +4528,6 @@ struct ContentView: View {
         }
     }
 
-    private var actions: some View {
-        HStack(spacing: 12) {
-            Button("Apply Fix") { runner.apply() }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!runner.canApply)
-                .help(applyHelp)
-            Button("Revert") { runner.revert() }
-                .disabled(!runner.canRevert)
-                .help(runner.state == .notApplied
-                      ? "Nothing to revert."
-                      : "Put the original files back.")
-            Spacer()
-            Text(runner.status)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-        }
-    }
 
     private var applyHelp: String {
         if runner.state == .applied {

@@ -10,7 +10,7 @@ stages what they need, and the fix is to let it.
 | Cause | The video is VC-1, and CrossOver ships no VC-1 decoder |
 | Fix | The staged codec, wired into the bottle. The app does this |
 | Backend | D3DMetal, D3D12 |
-| CrossOver | `crossover-preview-arm64-20260821` |
+| CrossOver | 26.3 and `crossover-preview-arm64-20260821` |
 
 ## Two kinds of video, and only one of them works out of the box
 
@@ -61,6 +61,17 @@ The decoder trace above was taken on Devil May Cry 5, at the Customize screen,
 which is a reliable place to reproduce it in about a minute of play. RESIDENT
 EVIL 2 and RESIDENT EVIL 3 were confirmed by the same with-and-without
 comparison rather than by their own traces.
+
+## Both CrossOver builds
+
+These three are among the few entries here confirmed on stable 26.3 as well as
+on Preview, and the reason is the fix itself: it stages its own decoder, so what
+the engine ships stops mattering. The same is true of Persona 5 Strikers, and it
+is why that one has always been listed on both.
+
+The staged tree is per engine — one directory for each CrossOver, symlinked into
+that engine's own libraries — so "works on both" means both were staged, not
+that one staging serves two.
 
 ## What to do
 
