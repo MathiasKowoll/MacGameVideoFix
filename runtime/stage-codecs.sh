@@ -96,9 +96,34 @@ else
   gst_minor=""
   echo "gstreamer : version not readable"
 fi
-if [ -n "$gst_minor" ] && [ "$gst_minor" != "24" ]; then
-  echo "            note: 1.24.14 is the version this was verified with." >&2
-  echo "            Yours may work perfectly well. Carrying on." >&2
+# What matters is not which version this framework is, but whether it is the same
+# series as the core it will be plugged into. The plugin resolves libgstreamer
+# through a symlink to CROSSOVER's copy, so the pairing that has to hold is
+# framework-plugin against engine-core -- and a hardcoded "24" said nothing about
+# that. It called a 1.24 framework verified while the engine being staged for ran
+# 1.28, which is the one comparison worth making and the one it was not making.
+#
+# A different series still stages: GStreamer keeps its ABI across 1.x and it
+# usually works. But it says so, so that a decoder which fails to register later
+# has somewhere to point.
+if [ -n "$gst_minor" ]; then
+  printf '%s\n' "$ENGINES" | while IFS='|' read -r eng_ver eng_app; do
+    [ -n "$eng_app" ] || continue
+    eng_core="$eng_app/Contents/SharedSupport/CrossOver/lib/x86_64/libgstreamer-1.0.0.dylib"
+    [ -f "$eng_core" ] || eng_core="$eng_app/Contents/SharedSupport/CrossOver/lib64/libgstreamer-1.0.0.dylib"
+    [ -f "$eng_core" ] || continue
+    eng_compat="$(otool -L "$eng_core" 2>/dev/null \
+                  | sed -n 's/.*compatibility version \([0-9]*\)\..*/\1/p' | head -1)"
+    [ -n "$eng_compat" ] && [ "$eng_compat" -gt 0 ] 2>/dev/null || continue
+    eng_minor=$(( eng_compat / 100 ))
+    if [ "$eng_minor" = "$gst_minor" ]; then
+      echo "            same series as $(basename "$eng_app" .app): 1.${gst_minor}"
+    else
+      echo "            note: $(basename "$eng_app" .app) runs GStreamer 1.${eng_minor}," >&2
+      echo "            this framework is 1.${gst_minor}. Usually fine, occasionally" >&2
+      echo "            not; a framework matching 1.${eng_minor} is the closer fit." >&2
+    fi
+  done
 fi
 
 # One staging directory per engine. The support libraries are symlinked INTO
