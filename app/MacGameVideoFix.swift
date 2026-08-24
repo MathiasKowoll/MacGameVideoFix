@@ -3341,7 +3341,20 @@ struct ContentView: View {
             // right, and a step that vanishes when it passes leaves the other one
             // looking like the whole story.
             gstreamerBanner
-            if runner.needsCodecAttention { driftBanner }
+            // The drift banner used to sit here. It explained, in three lines,
+            // that a bottle was set to a CrossOver it had not been opened with
+            // and what would happen if it were -- accurate, and written for
+            // somebody with four engines and nine bottles, which is the person
+            // who maintains this and almost nobody else. A normal install has one
+            // CrossOver and one bottle and can never reach the state at all.
+            //
+            // It is also redundant, which is the better reason. Re-apply on the
+            // card below re-stages and re-points every bottle at the engine it
+            // actually runs under -- so the condition the banner described is
+            // fixed by a button already on screen. A diagnosis that names one
+            // action is worth less than the action.
+            //
+            // The detail is still in the Bottles sheet for anyone who wants it.
             if runner.bulk {
                 bulkHeader
                 stepChoose
@@ -3449,40 +3462,6 @@ struct ContentView: View {
         })
     }
 
-    /// The answer to "I switched CrossOver, now what?", on screen at launch.
-    private var driftBanner: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: driftRows.isEmpty ? "clock.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(driftHeadline)
-                    .font(.callout.weight(.medium))
-                Text(driftMessage)
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer()
-            // None of these takes the default action. The plan table's Fix
-            // button and the codec banner's Stage codec already claim Return,
-            // and a third would make one key mean different things at
-            // different depths of the same flow.
-            if !driftRows.isEmpty {
-                Button(repairTitle) { runner.repairDrifted() }
-                    .disabled(runner.busy)
-                    .help("The codec staged for one CrossOver cannot be loaded under "
-                          + "another. Two GStreamer cores is a crash, not a warning.")
-            }
-            if !waitingRows.isEmpty {
-                Button("Match \(waitingRows.count) to their CrossOver") { runner.matchAutomatic() }
-                    .disabled(runner.busy)
-                    .help("Points them back at the codec for the CrossOver their own "
-                          + "configuration records, and forgets the choice.")
-            }
-            Button("Bottles…") { showingBottles = true }
-        }
-        .padding(11)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.orange.opacity(0.08)))
-    }
 
     /// Plain strings rather than inline conditionals, for the same reason
     /// `codecMessage` is one: the compiler gives up type-checking them.
@@ -4022,7 +4001,11 @@ struct ContentView: View {
             return "GStreamer is not installed, and six games need a decoder from it"
         }
         if codecHealthy { return "Codec staged" }
-        if Codecs.staged { return "Codec staged, but some bottles point at the wrong one" }
+        // Says what to do rather than what is wrong. The condition is real -- a
+        // bottle pointing at another engine's staging loads two GStreamer cores
+        // and crashes -- but the person reading this does not need the mechanism,
+        // they need the button that is beside the sentence.
+        if Codecs.staged { return "Codec staged — press Re-apply to update your bottles" }
         // It named Persona 5 Strikers alone, which was true when it was written
         // and stopped being true the day Devil May Cry 5, RESIDENT EVIL 2 and
         // RESIDENT EVIL 3 turned out to want the same decoder. A count does not
