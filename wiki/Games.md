@@ -29,6 +29,9 @@ otherwise.
 | [KINGDOM HEARTS HD 1.5+2.5 ReMIX](Kingdom-Hearts.md) | Square Enix, in-house | Cutscene runs with sound, picture solid green | The Dream Drop Distance fix, unchanged -- six executables, same route | D3DMetal | 11 + 12 | Preview -- not tried on 26.3 | Fixed |
 | [TMNT: Splintered Fate](TMNT-Splintered-Fate.md) | Rebirth, in-house | Opens a window, then closes silently | A guard on the D3D12 call that ends the process instead of failing | D3DMetal | 12 | Preview -- not tried on 26.3 | Fixed |
 | [Tormented Souls 2](Tormented-Souls-2.md) | Unreal Engine 5 | Fatal error before the first frame | 16:9 modes added to a list that offered none | D3DMetal | 12 | Preview -- not tried on 26.3 | Fixed |
+| [Devil May Cry 5](RE-Engine-VC1.md) | RE Engine | Crashes when a skill preview video plays | Staged VC-1 codec. Nothing installed beside the game | D3DMetal | 12 | Preview -- not tried on 26.3 | Fixed |
+| [RESIDENT EVIL 2](RE-Engine-VC1.md) | RE Engine | Crashes when a video plays | The same staged VC-1 codec, unchanged | D3DMetal | 12 | Preview -- not tried on 26.3 | Fixed |
+| [RESIDENT EVIL 3](RE-Engine-VC1.md) | RE Engine | Crashes when a video plays | The same staged VC-1 codec, unchanged | D3DMetal | 12 | Preview -- not tried on 26.3 | Fixed |
 
 **Backend and DX are not preferences, they are requirements.** Persona 5
 Strikers, Nioh and Nioh 2 only work on DXMT: all three need a shared D3D9

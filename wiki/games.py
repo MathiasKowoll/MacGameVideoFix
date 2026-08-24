@@ -85,6 +85,21 @@ GAMES = [
      "16:9 modes added to a list that offered none",
      "D3DMetal", "12", "Preview -- not tried on 26.3",
      "Fixed", "Tormented-Souls-2"),
+    ("Devil May Cry 5", "RE Engine",
+     "Crashes when a skill preview video plays",
+     "Staged VC-1 codec. Nothing installed beside the game",
+     "D3DMetal", "12", "Preview -- not tried on 26.3",
+     "Fixed", "RE-Engine-VC1"),
+    ("RESIDENT EVIL 2", "RE Engine",
+     "Crashes when a video plays",
+     "The same staged VC-1 codec, unchanged",
+     "D3DMetal", "12", "Preview -- not tried on 26.3",
+     "Fixed", "RE-Engine-VC1"),
+    ("RESIDENT EVIL 3", "RE Engine",
+     "Crashes when a video plays",
+     "The same staged VC-1 codec, unchanged",
+     "D3DMetal", "12", "Preview -- not tried on 26.3",
+     "Fixed", "RE-Engine-VC1"),
 ]
 
 HEAD = ("| Game | Engine | Symptom | Fix | Backend | DX | CrossOver | Status |\n"

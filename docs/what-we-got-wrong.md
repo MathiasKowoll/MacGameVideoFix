@@ -294,6 +294,30 @@ It now looks the engine up in `.map`, says whether the staged codec matches, and
 overrides `GST_PLUGIN_PATH` for that run when it does not. The tool built for
 crossing engines is the one that has to know what crossing them costs.
 
+## Reading a log while it was still being written
+
+Twice in one day, and the second time it nearly threw away a correct answer.
+
+Persona 4 Golden: two runs were diffed to see whether the fault was
+deterministic. The second file was still being written; the diff showed the
+crash and the totals missing and was read as "this run behaved differently". It
+had not. Waiting five seconds gave two byte-identical logs.
+
+Devil May Cry 5, the same day: a GStreamer trace was opened at ten lines,
+showed `h264parse` and `vtdec_hw`, and the VC-1 hypothesis was withdrawn out
+loud as "incorrect, and I built a story on it". The log later reached 10,556
+lines and contained `asfdemux`, `avdec_vc1`, `format=(string)WVC1` and
+`Using libavcodec version 60.3.100` — the hypothesis, confirmed by name, in the
+part that had not been written yet. The game plays H.264 as well; the first ten
+lines were true and were not the whole truth.
+
+Withdrawing a claim is the right move when it is wrong. Withdrawing it from a
+partial read is the same error as making it from one, and it costs more, because
+the retraction sounds like rigour.
+
+The rule is cheap: a log that is still growing is not a measurement. Check the
+size twice before drawing anything from it.
+
 ## Process
 
 - **`git add -A` swept a half-rewritten script into a commit.** Files are listed
