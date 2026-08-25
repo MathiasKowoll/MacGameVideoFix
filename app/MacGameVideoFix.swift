@@ -810,9 +810,14 @@ final class Runner: ObservableObject {
         case "broken":    bridgeState = .partial
         default:          bridgeState = .notApplied
         }
-        status = bridgeState == .applied
-            ? "Bridge installed. Cutscenes should play."
-            : "Not patched yet."
+        // .partial is not "not patched yet": the files are there and something
+        // the fix depends on is not, which is a different sentence and a
+        // different action.
+        switch bridgeState {
+        case .applied:  status = "Bridge installed. Cutscenes should play."
+        case .partial:  status = "Patched, but the fix is not active. Apply it again."
+        default:        status = "Not patched yet."
+        }
     }
 
     func inspect(_ g: GameFolder) async {
@@ -1900,15 +1905,23 @@ final class Runner: ObservableObject {
         // .notApplied, so neither button did anything. A user with a game that
         // will not start, in a mode with no way out, and a log cleared by the
         // next scan.
+        // Neither of these is a dead end, and both used to be. `blocker` takes
+        // a row out of `actionable`, which drops it from selectedHits, hides
+        // its Toggle and makes "Select all" skip it -- so the text promising a
+        // remedy was attached to the one thing that guaranteed no button could
+        // reach it. They carry a note instead, and let the installer be the one
+        // to refuse if the case really is unrecoverable: its own message
+        // ("Verify the game files in Steam") is better advice than a grey row.
         case "half":
             hit.state = .partial
             hit.selected = false
-            hit.blocker = "Half installed: the original is saved aside and "
-                        + "nothing is in its place. Revert puts it back."
+            hit.note = "Half installed: the original is saved aside and "
+                     + "nothing is in its place. Remove puts it back."
         case "broken":
             hit.state = .partial
-            hit.selected = false
-            hit.blocker = "Half-installed. Verify this game's files in Steam, then scan again."
+            hit.selected = true
+            hit.note = "Patched, but the fix is not active — a missing override "
+                     + "or requirement. Fix re-applies it."
         default:
             hit.state = .notApplied
             hit.blocker = nil
@@ -3306,6 +3319,11 @@ struct ScanHit: Identifiable {
     var state: FixState = .unknown
     /// Set when the row cannot be acted on, and says why in the user's terms.
     var blocker: String?
+    /// Says something the user needs to read WITHOUT taking the row out of
+    /// reach. The difference matters: `blocker` also means "no button touches
+    /// this", so using it to explain a repairable state left the row visible,
+    /// alarming and inert.
+    var note: String?
     var selected = true
     var outcome: String?
 
@@ -5355,6 +5373,10 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                 if let why = hit.wrappedValue.blocker {
                     Text(why).font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let note = hit.wrappedValue.note, hit.wrappedValue.blocker == nil {
+                    Text(note).font(.caption).foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if let extra = hit.wrappedValue.game.extraRequirement,

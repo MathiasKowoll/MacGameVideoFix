@@ -60,14 +60,20 @@ MARKER='d3d12-guards.log'
 
 is_ours() { [ -f "$1" ] && LC_ALL=C grep -qa "$MARKER" "$1"; }
 
-# The same question asked a way that cannot go stale: our proxy forwards to
-# OpenColorIO_2_3_real.dll, so it names that file in its import table. A genuine library
-# never imports its own _real variant. Markers are for reporting; this is what
-# the destructive step is allowed to rely on.
+# The same question asked a way that cannot go stale: our proxy forwards every
+# export to OpenColorIO_2_3_real, so the EXPORT table carries one
+# "OpenColorIO_2_3_real.<symbol>" string per forwarder. A genuine library never
+# forwards to its own _real variant. Markers are for reporting; this is what the
+# destructive step is allowed to rely on.
+#
+# The pattern is the prefix with its dot and NOT the ".dll" spelling, which
+# never appears in the file: build-proxy.sh emits pure forwarders and no import
+# descriptor, so the old test could not match, ever, and degenerated into the
+# marker check it was written to outlive.
 looks_like_ours() {
   [ -f "$1" ] || return 1
   is_ours "$1" && return 0
-  LC_ALL=C grep -qa "OpenColorIO_2_3_real.dll" "$1"
+  LC_ALL=C grep -qaF "OpenColorIO_2_3_real." "$1"
 }
 
 [ -f "$GAME/TormentedSouls2.exe" ] || {

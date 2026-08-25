@@ -46,15 +46,15 @@
 		</data>
 		<key>Resources/install-kh-bridge.sh</key>
 		<data>
-		uXJxdr4cmLcUnaHVlNSSriqzgts=
+		5Lyp+ULxzTidVtLPgyXh8bB5Qsw=
 		</data>
 		<key>Resources/install-ng4-fix.sh</key>
 		<data>
-		IlLHvwQL4M/Vj9fM1Dbu16ZWFw8=
+		kqDtX98EiT/9JU1eSTA4rIN+wf8=
 		</data>
 		<key>Resources/install-nier-bridge.sh</key>
 		<data>
-		xtk3dwC5enMXk3yq7NCMXo355sA=
+		d752CXyqi7l4nKdkybEAIBRHFbA=
 		</data>
 		<key>Resources/install-nioh-bridge.sh</key>
 		<data>
@@ -74,11 +74,11 @@
 		</data>
 		<key>Resources/install-tmnt-fix.sh</key>
 		<data>
-		EJ82LBHUy64UmpqYMMmipBa9Apc=
+		WGFK/dFZ4/fX5N5W+sKIjwfkDr8=
 		</data>
 		<key>Resources/install-tormented-fix.sh</key>
 		<data>
-		Xs110hyIoramunC2j3dt15g1O6s=
+		ZIAzJWv5/OL0NLSA+aNYpqaflpM=
 		</data>
 		<key>Resources/libogg_64.dll</key>
 		<data>
@@ -181,21 +181,21 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			jMMEROKAOjRuwIQrh4gxX7iFjt6lp68QVgpF61bYlOM=
+			SZATusZ81LnkqiqX4GAP/yFGj+Ha+PcyS5iEDapXivM=
 			</data>
 		</dict>
 		<key>Resources/install-ng4-fix.sh</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			MLdwHV3t5JttdivfNZVknrF19g3KvsgijB2OYpTKwkw=
+			GAvM0cS9yyWl5D9CmmmKWpX7yTvzauxSEnX8b7zvrvc=
 			</data>
 		</dict>
 		<key>Resources/install-nier-bridge.sh</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			cqYhNMlS8t3k43ymzCSJHunwT+W2i7SGQ8x9nX80GxE=
+			39zAC7egZRxuw6XrXkdRU4TfujnqPE0w61O3ioHFn20=
 			</data>
 		</dict>
 		<key>Resources/install-nioh-bridge.sh</key>
@@ -230,14 +230,14 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			7OEg3GcOri0lVeRP6rfjMM4UR2e6sbBo2mKIyg9NAmI=
+			9OILef1blHMHOPsI/LW9u5G4bMQPKIrmj4mu8Sr+VvM=
 			</data>
 		</dict>
 		<key>Resources/install-tormented-fix.sh</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			tx/g76goFgQvgM+EJQ46qR9GxbApolOITEVLlhRVh+E=
+			Cjw41Vl7kWn9DLohugBfPurPbF3VgBJfnphhc9OAQQg=
 			</data>
 		</dict>
 		<key>Resources/libogg_64.dll</key>

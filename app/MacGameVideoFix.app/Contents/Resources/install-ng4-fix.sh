@@ -72,12 +72,19 @@ is_ours() {
 # applied" and the control that would put the DLL back is greyed out. Advisories
 # go to stderr for the same reason: the app merges the streams.
 status() {
-  if is_ours "$CARRIER" && [ -f "$REAL" ]; then echo installed
+  # DirectStorage decides the word, it does not merely annotate it. The advisory
+  # below goes to stderr, the app merges the streams and then keeps only lines
+  # that are one of the four words -- so a warning about a game that is going to
+  # die anyway reached nobody, under a green `installed`. If the carrier is ours
+  # but DirectStorage is still live, the fix is in place and not working, which
+  # is what `broken` means.
+  if is_ours "$CARRIER" && [ -f "$REAL" ]; then
+    if [ -f "$GAME/dstoragecore.dll" ]; then echo broken; else echo installed; fi
   elif is_ours "$CARRIER"; then echo broken
   elif [ ! -f "$CARRIER" ] && [ -f "$REAL" ]; then echo half
   else echo absent; fi
 
-  # Said either way, because both are needed and neither is this script's doing.
+  # Said either way, because both are needed.
   if [ -f "$GAME/dstoragecore.dll" ]; then
     echo "warning: dstoragecore.dll is still in place; the game needs it renamed" >&2
   fi
@@ -91,6 +98,12 @@ case "$ACTION" in
       [ -f "$REAL" ] || { echo "nothing to restore"; exit 0; }
       rm -f "$CARRIER"
       mv "$REAL" "$CARRIER"
+      # Only undo the rename this script made, and never over a file that is
+      # already there: a user who had renamed DirectStorage by hand keeps their
+      # own arrangement.
+      if [ -f "$GAME/dstoragecore.dll.mgvf-off" ] && [ ! -f "$GAME/dstoragecore.dll" ]; then
+        mv "$GAME/dstoragecore.dll.mgvf-off" "$GAME/dstoragecore.dll"
+      fi
       echo "restored — the game is back to its own dstorage.dll"
       exit 0 ;;
   install) ;;
@@ -107,4 +120,11 @@ if [ ! -f "$REAL" ]; then
   mv "$CARRIER" "$REAL"
 fi
 cp "$PROXY" "$CARRIER"
+
+# DirectStorage off, which the header has always declared mandatory and which
+# nothing here ever did. Reversible, and skipped if the user already did it.
+if [ -f "$GAME/dstoragecore.dll" ] && [ ! -f "$GAME/dstoragecore.dll.mgvf-off" ]; then
+  mv "$GAME/dstoragecore.dll" "$GAME/dstoragecore.dll.mgvf-off"
+  echo "  DirectStorage turned off: dstoragecore.dll -> dstoragecore.dll.mgvf-off"
+fi
 echo "installed — answer the codec gate, and decode in software"

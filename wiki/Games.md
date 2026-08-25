@@ -24,7 +24,7 @@ otherwise.
 | [Nioh 2](Nioh-2.md) | Koei Tecmo, in-house | Cutscene refuses to play, then crashes | Same codec and same bridge as Nioh, unchanged | **DXMT** | 11 | 4.0b2 | 26.3 and Preview | Fixed |
 | [Nioh 3](Nioh-3.md) | Koei Tecmo, in-house | Failed to play movie | The DYNASTY WARRIORS bridge, unchanged | D3DMetal | 12 | 4.0b2 | 26.3 and Preview | Fixed |
 | [Wo Long: Fallen Dynasty](Wo-Long-Fallen-Dynasty.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | The DYNASTY WARRIORS bridge, unchanged | D3DMetal | 12 | 4.0b2 | 26.3 and Preview | Fixed |
-| [NieR Replicant ver.1.22474487139](NieR-Replicant.md) | Toylogic, in-house | Crashes when the first video starts | Software decode, and the frame written into the game's target | D3DMetal | 11 | 4.0b2 -- but only on Wine 27 | Preview only -- 26.3 crashes before the fix loads | Fixed |
+| [NieR Replicant ver.1.22474487139](NieR-Replicant.md) | Toylogic, in-house | Crashes when the first video starts | Software decode, and the frame written into the game's target | D3DMetal | 11 | 4.0b2 | 26.3 and Preview | Fixed |
 | [KINGDOM HEARTS Dream Drop Distance](Kingdom-Hearts.md) | Square Enix, in-house | Cutscene runs with sound, picture solid green | Software decode, and the luma and chroma planes written into the game's own textures | D3DMetal | 11 + 12 | 4.0b2 | Preview -- not tried on 26.3 | Fixed |
 | [KINGDOM HEARTS HD 1.5+2.5 ReMIX](Kingdom-Hearts.md) | Square Enix, in-house | Cutscene runs with sound, picture solid green | The Dream Drop Distance fix, unchanged -- six executables, same route | D3DMetal | 11 + 12 | 4.0b2 | Preview -- not tried on 26.3 | Fixed |
 | [TMNT: Splintered Fate](TMNT-Splintered-Fate.md) | Rebirth, in-house | Opens a window, then closes silently | A guard on the D3D12 call that ends the process instead of failing | D3DMetal | 12 | 4.0b2 | 26.3 and Preview | Fixed |
@@ -78,29 +78,28 @@ stutter.
 **Which CrossOver, and what "Preview" means.** Every measurement here was taken
 against CrossOver 26.3 and `crossover-preview-arm64-20260821`, and the CrossOver
 column says which of the two a title was measured on rather than which it might
-work on. Everything runs on that Preview. Three are confirmed on 26.3 as well.
-This project targets that Preview build, and it is what every title is measured
-and supported on. Three also run on stable 26.3 and the column says so, but as a
-bonus rather than a promise -- stable is not what gets tested before a release.
+work on. **Seventeen of the nineteen run on stable 26.3**, which inverts where
+this project started: stable was the exception and is now the rule, and the
+toolkit -- not the engine -- turned out to be the axis that decides most of
+these titles.
 
-What stops the other three is in the engine. Both Life is Strange titles freeze
-on 26.3 with the fix removed exactly as they do with it, so nothing installed
-beside the game is involved; what differs is D3DMetal, 3.0 against 4.0b2. And
-DYNASTY WARRIORS needs a WebM demuxer that 26.3 has no way to reach -- staging
-the plugin was tried and the video still never starts. Persona 5 Strikers plays on both, which is what its
-fix predicted: it stages its own decoder, so what CrossOver ships stops
-mattering. A first attempt on 26.3 failed and was recorded as the title not
-working there -- wrongly. The staged codec is built against one CrossOver and is
-not usable under another, and none had been built for 26.3 yet.
-DYNASTY WARRIORS crashes there too; that much was run, while the reason given for
-it is read from the two installs' plugin sets rather than from watching it fail.
+The two exceptions point in opposite directions. The Kingdom Hearts pair has
+only ever been launched on Preview, so its rows record an absence rather than a
+result and nothing is claimed either way. NINJA GAIDEN 4 is the reverse: it runs
+on stock 26.3 and stalls on Preview, and what stalls it is the toolkit, which
+executes command lists concurrently with no lever to turn that off.
 
-Four rows record an absence rather than a result: the three Nioh titles and
-NieR Replicant were fixed on Preview and none was launched on 26.3, so nothing
-is claimed either way.
-Their codec is staged the same way Strikers' is, which is the half that made
-Strikers portable, but the bridge half has only ever run against the Preview
-build's DXMT.
+Two lessons paid for by rows that were wrong for a while, and are worth more
+than the statuses they corrected:
+
+- **A staged codec is built against one CrossOver and is not usable under
+  another.** Persona 5 Strikers was recorded as not working on 26.3 after a
+  first attempt failed there; the codec simply had not been built for 26.3 yet.
+- **A fix that reports itself installed is not necessarily loaded.** NieR
+  Replicant was recorded as Preview-only because its 26.3 runs died at the first
+  video. The bridge was never executing in those runs: the registry override it
+  depends on had gone missing, and the installer answered `installed` from the
+  files alone.
 
 **None of these games needs CrossOver patched, wherever the container can be
 opened.** That was not true when this project started, and it is the single

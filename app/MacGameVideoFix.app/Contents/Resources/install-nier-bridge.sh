@@ -109,9 +109,61 @@ find_crossover() {
   return 1
 }
 
+# The CrossOver that can actually open a given bottle.
+#
+# A bottle records the CFBundleVersion of the engine that last updated it, and
+# an engine refuses a bottle newer than itself SILENTLY -- exit 0, no output,
+# which is the worst possible way for a registry write to fail. So picking one
+# CrossOver for the whole machine is wrong wherever more than one is installed:
+# it writes the override into whichever bottles happen to match, skips the rest
+# without a word, and counts the ones it skipped as written.
+crossover_for_bottle() {
+  local want a ver
+  want="$(sed -n 's/^"Version" = "\(.*\)"$/\1/p' "$1/cxbottle.conf" 2>/dev/null | head -1)"
+  [ -n "$want" ] || return 1
+  for a in /Applications/*.app "$HOME"/Applications/*.app; do
+    [ -x "$a/Contents/SharedSupport/CrossOver/bin/wine" ] || continue
+    ver="$(defaults read "$a/Contents/Info" CFBundleVersion 2>/dev/null)"
+    [ "$ver" = "$want" ] || continue
+    printf '%s' "$a/Contents/SharedSupport/CrossOver"; return 0
+  done
+  return 1
+}
+
+# Whether the override is really there.
+#
+# The bridge needs three things and the file pair is only two of them: without
+# this key Wine loads its own dinput8 and the proxy beside the game is never
+# opened. Reporting `installed` from the files alone is how this title spent a
+# long time recorded as broken on stable CrossOver -- the fix was not running in
+# any of those measurements, and nothing said so.
+#
+# It asks the registry rather than reading user.reg, because wineserver flushes
+# that file when it feels like it and a lazy flush reads as a missing key.
+override_ok() {
+  local b cx seen=0
+  while read -r b; do
+    [ -n "$b" ] || continue
+    cx="$(crossover_for_bottle "$b")" || continue
+    seen=$((seen + 1))
+    # Symmetric with [4/4]: that step writes the key into EVERY candidate
+    # bottle, on purpose, because the user may switch bottles between runs. So
+    # one bottle holding it is not the question -- the question is whether any
+    # candidate is missing it, because that is the run where the bridge silently
+    # does not load.
+    "$cx/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe query \
+      "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$EXE_NAME\\DllOverrides" \
+      /v dinput8 >/dev/null 2>&1 || return 1
+  done < <(find_bottles || true)
+  [ "$seen" -gt 0 ]
+}
+
 case "$MODE" in
 --status)
-  if is_ours "$LIVE" && [ -f "$REAL" ]; then echo installed
+  # The wine call costs a wineserver, so it is only made once the file pair has
+  # already answered `installed` -- that is, only for a game that is patched.
+  if is_ours "$LIVE" && [ -f "$REAL" ]; then
+    if override_ok; then echo installed; else echo broken; fi
   elif is_ours "$LIVE"; then echo broken
   elif [ ! -f "$LIVE" ] && [ -f "$REAL" ]; then echo half
   else echo absent; fi
@@ -119,14 +171,13 @@ case "$MODE" in
   ;;
 --restore)
   rm -f "$LIVE" "$REAL"
-  if CX="$(find_crossover)"; then
-    while read -r b; do
-      [ -n "$b" ] || continue
-      "$CX/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe delete \
-        "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$EXE_NAME\\DllOverrides" \
-        /v dinput8 /f >/dev/null 2>&1 || true
-    done < <(find_bottles || true)
-  fi
+  while read -r b; do
+    [ -n "$b" ] || continue
+    cx="$(crossover_for_bottle "$b")" || continue
+    "$cx/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe delete \
+      "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$EXE_NAME\\DllOverrides" \
+      /v dinput8 /f >/dev/null 2>&1 || true
+  done < <(find_bottles || true)
   echo "restored — the bridge and the dinput8 override are gone"
   exit 0
   ;;
@@ -134,9 +185,14 @@ case "$MODE" in
 *) usage ;;
 esac
 
+# Already-installed is not a reason to do nothing: the override is the part that
+# goes missing on its own -- a bottle reset, a bottle created after a CrossOver
+# upgrade -- and re-running is the documented remedy for exactly that. So the
+# file steps are skipped and the key is asserted again.
+SKIP_FILES=0
 if is_ours "$LIVE" && [ -f "$REAL" ]; then
-  echo "the bridge is already installed, nothing to do"
-  exit 0
+  echo "the bridge files are already in place; re-asserting the override"
+  SKIP_FILES=1
 fi
 
 echo "[1/4] finding the bottle and the CrossOver that runs it"
@@ -151,6 +207,7 @@ CX="$(find_crossover)" || {
 }
 echo "      bottle: $(basename "$BOTTLE")"
 
+if [ "$SKIP_FILES" = 0 ]; then
 echo "[2/4] taking a copy of the bottle's own dinput8"
 # Never over a proxy: if $LIVE is already ours, $REAL would be overwritten with
 # the proxy and the original lost for good.
@@ -181,25 +238,50 @@ if [ -n "$missing" ]; then
   exit 1
 fi
 cp "$PROXY" "$LIVE" || { echo "error: could not install the bridge" >&2; rm -f "$REAL"; exit 1; }
+fi
 
 echo "[4/4] telling Wine to prefer it, for this game only"
 wrote=0
+skipped=0
 while read -r b; do
   [ -n "$b" ] || continue
+  CX="$(crossover_for_bottle "$b")" || {
+    echo "      skipped $(basename "$b"): no installed CrossOver matches its engine" >&2
+    skipped=$((skipped + 1)); continue
+  }
   "$CX/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe add \
     "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$EXE_NAME\\DllOverrides" \
     /v dinput8 /d "native,builtin" /f >/dev/null 2>&1 || continue
-  LC_ALL=C grep -qa "$EXE_NAME" "$b/user.reg" 2>/dev/null || continue
+  # Ask the registry back rather than grepping user.reg: wineserver decides when
+  # to flush that file, and a lazy flush would read as a failed write.
+  "$CX/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe query \
+    "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$EXE_NAME\\DllOverrides" \
+    /v dinput8 >/dev/null 2>&1 || continue
   echo "      $(basename "$b")"
   wrote=$((wrote + 1))
 done < <(find_bottles || true)
 if [ "$wrote" = 0 ]; then
   echo "error: the registry override could not be written to any bottle." >&2
+  [ "$skipped" = 0 ] || echo "       $skipped bottle(s) run an engine that is not installed here." >&2
   echo "       Without it Wine loads its own dinput8 and the bridge never runs." >&2
-  rm -f "$LIVE"; mv -f "$REAL" "$LIVE" 2>/dev/null || true
+  # Undo only what this run created. $REAL is a COPY of the bottle's own
+  # dinput8, not a file the game shipped, so moving it back over $LIVE would
+  # leave a foreign native dinput8 beside the executable -- and --status would
+  # then answer `absent` about a half-built game.
+  if [ "$SKIP_FILES" = 0 ]; then
+    rm -f "$LIVE" "$REAL"
+    while read -r b; do
+      [ -n "$b" ] || continue
+      cx="$(crossover_for_bottle "$b")" || continue
+      "$cx/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe delete \
+        "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$EXE_NAME\\DllOverrides" \
+        /v dinput8 /f >/dev/null 2>&1 || true
+    done < <(find_bottles || true)
+  fi
   exit 1
 fi
 echo
 echo "installed"
 echo "  the video bridge is in place, and dinput8 is overridden for this game only"
-echo "  no staged codec is needed for this one"
+echo "  the staged codec is needed too: the video is WMV2 with WMA v2 audio in ASF,"
+echo "  and CrossOver demuxes ASF while decoding neither stream"

@@ -120,9 +120,52 @@ find_crossover() {
   return 1
 }
 
+# The CrossOver that can actually open a given bottle. A bottle records the
+# CFBundleVersion of the engine that last updated it, and an engine refuses a
+# bottle newer than itself SILENTLY -- exit 0 and no output. Picking one
+# CrossOver for the whole machine writes the keys into whichever bottles happen
+# to match and counts the rest as done.
+crossover_for_bottle() {
+  local want a ver
+  want="$(sed -n 's/^"Version" = "\(.*\)"$/\1/p' "$1/cxbottle.conf" 2>/dev/null | head -1)"
+  [ -n "$want" ] || return 1
+  for a in /Applications/*.app "$HOME"/Applications/*.app; do
+    [ -x "$a/Contents/SharedSupport/CrossOver/bin/wine" ] || continue
+    ver="$(defaults read "$a/Contents/Info" CFBundleVersion 2>/dev/null)"
+    [ "$ver" = "$want" ] || continue
+    printf '%s' "$a/Contents/SharedSupport/CrossOver"; return 0
+  done
+  return 1
+}
+
+# Whether every override this package needs is really there.
+#
+# The proxy and the copied original are two of the three things the bridge
+# needs; without the keys Wine loads its own dinput8 and the proxy is never
+# opened. And here there is one key PER EXECUTABLE: a package can be five games
+# deep, so a partial answer is the dangerous one -- four titles playing and one
+# silently without cutscenes still has to read as broken.
+override_ok() {
+  local b cx exe seen=0
+  while read -r b; do
+    [ -n "$b" ] || continue
+    cx="$(crossover_for_bottle "$b")" || continue
+    seen=$((seen + 1))
+    for exe in "${EXE_NAMES[@]}"; do
+      "$cx/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe query \
+        "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$exe\\DllOverrides" \
+        /v dinput8 >/dev/null 2>&1 || return 1
+    done
+  done < <(find_bottles || true)
+  [ "$seen" -gt 0 ]
+}
+
 case "$MODE" in
 --status)
-  if is_ours "$LIVE" && [ -f "$REAL" ]; then echo installed
+  # The wine calls cost a wineserver, so they only happen once the file pair has
+  # already answered `installed` -- that is, only for a package that is patched.
+  if is_ours "$LIVE" && [ -f "$REAL" ]; then
+    if override_ok; then echo installed; else echo broken; fi
   elif is_ours "$LIVE"; then echo broken
   elif [ ! -f "$LIVE" ] && [ -f "$REAL" ]; then echo half
   else echo absent; fi
@@ -130,16 +173,15 @@ case "$MODE" in
   ;;
 --restore)
   rm -f "$LIVE" "$REAL"
-  if CX="$(find_crossover)"; then
-    while read -r b; do
-      [ -n "$b" ] || continue
-      for exe in "${EXE_NAMES[@]}"; do
-        "$CX/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe delete \
-          "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$exe\\DllOverrides" \
-          /v dinput8 /f >/dev/null 2>&1 || true
-      done
-    done < <(find_bottles || true)
-  fi
+  while read -r b; do
+    [ -n "$b" ] || continue
+    CX="$(crossover_for_bottle "$b")" || continue
+    for exe in "${EXE_NAMES[@]}"; do
+      "$CX/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe delete \
+        "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$exe\\DllOverrides" \
+        /v dinput8 /f >/dev/null 2>&1 || true
+    done
+  done < <(find_bottles || true)
   echo "restored — the bridge and the dinput8 overrides are gone"
   exit 0
   ;;
@@ -147,9 +189,14 @@ case "$MODE" in
 *) usage ;;
 esac
 
+# Already-installed is not a reason to do nothing: the keys are the part that
+# goes missing on its own -- a bottle reset, a bottle created after a CrossOver
+# upgrade -- and re-running is the documented remedy. The file steps are skipped
+# and every key is asserted again.
+SKIP_FILES=0
 if is_ours "$LIVE" && [ -f "$REAL" ]; then
-  echo "the bridge is already installed, nothing to do"
-  exit 0
+  echo "the bridge files are already in place; re-asserting the overrides"
+  SKIP_FILES=1
 fi
 
 echo "[1/4] finding the bottle and the CrossOver that runs it"
@@ -165,6 +212,7 @@ CX="$(find_crossover)" || {
 echo "      bottle: $(basename "$BOTTLE")"
 echo "      ${#EXE_NAMES[@]} executable(s) that play video in this package"
 
+if [ "$SKIP_FILES" = 0 ]; then
 echo "[2/4] taking a copy of the bottle's own dinput8"
 if is_ours "$LIVE"; then
   echo "error: $LIVE is already a proxy but $REAL is gone." >&2
@@ -193,31 +241,58 @@ if [ -n "$missing" ]; then
   exit 1
 fi
 cp "$PROXY" "$LIVE" || { echo "error: could not install the bridge" >&2; rm -f "$REAL"; exit 1; }
+fi
 
 echo "[4/4] telling Wine to prefer it, for these executables only"
 wrote=0
+skipped=0
 while read -r b; do
   [ -n "$b" ] || continue
-  ok=0
+  CX="$(crossover_for_bottle "$b")" || {
+    echo "      skipped $(basename "$b"): no installed CrossOver matches its engine" >&2
+    skipped=$((skipped + 1)); continue
+  }
+  # Counted per executable, not per bottle. An `ok=1` set by whichever exe
+  # happened to succeed reported the whole package installed while the rest of
+  # its games played no cutscenes -- and the failures were silent by
+  # construction, because the `continue` below skips to the next exe.
+  bad=0
   for exe in "${EXE_NAMES[@]}"; do
     "$CX/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe add \
       "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$exe\\DllOverrides" \
-      /v dinput8 /d "native,builtin" /f >/dev/null 2>&1 || continue
+      /v dinput8 /d "native,builtin" /f >/dev/null 2>&1 || {
+        bad=$((bad + 1)); echo "      failed: $exe" >&2; continue
+      }
     # Ask the registry, not the file. wineserver flushes user.reg on its own
     # schedule, so a key that was just written is often not on disk yet -- and
     # reading the file makes a lazy flush look like a failed write.
     "$CX/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe query \
       "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$exe\\DllOverrides" \
-      /v dinput8 >/dev/null 2>&1 && ok=1
+      /v dinput8 >/dev/null 2>&1 || { bad=$((bad + 1)); echo "      failed: $exe" >&2; }
   done
-  [ "$ok" = 1 ] || continue
+  [ "$bad" = 0 ] || continue
   echo "      $(basename "$b")"
   wrote=$((wrote + 1))
 done < <(find_bottles || true)
 if [ "$wrote" = 0 ]; then
   echo "error: the registry overrides could not be written to any bottle." >&2
   echo "       Without them Wine loads its own dinput8 and the bridge never runs." >&2
-  rm -f "$LIVE"; mv -f "$REAL" "$LIVE" 2>/dev/null || true
+  [ "$skipped" = 0 ] || echo "       $skipped bottle(s) run an engine that is not installed here." >&2
+  # Undo only what this run created. $REAL is a COPY of the bottle's own
+  # dinput8, not a file the package shipped, so moving it back over $LIVE would
+  # leave a foreign native dinput8 beside the executables.
+  if [ "$SKIP_FILES" = 0 ]; then
+    rm -f "$LIVE" "$REAL"
+    while read -r b; do
+      [ -n "$b" ] || continue
+      cx="$(crossover_for_bottle "$b")" || continue
+      for exe in "${EXE_NAMES[@]}"; do
+        "$cx/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe delete \
+          "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$exe\\DllOverrides" \
+          /v dinput8 /f >/dev/null 2>&1 || true
+      done
+    done < <(find_bottles || true)
+  fi
   exit 1
 fi
 echo

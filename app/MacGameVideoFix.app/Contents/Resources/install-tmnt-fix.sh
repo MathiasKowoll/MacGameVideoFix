@@ -54,14 +54,21 @@ is_ours() {
   return 1
 }
 
-# The same question asked a way that cannot go stale: our proxy forwards to
-# fmod_real.dll, so it names that file in its import table. A genuine library
-# never imports its own _real variant. Markers are for reporting; this is what
-# the destructive step is allowed to rely on.
+# The same question asked a way that cannot go stale: our proxy forwards every
+# export to fmod_real, so the EXPORT table carries one "fmod_real.<symbol>"
+# string per forwarder. A genuine library never forwards to its own _real
+# variant. Markers are for reporting; this is what the destructive step is
+# allowed to rely on.
+#
+# The pattern is the prefix with its dot and NOT "fmod_real.dll", which is a
+# string that never appears anywhere in the file: build-proxy.sh emits pure
+# forwarders and no import descriptor, so the old test could not match, ever.
+# It degenerated into is_ours, the marker check that :44-48 already admits went
+# stale once -- leaving the mv below with no real guard in front of it.
 looks_like_ours() {
   [ -f "$1" ] || return 1
   is_ours "$1" && return 0
-  LC_ALL=C grep -qa "fmod_real.dll" "$1"
+  LC_ALL=C grep -qaF "fmod_real." "$1"
 }
 
 [ -f "$GAME/$EXE_NAME" ] || {

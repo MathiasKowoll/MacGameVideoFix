@@ -89,8 +89,24 @@ case "$MODE" in
   fi
 
   echo "[1/3] checking the proxy exports everything Apple's does"
-  missing="$(comm -23 <(python3 "$HERE/../runtime/pe.py" exports "$LIVE" | sort) \
-                      <(python3 "$HERE/../runtime/pe.py" exports "$PROXY" | sort))"
+  # Each side is read on its own and checked before the comparison. Inside the
+  # process substitution a failed pe.py contributes an empty list, `comm -23`
+  # then reports nothing missing, and "no symbols missing" is indistinguishable
+  # from "the proxy forwards everything" -- the exact reading that would wave a
+  # broken dxgi through into a bundle every bottle shares. Every installer in
+  # runtime/ already reads the two sides separately; this one did not.
+  if ! live_exports="$(python3 "$HERE/../runtime/pe.py" exports "$LIVE" 2>&1)"; then
+    echo "error: cannot read the exports of $LIVE" >&2
+    echo "$live_exports" | sed 's/^/       /' >&2
+    exit 1
+  fi
+  if ! proxy_exports="$(python3 "$HERE/../runtime/pe.py" exports "$PROXY" 2>&1)"; then
+    echo "error: cannot read the exports of $PROXY" >&2
+    echo "$proxy_exports" | sed 's/^/       /' >&2
+    exit 1
+  fi
+  missing="$(comm -23 <(printf '%s\n' "$live_exports" | sort) \
+                      <(printf '%s\n' "$proxy_exports" | sort))"
   if [ -n "$missing" ]; then
     echo "error: this GPTK's dxgi exports symbols the proxy does not:" >&2
     echo "$missing" | sed 's/^/       /' >&2
@@ -98,7 +114,14 @@ case "$MODE" in
   fi
 
   echo "[2/3] moving Apple's aside as dxgi_real.dll"
-  mv -f "$LIVE" "$REAL"
+  # This file is `set -uo pipefail` and not `-e`: without the guard below a
+  # failed move falls straight through to the copy, leaving our proxy in place
+  # with Apple's dxgi gone -- the state this script calls `broken` and that
+  # --restore refuses to touch.
+  mv -f "$LIVE" "$REAL" || {
+    echo "error: could not move Apple's dxgi.dll aside" >&2
+    exit 1
+  }
 
   echo "[3/3] installing the guard"
   cp "$PROXY" "$LIVE"

@@ -6,24 +6,40 @@ two was a magenta screen.
 
 | | |
 | --- | --- |
-| Video | Delivered as I420, 1920×1080, 25 fps. The source codec is not known — see below |
+| Video | **WMV2** (Windows Media Video 8) 1920×1080 25 fps, audio **WMA v2** (`0x0161`) 48 kHz, in ASF |
 | Played by | `IMFSourceReader` on Media Foundation, presented through the D3D11 video processor |
 | Symptom | Crashes when the first video starts |
 | Fix | Software decode, and the frame converted and written into the game's own target |
 | Backend | **D3DMetal**, D3D11 |
-| CrossOver | `crossover-preview-arm64-20260821`. Not tried on 26.3 |
+| Needs | `libgstlibav` staged, and the `dinput8` override below — without the override nothing else matters |
+| CrossOver | 26.3 and `crossover-preview-arm64-20260821` |
 
-## What the source codec is, which was never established
+## What the source codec is
 
-The video lives inside the game's own `.arc` archives — there are no loose
-files, and a signature scan over three gigabytes of each turned up no ASF, MP4,
-Matroska, USM or Bink header, so they are compressed or encrypted.
+The video lives inside the game's own `.arc` archives, and an early scan for a
+container signature found nothing — which is why this page said for a while that
+the codec could not be established. The scan was looking one header too early.
+Each `.arc` opens with a 16-byte `MARC` header, and the ASF object GUID
+`3026B275-8E66-CF11-A6D9-00AA0062CE6C` begins immediately after it:
 
-The reader reports its stream 0 **native** type as `I420` with
-`MF_MT_COMPRESSED` at 0, which means whatever decoded it did so upstream of the
-source reader and the compressed format never became visible. So this page says
-what the frames arrive as, not what they are stored as. Nothing in the fix
-depends on the difference, but it is a gap rather than a finding.
+    00000000  4d 41 52 43 01 00 00 00  18 00 00 00 00 00 00 00  |MARC............|
+    00000010  30 26 b2 75 8e 66 cf 11  a6 d9 00 aa 00 62 ce 6c  |0&.u.f.......b.l|
+
+Parsing the ASF stream properties from there names both streams outright:
+
+    VIDEO  1920x1080  biCompression = WMV2      Windows Media Video 8
+    AUDIO  formatTag = 0x0161  2ch  48000 Hz    Windows Media Audio v2
+
+That is more than a label. CrossOver ships `libgstasf`, so the container opens on
+its own; it ships no decoder for either stream. Both come from the staged
+`libgstlibav`, whose FFmpeg carries `wmv2` and `wmav2`. NieR belongs with the
+titles that need the staged decoder, and was filed with the ones that need
+nothing.
+
+The reader still reports its stream 0 native type as `I420` with
+`MF_MT_COMPRESSED` at 0, and that reading was correct: by the time the source
+reader is visible, the decode has already happened. It is what made the stored
+format look unknowable from inside the process. It was knowable from outside it.
 
 ## Two faults, and the second was made by the first
 
@@ -86,11 +102,42 @@ This is also the only fix here that writes a registry key. Wine implements
 `dinput8` and prefers its own build, so a DLL beside the game would never load.
 The override says otherwise and is scoped to this executable alone.
 
+## Why it looked like a 26.3 failure, and was not
+
+This title was recorded as Preview-only, with the note that 26.3 "crashes before
+the fix loads". Half of that was right: the fix was not loading. The half that
+was wrong is which side the fault was on.
+
+The bridge needs two things, and the installer checks one. The proxy and the
+copied original sit beside the game; the registry override below is what makes
+Wine prefer them over its own `dinput8`. In the bottles these runs used, the
+override was **absent** — and `--status` answered `installed` anyway, because it
+looks at the two files and never at the registry. So every 26.3 attempt measured
+the game running with no fix at all, and dying at the attract video is exactly
+what an unfixed build should do.
+
+The override had been there once: the magenta test and the luma readings on this
+page could only have come from the bridge executing. It went missing at some
+point between then and now, and nothing reported that it had.
+
+With the key written, on stock 26.3 and D3DMetal 4.0b2, the bridge loads and
+produces the same log every other title does:
+
+    SetCurrentMediaType asked 'NV12' -> 0x00000000
+    ReadSample [#300] -> 0x00000000, sample delivered (0 empty so far)
+    frame [#120] luma: average 16, range 14..238 over 32400 samples
+    200 frames in 200 blits: convert 2.06 ms each, upload 0.21 ms each
+
+A luma range of 14..238 is a picture. The title is supported on 26.3.
+
+The finding worth carrying past this game: a fix can report itself applied while
+the one thing that makes it run is missing, and every measurement taken after
+that is a measurement of the wrong subject. Kingdom Hearts rides the same
+carrier and depends on the same key.
+
 ## Caveats
 
 Do not use this on a game with anti-cheat. The fix patches a running process.
-
-Measured on Preview and D3DMetal only. 26.3 has not been tried.
 
 The frame is copied at the target's own size with no scaling: both surfaces are
 1920×1080 here. A clip presented into a differently sized target would need
