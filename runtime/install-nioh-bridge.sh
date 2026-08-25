@@ -19,6 +19,22 @@
 # runtime/stage-codecs.sh; the bridge alone will not make the video appear.
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
+#
+# WHAT THIS SCRIPT IS FOR, in a form something other than a human can read.
+#
+# One MGVF-GAME line per title this installer serves -- four of them serve more
+# than one, which the manifest could not express before. The fields are the
+# game's name, its shipping executable, and where the carrier sits relative to
+# the game folder (empty means the folder itself). The executable is the
+# identity: there is no AppID anywhere in this project, and the folder name is
+# Valve's to choose -- Mortal Shell 2 installs into one called Sparta.
+#
+# runtime/check-builds.sh checks these against the app's own table, so the two
+# copies cannot drift apart in silence.
+#
+# MGVF-GAME: Nioh | nioh.exe | 
+# MGVF-GAME: Nioh 2 | nioh2.exe | 
+# MGVF-WHY: Cutscene runs with sound and no picture. Needs the staged decoder as well: its video is WMV3.
 
 set -euo pipefail
 

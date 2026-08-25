@@ -153,6 +153,64 @@ for dll in "$HERE"/*.dll; do
   fi
 done
 
+# The MGVF-GAME lines against the app's own table.
+#
+# Those lines are a second copy of something the app already knows -- name,
+# executable, which installer -- and this repository has been bitten by a second
+# copy often enough to know what happens next. They exist because the fixes
+# tarball ships the installers and not the app, so a launcher applying one fix
+# to one game has nowhere else to read it from. This is what makes the copy
+# safe: it is compared on every run, and the executable is the identity, since
+# there is no AppID anywhere here and the folder name is Valve's to choose.
+echo
+decl_drift=0
+if python3 - "$ROOT" <<'PY'
+import re, sys, pathlib
+root = pathlib.Path(sys.argv[1])
+sw = (root/"app/MacGameVideoFix.swift").read_text()
+
+def switch(anchor):
+    i = sw.index(anchor); body = sw[i:sw.index("\n    }", i)]
+    out = {}
+    for m in re.finditer(r'case ([^:\n]+):\s*return ("([^"]*)"|nil)', body):
+        for c in m.group(1).split(","):
+            out[c.strip().lstrip(".")] = m.group(3)
+    d = re.search(r'default:\s*return "([^"]*)"', body)
+    return out, (d.group(1) if d else None)
+
+names, _ = switch("    var name: String {")
+exes, _ = switch("    var executable: String? {")
+inst, di = switch("    var installer: String {")
+# A case with no executable is a catch-all, not a title a launcher can match.
+want = {names[c]: (exes[c], inst.get(c, di)) for c in names if exes.get(c)}
+
+got = {}
+for f in sorted((root/"runtime").glob("install-*.sh")):
+    for line in re.findall(r'^# MGVF-GAME: (.+)$', f.read_text(), re.M):
+        parts = [x.strip() for x in line.split("|")]
+        name, exe = parts[0], (parts[1] if len(parts) > 1 else "")
+        got[name] = (exe, f.name)
+
+bad = []
+for name, (exe, script) in sorted(got.items()):
+    if name not in want:
+        bad.append(f"declared but not a game the app knows: {name}"); continue
+    if want[name] != (exe, script):
+        bad.append(f"{name}: declares {exe} via {script}, app says {want[name][0]} via {want[name][1]}")
+for name in sorted(want):
+    if name not in got:
+        bad.append(f"the app has {name} and no installer declares it")
+
+for b in bad:
+    print(f"  declaration: {b}")
+sys.exit(1 if bad else 0)
+PY
+then
+  echo "  declarations: every MGVF-GAME line agrees with the app's table"
+else
+  decl_drift=1
+fi
+
 # The other copy of every one of these: the app runs the bundle's, not these.
 echo
 bundle="$ROOT/app/MacGameVideoFix.app/Contents/Resources"
@@ -171,5 +229,6 @@ fi
 
 echo
 echo "  $checked rebuilt and compared, $drifted drifted, $missing_source unattributed"
-[ "$drifted" = 0 ] && [ "$bundle_drift" = 0 ] && [ "$missing_source" = 0 ] || exit 1
+[ "$drifted" = 0 ] && [ "$bundle_drift" = 0 ] && [ "$missing_source" = 0 ] \
+  && [ "$decl_drift" = 0 ] || exit 1
 exit 0

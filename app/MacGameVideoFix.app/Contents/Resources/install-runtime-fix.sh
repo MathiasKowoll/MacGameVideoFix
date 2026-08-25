@@ -20,6 +20,24 @@
 #
 # Part of MacGameVideoFix — https://github.com/MathiasKowoll/MacGameVideoFix
 # SPDX-License-Identifier: GPL-3.0-or-later
+#
+# WHAT THIS SCRIPT IS FOR, in a form something other than a human can read.
+#
+# One MGVF-GAME line per title this installer serves -- four of them serve more
+# than one, which the manifest could not express before. The fields are the
+# game's name, its shipping executable, and where the carrier sits relative to
+# the game folder (empty means the folder itself). The executable is the
+# identity: there is no AppID anywhere in this project, and the folder name is
+# Valve's to choose -- Mortal Shell 2 installs into one called Sparta.
+#
+# runtime/check-builds.sh checks these against the app's own table, so the two
+# copies cannot drift apart in silence.
+#
+# MGVF-GAME: Mortal Shell 2 | MortalShell2-Win64-Shipping.exe | Engine/Binaries/ThirdParty/Ogg/Win64
+# MGVF-GAME: Beast of Reincarnation | BeastOfReincarnation-Win64-Shipping.exe | Engine/Binaries/ThirdParty/Ogg/Win64
+# MGVF-GAME: Life is Strange: Reunion | Iris-Win64-Shipping.exe | Engine/Binaries/ThirdParty/Ogg/Win64
+# MGVF-GAME: Life is Strange: Double Exposure | Chronos-Win64-Shipping.exe | Engine/Binaries/ThirdParty/Ogg/Win64
+# MGVF-WHY: Unreal Engine 5 titles that crash on the first cutscene. The carrier sits under a compiler-named subfolder, which the script discovers rather than assumes.
 
 set -euo pipefail
 
