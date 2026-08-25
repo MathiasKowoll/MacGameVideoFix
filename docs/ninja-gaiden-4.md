@@ -43,7 +43,14 @@ Four parts, all inside this project's existing mechanism.
    friends is symlinked into the CrossOver being staged for, so exactly one
    GStreamer core ends up in the process.
 
-2. **Answer the VP9 MFT gate in memory**, with `NG4_ANSWER_MFT=1`. Before it
+2. All of it ships in `runtime/install-ng4-fix.sh` and rides `dstorage.dll`, which
+the title imports directly and which has nothing to do with video. The two
+levers are **on by default in the carrier**; they were environment variables for
+a while and a bottle rewrite took them away seven times in one afternoon, each
+time looking like a broken codec rather than a lost setting. `"0"` still turns
+either of them off for a measurement.
+
+**Answer the VP9 MFT gate in memory**, with `NG4_ANSWER_MFT=1`. Before it
    will play anything the game calls
    `MFTEnumEx(MFT_CATEGORY_VIDEO_DECODER, input={Video,VP90})` and counts the
    result. Zero is fatal and immediate: it puts up *"Windows is missing required

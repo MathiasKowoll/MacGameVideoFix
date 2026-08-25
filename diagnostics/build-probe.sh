@@ -62,7 +62,10 @@ DEF="$OUT/$STEM.def"
 count=$(($(wc -l < "$DEF") - 2))
 [ "$count" -gt 0 ] || { echo "error: $REF exports nothing to forward" >&2; exit 1; }
 
-"$CC" -shared -O2 -o "$OUT/$NAME" "$HERE/$SOURCE" "$DEF" \
+# Extra flags, for building the same source as something other than a probe.
+# ng4-observe.c compiles either as a diagnostic -- every lever off unless asked
+# for -- or, with -DNG4_FIX, as the shipped repair with them on by default.
+"$CC" -shared -O2 ${CFLAGS_EXTRA:-} -o "$OUT/$NAME" "$HERE/$SOURCE" "$DEF" \
   -lmfuuid -lole32 -luuid -lkernel32 -static-libgcc
 
 echo "built $OUT/$NAME"

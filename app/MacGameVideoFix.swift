@@ -174,6 +174,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
     case kingdomHearts1525
     case tmntSplinteredFate
     case tormentedSouls2
+    case ninjaGaiden4
 
     var id: String { rawValue }
 
@@ -195,6 +196,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .kingdomHearts1525: return "KINGDOM HEARTS HD 1.5+2.5 ReMIX"
         case .tmntSplinteredFate: return "TMNT: Splintered Fate"
         case .tormentedSouls2:    return "Tormented Souls 2"
+        case .ninjaGaiden4:       return "NINJA GAIDEN 4"
         }
     }
 
@@ -215,6 +217,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
              .kingdomHearts1525: return "Cutscene runs with sound, picture solid green"
         case .tmntSplinteredFate: return "Opens a window, then closes silently"
         case .tormentedSouls2:    return "Fatal error before the first frame"
+        case .ninjaGaiden4:       return "Says the VP9 codec is missing, then exits"
         }
     }
 
@@ -238,6 +241,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .kingdomHearts28:   return "KINGDOM HEARTS Dream Drop Distance.exe"
         case .kingdomHearts1525: return "KINGDOM HEARTS HD 1.5+2.5 Launcher.exe"
         case .tmntSplinteredFate: return "TMNTSF.exe"
+        case .ninjaGaiden4:       return "NINJAGAIDEN4-Steam.exe"
         case .tormentedSouls2:    return "TormentedSouls2.exe"
         }
     }
@@ -254,6 +258,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
             return "the folder holding TMNTSF.exe"
         case .tormentedSouls2:
             return "the folder holding TormentedSouls2.exe"
+        case .ninjaGaiden4:
+            return "the folder holding NINJAGAIDEN4-Steam.exe"
         default:               return "the game folder, the one with Engine inside"
         }
     }
@@ -280,6 +286,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
             return "…/steamapps/common/Teenage Mutant Ninja Turtles Splintered Fate"
         case .tormentedSouls2:
             return "…/steamapps/common/Tormented Souls 2"
+        case .ninjaGaiden4:
+            return "…/steamapps/common/NINJAGAIDEN4"
         }
     }
 
@@ -291,6 +299,10 @@ enum SupportedGame: String, CaseIterable, Identifiable {
              .kingdomHearts28, .kingdomHearts1525:   return [.videoBridge]
         case .tmntSplinteredFate,
              .tormentedSouls2:                      return [.guardCall]
+        // Not a bridge and not a guard: this one answers a gate the game asks
+        // before it will open anything, and sends decoding to software. The
+        // frames it then gets are ordinary.
+        case .ninjaGaiden4:                        return [.videoBridge]
         default:                                 return [.runtime]
         }
     }
@@ -326,6 +338,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
          * management library the game imports, and the guard that saves it is
          * the one about 16:9. */
         case .tormentedSouls2: return "install-tormented-fix.sh"
+        case .ninjaGaiden4:    return "install-ng4-fix.sh"
         default:               return "install-runtime-fix.sh"
         }
     }

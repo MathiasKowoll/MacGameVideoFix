@@ -47,6 +47,15 @@ the CrossOver being staged for, so exactly one GStreamer core is in the process.
 The dependency walk is seeded from every staged plugin rather than one, because
 Matroska wants `libz`, `libbz2` and `libgstriff` where libav wants FFmpeg.
 
+All four are what the app installs and configures; none of them is a setting to
+remember. That last part was learned the hard way: for a while the two runtime
+levers lived only as environment variables in a bottle's configuration, and
+CrossOver rewrites that file often enough that they vanished **seven times in one
+afternoon** -- each time surfacing as the game's own "the VP9 codec is not
+installed" dialog, which looks like a broken install rather than a lost setting.
+They are now the default inside the carrier, and the variables remain only as a
+way to switch them **off** for a measurement.
+
 **The MFT gate, answered in memory.** Before opening anything the game calls
 `MFTEnumEx(MFT_CATEGORY_VIDEO_DECODER, input={Video,VP90})` and counts what comes
 back. Zero is fatal and immediate -- that is the dialog, and the game exits

@@ -3192,14 +3192,38 @@ static DWORD WINAPI worker(LPVOID unused)
     (void)unused;
     {
         char v[8] = {0};
+#ifdef NG4_FIX
+        /* Built as the shipped fix rather than as a probe.
+         *
+         * The two levers this title needs are on unless something turns them
+         * off, which is the opposite of the diagnostic build and is the whole
+         * difference between a repair and an experiment. A fix that only works
+         * when somebody has set two environment variables is not a fix: it is a
+         * configuration that a bottle rewrite silently undoes -- and CrossOver
+         * rewrites bottle configuration often enough that this was observed
+         * seven times in one afternoon, each time surfacing as the game's own
+         * "the VP9 codec is not installed" dialog.
+         *
+         * Both remain overridable, with "0", so a future measurement can still
+         * take either of them away without a rebuild. */
+        refuse_d3d_manager = TRUE;
+        answer_mft_gate = TRUE;
+        if (GetEnvironmentVariableA("BEAST_REFUSE_D3D_MANAGER", v, sizeof(v)) && v[0] == '0')
+            refuse_d3d_manager = FALSE;
+        v[0] = 0;
+        if (GetEnvironmentVariableA("NG4_ANSWER_MFT", v, sizeof(v)) && v[0] == '0')
+            answer_mft_gate = FALSE;
+        v[0] = 0;
+#else
         if (GetEnvironmentVariableA("BEAST_REFUSE_D3D_MANAGER", v, sizeof(v)) && v[0] == '1')
             refuse_d3d_manager = TRUE;
         v[0] = 0;
-        if (GetEnvironmentVariableA("BEAST_FORCE_NV12", v, sizeof(v)) && v[0] == '1')
-            restore_nv12 = TRUE;
-        v[0] = 0;
         if (GetEnvironmentVariableA("NG4_ANSWER_MFT", v, sizeof(v)) && v[0] == '1')
             answer_mft_gate = TRUE;
+        v[0] = 0;
+#endif
+        if (GetEnvironmentVariableA("BEAST_FORCE_NV12", v, sizeof(v)) && v[0] == '1')
+            restore_nv12 = TRUE;
         v[0] = 0;
         if (GetEnvironmentVariableA("NG4_PATCH_D3D12", v, sizeof(v)) && v[0] == '1')
             patch_d3d12 = TRUE;

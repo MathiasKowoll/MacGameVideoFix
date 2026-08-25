@@ -32,6 +32,10 @@
 		<data>
 		vV4G+uN8fVDqDeAlEf5EwflS5P4=
 		</data>
+		<key>Resources/dstorage-ng4.dll</key>
+		<data>
+		rWfsSQE6LpSkOou0QJJkZOKNBfk=
+		</data>
 		<key>Resources/fmod-tmnt.dll</key>
 		<data>
 		1vtE5KJt+lvm7Kl3Bz1p/w6c5BE=
@@ -43,6 +47,10 @@
 		<key>Resources/install-kh-bridge.sh</key>
 		<data>
 		uXJxdr4cmLcUnaHVlNSSriqzgts=
+		</data>
+		<key>Resources/install-ng4-fix.sh</key>
+		<data>
+		KlcIwwTcj1bqIyDSqBdzQMTVxg0=
 		</data>
 		<key>Resources/install-nier-bridge.sh</key>
 		<data>
@@ -148,6 +156,13 @@
 			NjlIOmE9erUsEq0Hv0u4mFm82xFNaaQYI8pv18ncwNc=
 			</data>
 		</dict>
+		<key>Resources/dstorage-ng4.dll</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			N/uBaP95Cl1VPnvNpC/NOD3xb1wtQPKx8unJCwKT6wc=
+			</data>
+		</dict>
 		<key>Resources/fmod-tmnt.dll</key>
 		<dict>
 			<key>hash2</key>
@@ -167,6 +182,13 @@
 			<key>hash2</key>
 			<data>
 			jMMEROKAOjRuwIQrh4gxX7iFjt6lp68QVgpF61bYlOM=
+			</data>
+		</dict>
+		<key>Resources/install-ng4-fix.sh</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			dwFUNGjv2JJvtx3COlEKhpT6/zJX5sr5X9wYrE/vIzE=
 			</data>
 		</dict>
 		<key>Resources/install-nier-bridge.sh</key>
