@@ -1119,6 +1119,9 @@ final class Runner: ObservableObject {
 
     /// What the whole interface reads. Views never touch `Codecs` for this.
     @Published var codecs: [Codecs.BottleState] = []
+    /// Each installed CrossOver's Game Porting Toolkit, refreshed with the
+    /// bottles rather than read from a view body.
+    @Published var toolkits: [String: Graphics.State] = [:]
 
     /// True when something on this Mac is in a state that crashes on the first
     /// cutscene, or is about to. What puts the banner on screen at launch.
@@ -1179,6 +1182,9 @@ final class Runner: ObservableObject {
         // and a Mac with no bottles at all is exactly the one where the sheet
         // would otherwise scan /Applications from inside a view update.
         _ = Codecs.installedEngines()
+        // The toolkits go with them: same cost, same lifetime, and the sheet
+        // shows both in one row.
+        toolkits = Graphics.survey()
     }
 
     /// Clears everything a codec action sets, on every way out of it --
@@ -2769,6 +2775,349 @@ enum Codecs {
 }
 
 
+// MARK: - What the wizard decided
+
+/// The four answers the first run collects, kept so it never has to ask twice.
+///
+/// Each one is applied as it is given rather than all of them at the end. A
+/// wizard that collects four choices and then acts has one failure mode with
+/// four possible causes; applying as it goes means the step that failed is the
+/// step you are looking at.
+///
+/// Stored in `UserDefaults` as four plain values rather than an encoded blob, so
+/// that a decision can be read, changed or cleared on its own -- changing the
+/// bottle should not invalidate the answer about where the games are.
+struct Setup {
+    /// The CrossOver version, as recorded in a bottle's `"Version"`.
+    var crossover: String?
+    /// The bottle's folder name.
+    var bottle: String?
+    /// Whether to stage this project's GStreamer codec into that bottle.
+    var codec: Bool
+    /// Whether to put the newest Game Porting Toolkit into that CrossOver.
+    var toolkit: Bool
+    /// Where the games live, as a path.
+    var games: String?
+    /// Whether the wizard has been run to the end at least once.
+    var done: Bool
+
+    private static let d = UserDefaults.standard
+    private static let key = "setup."
+
+    static func load() -> Setup {
+        Setup(crossover: d.string(forKey: key + "crossover"),
+              bottle:    d.string(forKey: key + "bottle"),
+              codec:     d.object(forKey: key + "codec") as? Bool ?? true,
+              toolkit:   d.object(forKey: key + "toolkit") as? Bool ?? false,
+              games:     d.string(forKey: key + "games"),
+              done:      d.bool(forKey: key + "done"))
+    }
+
+    /// Written after every step, not at the end. Somebody who closes the window
+    /// half way through has still told us three things.
+    func save() {
+        let d = Setup.d, key = Setup.key
+        d.set(crossover, forKey: key + "crossover")
+        d.set(bottle,    forKey: key + "bottle")
+        d.set(codec,     forKey: key + "codec")
+        d.set(toolkit,   forKey: key + "toolkit")
+        d.set(games,     forKey: key + "games")
+        d.set(done,      forKey: key + "done")
+    }
+
+    /// Forget everything, so the wizard runs again from the first question.
+    static func clear() {
+        for k in ["crossover", "bottle", "codec", "toolkit", "games", "done"] {
+            d.removeObject(forKey: key + k)
+        }
+    }
+
+    /// Whether a stored answer still describes this Mac.
+    ///
+    /// A bottle can be deleted and a CrossOver uninstalled between runs, and an
+    /// answer that names something gone is worse than no answer: it makes the
+    /// app act on a bottle that is not there and report a failure the user
+    /// cannot place.
+    var stale: [String] {
+        var gone: [String] = []
+        if let c = crossover, Codecs.installedEngines()[c] == nil {
+            gone.append("CrossOver \(c) is no longer installed")
+        }
+        if let b = bottle {
+            let url = Bottle.root.appendingPathComponent(b)
+            if !FileManager.default.fileExists(atPath: url.path) {
+                gone.append("the bottle \(b) no longer exists")
+            }
+        }
+        if let g = games, !FileManager.default.fileExists(atPath: g) {
+            gone.append("the games folder is no longer at \(g)")
+        }
+        return gone
+    }
+}
+
+
+// MARK: - Which Game Porting Toolkit a bottle runs on
+
+/// Some CrossOver builds ship more than one generation of Apple's Game Porting
+/// Toolkit and pick one silently.
+///
+/// CrossOver Preview 27.0 carries `lib/apple_gptk` (D3DMetal 4.0b2) and
+/// `lib/apple_gptk3` (D3DMetal 3.0), and uses the first unless
+/// `CX_GRAPHICS_BACKEND_VERSION` says otherwise. CrossOver 26.3 ships one tree,
+/// and its D3DMetal is byte-identical to Preview's `apple_gptk3`.
+///
+/// That matters twice over. It is a real choice worth having -- 4.0b2 is the
+/// newer renderer and implements an NvAPI surface 3.0 stubs out entirely -- and
+/// it is a trap for anyone comparing two CrossOver builds, because moving a
+/// bottle between engines changes the graphics stack as well as Wine, with
+/// nothing in any configuration file to say so. An afternoon of measurements
+/// went into that gap before it was noticed.
+///
+/// Nothing here is written unless the user asks for it. A bottle with no key
+/// keeps whatever its engine defaults to, which is what every existing bottle
+/// already does.
+enum Graphics {
+    /// One generation a given engine can offer.
+    struct Tree: Identifiable, Hashable {
+        /// The value for `CX_GRAPHICS_BACKEND_VERSION`, or nil for "whatever
+        /// this engine defaults to" -- which is the absence of the key, not a
+        /// value of its own.
+        let token: String?
+        /// What the framework calls itself, e.g. "4.0b2". Read from the bundle
+        /// rather than guessed from the directory name, because the directory
+        /// only carries a generation digit and the user is choosing a renderer.
+        let version: String
+        var id: String { token ?? "default" }
+        var label: String {
+            token == nil ? "Default for this CrossOver (D3DMetal \(version))"
+                         : "D3DMetal \(version)"
+        }
+    }
+
+    /// The generations an engine actually carries, newest-default first.
+    ///
+    /// Returns fewer than two entries for an engine that ships one tree, and
+    /// the caller is expected to offer no choice at all in that case: a picker
+    /// with one option is a picker that misleads.
+    static func trees(forEngine version: String) -> [Tree] {
+        guard let bundle = Codecs.installedEngines()[version] else { return [] }
+        let lib = bundle.appendingPathComponent("Contents/SharedSupport/CrossOver/lib")
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: lib.path) else { return [] }
+
+        func d3dMetalVersion(_ dir: String) -> String? {
+            let plist = lib.appendingPathComponent(
+                "\(dir)/external/D3DMetal.framework/Versions/A/Resources/Info.plist")
+            return (NSDictionary(contentsOf: plist))?["CFBundleShortVersionString"] as? String
+        }
+
+        var found: [Tree] = []
+        // The unsuffixed directory is the engine's own default. Its key is
+        // absent rather than empty: writing an empty value is not the same as
+        // writing nothing, and only the absence reproduces stock behaviour.
+        if names.contains("apple_gptk"), let v = d3dMetalVersion("apple_gptk") {
+            found.append(Tree(token: nil, version: v))
+        }
+        // Everything else is apple_gptk<digit>, selected by that digit.
+        for name in names.sorted() where name.hasPrefix("apple_gptk") && name != "apple_gptk" {
+            let token = String(name.dropFirst("apple_gptk".count))
+            guard !token.isEmpty, token.allSatisfy(\.isNumber),
+                  let v = d3dMetalVersion(name) else { continue }
+            found.append(Tree(token: token, version: v))
+        }
+        return found
+    }
+
+    /// What a bottle currently asks for, or nil when it asks for nothing.
+    static func selection(inBottle bottle: URL) -> String? {
+        let conf = bottle.appendingPathComponent("cxbottle.conf")
+        guard let text = try? String(contentsOf: conf, encoding: .utf8) else { return nil }
+        return Codecs.value(of: "CX_GRAPHICS_BACKEND_VERSION", in: text)
+    }
+
+    /// Where an engine keeps its toolkit. 26.3 uses lib64, Preview uses lib,
+    /// and the difference is not documented anywhere -- it is read off the two
+    /// installs.
+    private static func gptkRoot(_ bundle: URL) -> URL? {
+        let base = bundle.appendingPathComponent("Contents/SharedSupport/CrossOver")
+        for dir in ["lib64", "lib"] {
+            let candidate = base.appendingPathComponent("\(dir)/apple_gptk")
+            if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+        }
+        return nil
+    }
+
+    /// The toolkit an engine is running right now, by what the framework calls
+    /// itself rather than by which directory it sits in -- after a swap those
+    /// two disagree, and the version is the thing that matters.
+    static func installedVersion(inEngine version: String) -> String? {
+        guard let bundle = Codecs.installedEngines()[version],
+              let root = gptkRoot(bundle) else { return nil }
+        let plist = root.appendingPathComponent(
+            "external/D3DMetal.framework/Versions/A/Resources/Info.plist")
+        return (NSDictionary(contentsOf: plist))?["CFBundleShortVersionString"] as? String
+    }
+
+    /// Whether this engine is running a toolkit that was put there rather than
+    /// shipped with it -- which is exactly when there is something to undo.
+    static func isSwapped(engine version: String) -> Bool {
+        guard let bundle = Codecs.installedEngines()[version],
+              let root = gptkRoot(bundle) else { return false }
+        return FileManager.default.fileExists(
+            atPath: root.deletingLastPathComponent()
+                        .appendingPathComponent("apple_gptk_bak").path)
+    }
+
+    /// Put another installed engine's toolkit into this one.
+    ///
+    /// CrossOver 26.3 hardcodes its toolkit path and knows no
+    /// `CX_GRAPHICS_BACKEND_VERSION`, so the only way to run it on a newer
+    /// D3DMetal is to put one there. Which is worth doing: at least two titles
+    /// here need 4.0b2 and were written off as "Preview only" when what they
+    /// actually needed was the newer renderer.
+    ///
+    /// The existing tree is **moved**, not deleted, and moved beside itself so
+    /// the restore cannot depend on anything outside the bundle. The engine
+    /// looks for `apple_gptk` and nothing else, so the saved copy is inert
+    /// where it lies.
+    ///
+    /// **Nothing is re-signed.** Replacing files inside the bundle leaves its
+    /// seal invalid and CrossOver runs anyway; running `codesign` over it to
+    /// tidy that up corrupts the application and costs a reinstall. That was
+    /// learned the expensive way and is why this function ends at the copy.
+    static func swapToolkit(inEngine version: String, from source: String) -> String? {
+        let fm = FileManager.default
+        guard let target = Codecs.installedEngines()[version],
+              let targetRoot = gptkRoot(target) else {
+            return "CrossOver \(version) has no toolkit directory to replace."
+        }
+        guard let src = Codecs.installedEngines()[source],
+              let srcRoot = gptkRoot(src) else {
+            return "CrossOver \(source) has no toolkit to copy."
+        }
+        let saved = targetRoot.deletingLastPathComponent()
+                              .appendingPathComponent("apple_gptk_bak")
+        // A second swap must not bury the engine's own toolkit under a copy of
+        // somebody else's -- the first saved tree is the only one that can
+        // restore the install, so it is never overwritten.
+        if !fm.fileExists(atPath: saved.path) {
+            do { try fm.moveItem(at: targetRoot, to: saved) }
+            catch { return "Could not set the existing toolkit aside: \(error.localizedDescription)" }
+        } else {
+            try? fm.removeItem(at: targetRoot)
+        }
+        do { try fm.copyItem(at: srcRoot, to: targetRoot) }
+        catch {
+            // Put it back rather than leaving the engine with no toolkit at all.
+            try? fm.moveItem(at: saved, to: targetRoot)
+            return "Could not copy the toolkit in: \(error.localizedDescription)"
+        }
+        return nil
+    }
+
+    /// What one engine's toolkit looks like right now.
+    struct State: Equatable {
+        /// What the framework calls itself, e.g. "4.0b2".
+        let running: String
+        /// Whether it is one somebody put there, rather than the one shipped.
+        let swapped: Bool
+    }
+
+    /// Every installed engine's toolkit, read once.
+    ///
+    /// Read here rather than from a view body. Each answer costs a directory
+    /// probe and a plist parse, and a SwiftUI body runs whenever anything near
+    /// it changes -- the same reason `Codecs.installedEngines()` is warmed in
+    /// `refreshCodecs` instead of being left to whoever asks first.
+    static func survey() -> [String: State] {
+        var out: [String: State] = [:]
+        for (engine, _) in Codecs.installedEngines() {
+            guard let v = installedVersion(inEngine: engine) else { continue }
+            out[engine] = State(running: v, swapped: isSwapped(engine: engine))
+        }
+        return out
+    }
+
+    /// The newest toolkit on this Mac, and which engine carries it.
+    ///
+    /// Deliberately only one: the point is not a museum of toolkits but the
+    /// ability to run an older CrossOver on the current renderer. Whichever
+    /// installed engine ships the highest D3DMetal is the source, and there is
+    /// no choice to make beyond taking it or leaving it.
+    ///
+    /// Versions sort as "4.0b2" > "3.0" by a plain numeric-then-textual compare,
+    /// which is enough for the shapes Apple has actually shipped and is checked
+    /// against the two on this machine rather than assumed for all future ones.
+    static func newestToolkit() -> (version: String, engine: String)? {
+        var best: (version: String, engine: String)?
+        for (engine, _) in Codecs.installedEngines() {
+            guard let v = installedVersion(inEngine: engine) else { continue }
+            // Skip an engine that is only "newest" because somebody already
+            // copied a toolkit into it -- the source has to be an engine
+            // running what it shipped with.
+            if isSwapped(engine: engine) { continue }
+            if best == nil || v.compare(best!.version, options: .numeric) == .orderedDescending {
+                best = (v, engine)
+            }
+        }
+        return best
+    }
+
+    /// Give the engine its own toolkit back.
+    static func restoreToolkit(inEngine version: String) -> String? {
+        let fm = FileManager.default
+        guard let bundle = Codecs.installedEngines()[version],
+              let root = gptkRoot(bundle) else {
+            return "CrossOver \(version) has no toolkit directory."
+        }
+        let saved = root.deletingLastPathComponent().appendingPathComponent("apple_gptk_bak")
+        guard fm.fileExists(atPath: saved.path) else {
+            return "CrossOver \(version) is running its own toolkit already."
+        }
+        try? fm.removeItem(at: root)
+        do { try fm.moveItem(at: saved, to: root) }
+        catch { return "Could not restore the toolkit: \(error.localizedDescription)" }
+        return nil
+    }
+
+    /// Choose a generation for one bottle. Passing nil restores the engine's
+    /// default by removing the key.
+    ///
+    /// Strip-then-insert, for the same reason `Codecs.configure` does it: a key
+    /// left outside `[EnvironmentVariables]`, or written twice, gives a config
+    /// file two answers and therefore none.
+    static func select(_ token: String?, inBottle bottle: URL) -> String? {
+        let conf = bottle.appendingPathComponent("cxbottle.conf")
+        guard var text = try? String(contentsOf: conf, encoding: .utf8) else {
+            return "Cannot read \(bottle.lastPathComponent)'s configuration."
+        }
+        text = text.replacingOccurrences(
+            of: #"(?m)^[ \t]*"CX_GRAPHICS_BACKEND_VERSION"[^\n]*\n?"#,
+            with: "", options: .regularExpression)
+
+        if let token {
+            if text.range(of: "[EnvironmentVariables]") == nil {
+                if !text.isEmpty, !text.hasSuffix("\n") { text += "\n" }
+                text += "\n[EnvironmentVariables]\n"
+            }
+            guard let range = text.range(of: "[EnvironmentVariables]") else {
+                return "\(bottle.lastPathComponent)'s configuration could not be updated."
+            }
+            text.replaceSubrange(range,
+                with: "[EnvironmentVariables]\n\"CX_GRAPHICS_BACKEND_VERSION\" = \"\(token)\"")
+        }
+
+        do {
+            try text.write(to: conf, atomically: true, encoding: .utf8)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+}
+
+
 // MARK: - Bottles, and the per-game Engine.ini
 
 /// A CrossOver bottle, and the Unreal config that has to live inside one.
@@ -3308,12 +3657,285 @@ enum SteamLibrary {
 
 // MARK: - Interface
 
+/// The first run, as four questions.
+///
+/// Everything the app needs to work is a property of this Mac rather than of a
+/// game: which CrossOver, which bottle, what to put in it, and where the games
+/// are. Asked once, in that order, because each answer narrows the next -- the
+/// bottles worth offering are the ones that run under the chosen CrossOver.
+///
+/// Every answer is applied when it is given and written down immediately, so
+/// closing the window half way loses nothing and re-opening it resumes rather
+/// than restarts. Changing one answer later does not require giving the other
+/// three again.
+struct SetupWizard: View {
+    @ObservedObject var runner: Runner
+    @Binding var setup: Setup
+    /// Which question is on screen, 1...4.
+    @State var step: Int = 1
+    static let stepNames = ["CrossOver", "Bottle", "Drivers", "Games"]
+    @State private var note: String?
+    let done: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Set up").font(.system(size: 17, weight: .semibold))
+            // The four steps, named and always on screen.
+            //
+            // "Step 2 of 4" says where you are and not what is coming, which is
+            // the half that decides whether somebody feels lost: the questions
+            // are short and the worry is what else will be asked before this
+            // ends. Naming all four answers that once.
+            HStack(spacing: 6) {
+                ForEach(Array(Self.stepNames.enumerated()), id: \.offset) { i, name in
+                    let n = i + 1
+                    HStack(spacing: 4) {
+                        Image(systemName: n < step ? "checkmark.circle.fill"
+                                                   : (n == step ? "circle.inset.filled" : "circle"))
+                            .font(.caption2)
+                            .foregroundStyle(n < step ? Color.green
+                                             : (n == step ? Color.accentColor : Color.secondary))
+                        Text(name)
+                            .font(.caption)
+                            .foregroundStyle(n == step ? .primary : .secondary)
+                    }
+                    if n < Self.stepNames.count {
+                        Text("›").font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(.bottom, 2)
+
+            switch step {
+            case 1: stepCrossOver
+            case 2: stepBottle
+            case 3: stepDrivers
+            default: stepGames
+            }
+
+            if let note {
+                Text(note).font(.caption)
+                    .foregroundStyle(note.hasPrefix("Could not") || note.hasPrefix("No ")
+                                     ? .orange : .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+            Divider()
+            HStack(spacing: 12) {
+                if step > 1 {
+                    Button("Back") { note = nil; step -= 1 }.disabled(runner.busy)
+                }
+                // Two different things, and conflating them is why wizards get
+                // reputations: coming back to change one answer is the common
+                // case and keeps the rest, while starting over is for a machine
+                // that has changed underneath -- a rebuilt bottle, a reinstalled
+                // CrossOver -- where the old answers are the problem.
+                //
+                // Nothing already applied is undone. Forgetting an answer is not
+                // the same as unstaging a codec or putting a toolkit back, and a
+                // button that quietly did the second would be unforgivable.
+                Button("Start over") {
+                    Setup.clear()
+                    setup = Setup.load()
+                    note = "Answers forgotten. Nothing already installed was changed."
+                    step = 1
+                }
+                .disabled(runner.busy)
+                .help("Forget the stored answers and ask all four again. Anything "
+                      + "already staged or installed stays as it is.")
+                Spacer()
+                // Skippable throughout. Somebody who has already set their
+                // machine up by hand should not have to answer four questions to
+                // reach the window, and the answers they skip stay empty rather
+                // than being guessed.
+                Button("Skip") { finish() }.disabled(runner.busy)
+                Button(step < 4 ? "Continue" : "Finish") { advance() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(runner.busy || !canAdvance)
+            }
+        }
+        .padding(22)
+        .frame(width: 560, height: 420)
+    }
+
+    // MARK: the four questions
+
+    private var stepCrossOver: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Which CrossOver do you run games with?")
+                .font(.callout)
+            Text("A bottle runs under one CrossOver and needs everything staged for "
+                 + "that same one, so this answer decides the rest.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Picker("", selection: $setup.crossover) {
+                Text("Choose…").tag(String?.none)
+                ForEach(engines, id: \.self) { v in
+                    Text(Codecs.label(v)).tag(String?.some(v))
+                }
+            }
+            .labelsHidden().frame(maxWidth: 380)
+            if engines.isEmpty {
+                Text("No CrossOver found in /Applications or ~/Applications.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private var stepBottle: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Which bottle do you play in?").font(.callout)
+            Text("Only bottles recorded as running under the CrossOver you picked are "
+                 + "offered. A bottle opened by a newer CrossOver records that newer "
+                 + "one and will not start under an older.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Picker("", selection: $setup.bottle) {
+                Text("Choose…").tag(String?.none)
+                ForEach(bottles, id: \.self) { b in Text(b).tag(String?.some(b)) }
+            }
+            .labelsHidden().frame(maxWidth: 380)
+            if bottles.isEmpty {
+                Text("No bottle on this Mac records CrossOver \(setup.crossover ?? "?"). "
+                     + "Open one with it once, or go back and pick another CrossOver.")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var stepDrivers: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("What should go into it?").font(.callout)
+            Toggle(isOn: $setup.codec) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Video codec").font(.callout)
+                    Text("Decoders and a Matroska demuxer CrossOver does not ship. "
+                         + "Borrowed from a GStreamer you installed; no CrossOver file "
+                         + "is touched.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if let engine = setup.crossover, let newest = Graphics.newestToolkit(),
+               let running = runner.toolkits[engine]?.running, newest.version != running {
+                Toggle(isOn: $setup.toolkit) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Game Porting Toolkit \(newest.version)").font(.callout)
+                        Text("This CrossOver runs D3DMetal \(running). Some titles need the "
+                             + "newer one and some need the older, so this changes every "
+                             + "game under this CrossOver. The one it ships with is kept "
+                             + "and can be put back.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+    }
+
+    private var stepGames: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Where are the games?").font(.callout)
+            Text("A Steam library, or any folder holding game folders. It can live on "
+                 + "an external disk.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Text(setup.games ?? "Not chosen")
+                    .font(.caption).foregroundStyle(setup.games == nil ? .secondary : .primary)
+                    .lineLimit(1).truncationMode(.head)
+                Spacer()
+                Button("Choose…") { pickGames() }
+            }
+            .frame(maxWidth: 460)
+        }
+    }
+
+    // MARK: what each answer narrows
+
+    private var engines: [String] {
+        Codecs.installedEngines().keys.sorted { $0.compare($1, options: .numeric) == .orderedDescending }
+    }
+
+    /// Bottles recorded as running under the chosen engine.
+    private var bottles: [String] {
+        guard let want = setup.crossover else { return [] }
+        return runner.codecs.filter { $0.runs == want }.map(\.name).sorted()
+    }
+
+    private var canAdvance: Bool {
+        switch step {
+        case 1: return setup.crossover != nil
+        case 2: return setup.bottle != nil
+        case 3: return true
+        default: return setup.games != nil
+        }
+    }
+
+    // MARK: applying, one step at a time
+
+    private func advance() {
+        note = nil
+        setup.save()
+        if step == 3 { applyDrivers() }
+        if step == 4 { finish(); return }
+        step += 1
+    }
+
+    private func applyDrivers() {
+        if setup.toolkit, let engine = setup.crossover, let newest = Graphics.newestToolkit() {
+            if let bad = Graphics.swapToolkit(inEngine: engine, from: newest.engine) {
+                note = bad
+            } else {
+                note = "CrossOver \(engine) now runs D3DMetal \(newest.version)."
+            }
+            runner.refreshCodecs()
+        }
+        if setup.codec, let name = setup.bottle, let engine = setup.crossover,
+           let bottle = runner.codecs.first(where: { $0.name == name }) {
+            // Goes through the same path the Bottles sheet uses, so the wizard
+            // cannot drift from it: stage for that engine, then point the bottle
+            // at what was staged.
+            runner.selectEngine(engine, forBottle: bottle)
+        }
+    }
+
+    private func pickGames() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the folder your games are in."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        setup.games = url.path
+        setup.save()
+        // Bulk mode first: chooseLibrary fills in the library that mode works
+        // on, and setting it without entering the mode leaves the answer stored
+        // where nothing on the main window looks for it -- so the wizard asked
+        // for the folder and the window then asked again.
+        if !runner.bulk { runner.enterBulk() }
+        runner.chooseLibrary(url)
+    }
+
+    private func finish() {
+        setup.done = true
+        setup.save()
+        done()
+    }
+}
+
+
 struct ContentView: View {
     @State private var confirming = false
     @State private var installAction = true
     /// The bottle list. A sheet rather than a disclosure, because it is a list
     /// with a control on every row and nothing else on screen relates to it.
     @State private var showingBottles = false
+    /// The four answers from the first run, and whether it is on screen.
+    @State private var setup = Setup.load()
+    @State private var showingWizard = false
     @StateObject private var runner = Runner()
     @State private var dropping = false
     /// Its own flag rather than sharing `dropping`. The two zones never appear
@@ -3341,6 +3963,18 @@ struct ContentView: View {
             // right, and a step that vanishes when it passes leaves the other one
             // looking like the whole story.
             gstreamerBanner
+            // Beside the GStreamer one, and for the same reason: these are the
+            // two things that have to be right before any game is touched, and
+            // a checklist that hides half of itself once you are past the
+            // landing screen is not a checklist.
+            //
+            // It used to live only in the non-bulk branch below. That was
+            // survivable while the landing screen was where everyone started;
+            // it stopped being so when a saved library began putting people
+            // straight into bulk mode, which skipped the branch and took the
+            // banner -- and with it the way into staging a codec for another
+            // bottle -- off the screen entirely.
+            codecBanner
             // The drift banner used to sit here. It explained, in three lines,
             // that a bottle was set to a CrossOver it had not been opened with
             // and what would happen if it were -- accurate, and written for
@@ -3376,15 +4010,35 @@ struct ContentView: View {
                 // property of a CrossOver and a bottle, not of anything scanned,
                 // and this is the screen that is about setting the machine up.
                 allAtOnce
-                codecBanner
             }
             if runner.busy || runner.progress > 0 { progressBar }
             logView
         }
         .padding(22)
         .frame(minWidth: 700, minHeight: 720)
-        .sheet(isPresented: $showingBottles) { bottlesSheet }
-        .task { runner.refreshCodecs() }
+        .sheet(isPresented: $showingBottles) { bottlesSheet.onAppear { prefillPickers() } }
+        .sheet(isPresented: $showingWizard) {
+            SetupWizard(runner: runner, setup: $setup) { showingWizard = false }
+        }
+        .task {
+            runner.refreshCodecs()
+            // Opened after the survey, not before: the wizard's second question
+            // lists bottles, and asking it against an empty survey offers none.
+            //
+            // Shown again when a stored answer has gone stale -- a bottle
+            // deleted or a CrossOver uninstalled between runs -- because acting
+            // on a name that no longer exists fails in a way nobody can place.
+            if !setup.done || !setup.stale.isEmpty {
+                showingWizard = true
+            } else if let path = setup.games,
+                      FileManager.default.fileExists(atPath: path) {
+                // A folder already given is a question already answered. Landing
+                // on "point at your library" after the wizard asked for it is
+                // the app forgetting between one screen and the next.
+                runner.enterBulk()
+                runner.chooseLibrary(URL(fileURLWithPath: path))
+            }
+        }
         // Switching CrossOver means leaving this window and coming back to it,
         // and the survey used to run only at launch -- so the app answered the
         // user's question with whatever had been true before they left, and the
@@ -3419,6 +4073,15 @@ struct ContentView: View {
                 .font(.caption)
                 .help("See which CrossOver each bottle runs under, choose one yourself, "
                       + "or point every bottle at the CrossOver you have switched to.")
+            // The way back into the four questions. Changing CrossOver or bottle
+            // is the normal reason to want them again, and both are answers the
+            // wizard already holds -- so it resumes with them filled in rather
+            // than starting from nothing.
+            Button("Set up…") { showingWizard = true }
+                .buttonStyle(.link)
+                .font(.caption)
+                .help("Go through the setup questions again. Your previous answers are "
+                      + "kept, so changing one does not mean giving the others again.")
             Spacer()
         }
     }
@@ -3596,6 +4259,61 @@ struct ContentView: View {
                         .labelsHidden()
                         .disabled(runner.busy || engineVersions.isEmpty)
                     }
+                    // The toolkit an engine is running, and the one upgrade
+                    // available for it. Engine-scoped, not bottle-scoped: 26.3
+                    // hardcodes its toolkit path, so changing it changes every
+                    // bottle that runs under that CrossOver.
+                    if let engine = pickedEngine ?? picked?.target,
+                       let toolkit = runner.toolkits[engine] {
+                        GridRow {
+                            Text("Toolkit").font(.callout)
+                            HStack(spacing: 8) {
+                                Text("D3DMetal \(toolkit.running)").font(.callout)
+                                if toolkit.swapped {
+                                    Button("Restore") {
+                                        toolkitNote = Graphics.restoreToolkit(inEngine: engine)
+                                            ?? "Put back the toolkit CrossOver \(engine) ships with."
+                                        // The row reads a published survey, so
+                                        // it keeps showing the old version until
+                                        // the survey is taken again.
+                                        runner.refreshCodecs()
+                                    }
+                                    .disabled(runner.busy)
+                                    .help("Move the engine's own toolkit back out of "
+                                          + "apple_gptk_bak. Nothing is re-signed.")
+                                } else if let newest = Graphics.newestToolkit(),
+                                          newest.version != toolkit.running {
+                                    Button("Upgrade to \(newest.version)") {
+                                        toolkitNote = Graphics.swapToolkit(
+                                            inEngine: engine, from: newest.engine)
+                                            ?? "CrossOver \(engine) now runs D3DMetal "
+                                             + "\(newest.version). Close any running game first."
+                                        runner.refreshCodecs()
+                                    }
+                                    .disabled(runner.busy)
+                                    .help("Copy the newest Game Porting Toolkit on this Mac "
+                                          + "into this CrossOver. The one it ships with is "
+                                          + "moved aside inside the bundle, not deleted, and "
+                                          + "nothing is re-signed.")
+                                }
+                            }
+                        }
+                    }
+                    // Only for an engine that actually ships more than one. A
+                    // picker with a single option tells the user there is a
+                    // decision to make where there is none.
+                    if graphicsTrees.count > 1 {
+                        GridRow {
+                            Text("Graphics").font(.callout)
+                            Picker("", selection: $pickedGraphics) {
+                                ForEach(graphicsTrees) { tree in
+                                    Text(tree.label).tag(tree.id)
+                                }
+                            }
+                            .labelsHidden()
+                            .disabled(runner.busy)
+                        }
+                    }
                 }
                 .frame(maxWidth: 440)
 
@@ -3654,6 +4372,14 @@ struct ContentView: View {
             HStack(spacing: 12) {
                 Button("Apply") {
                     guard let picked, let engine = pickedEngine else { return }
+                    // Written before the codec is wired, so that a bottle which
+                    // ends up correctly pointed is also running the renderer the
+                    // user asked for -- rather than the two settling one run
+                    // apart from each other.
+                    if graphicsTrees.count > 1 {
+                        let token = pickedGraphics == "default" ? nil : pickedGraphics
+                        _ = Graphics.select(token, inBottle: picked.url)
+                    }
                     runner.selectEngine(engine, forBottle: picked)
                 }
                 .keyboardShortcut(.defaultAction)
@@ -3704,6 +4430,12 @@ struct ContentView: View {
         .padding(20)
         .frame(width: 560)
         .onChange(of: runner.busy) { _, busy in if !busy { pending = nil } }
+        // Show what the chosen bottle already asks for, rather than defaulting
+        // the control to "default". A picker that misreports the current state
+        // turns Apply into a change nobody intended to make.
+        .onChange(of: pickedBottle) { _, _ in
+            pickedGraphics = picked.flatMap { Graphics.selection(inBottle: $0.url) } ?? "default"
+        }
     }
 
     /// The bottle the pickers currently name.
@@ -3711,13 +4443,52 @@ struct ContentView: View {
         pickedBottle.flatMap { name in runner.codecs.first { $0.name == name } }
     }
 
-
     /// The pair the user is assembling: one bottle, one CrossOver. Held here
     /// rather than derived, because a half-made choice is a real state — they
     /// have picked the bottle and not yet the engine — and the Apply button has
     /// to be able to stay disabled through it.
     @State private var pickedBottle: String?
     @State private var pickedEngine: String?
+    /// Which Game Porting Toolkit generation to ask that bottle for.
+    /// "default" means write no key at all, which is not the same as writing an
+    /// empty one -- only the absence reproduces the engine's stock behaviour.
+    @State private var pickedGraphics: String = "default"
+    /// What the last toolkit action reported, shown until the next one.
+    @State private var toolkitNote: String?
+
+    /// Fill the two pickers before the sheet is looked at.
+    ///
+    /// They opened on "Choose…" every time, which reads as "nothing is set up"
+    /// on a Mac that is fully set up, and leaves every control below them --
+    /// the toolkit row included -- hidden behind a choice the user has already
+    /// made twice.
+    ///
+    /// Order of preference: what the wizard was told, then the one bottle this
+    /// app has configured, then nothing. An engine is never guessed on its own:
+    /// it comes from the bottle, because a bottle names the CrossOver it runs
+    /// under and picking any other is the mistake this sheet exists to prevent.
+    private func prefillPickers() {
+        if pickedBottle == nil {
+            let stored = Setup.load().bottle
+            pickedBottle = stored.flatMap { name in
+                runner.codecs.first { $0.name == name }?.name
+            } ?? Codecs.configured(in: runner.codecs).first?.name
+        }
+        if pickedEngine == nil {
+            pickedEngine = picked?.target ?? Setup.load().crossover
+        }
+        pickedGraphics = picked.flatMap { Graphics.selection(inBottle: $0.url) } ?? "default"
+    }
+
+    /// The toolkit generations the chosen engine carries.
+    ///
+    /// Keyed on what the user picked in the CrossOver row rather than on what
+    /// the bottle records, because the point of that row is to say which engine
+    /// the bottle will actually be run under.
+    private var graphicsTrees: [Graphics.Tree] {
+        guard let engine = pickedEngine ?? picked?.target else { return [] }
+        return Graphics.trees(forEngine: engine)
+    }
 
 
     /// The selection the user just made, held until the work applying it ends.

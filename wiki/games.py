@@ -100,12 +100,37 @@ GAMES = [
      "The same staged VC-1 codec, unchanged",
      "D3DMetal", "12", "26.3 and Preview",
      "Fixed", "RE-Engine-VC1"),
+    ("NINJA GAIDEN 4", "Koei Tecmo, in-house",
+     "Says the VP9 codec is missing, then exits",
+     "Staged Matroska demuxer, and the MFT gate answered",
+     "D3DMetal", "12", "26.3 only -- Preview stalls before video",
+     "Fixed", "Ninja-Gaiden-4"),
 ]
 
-HEAD = ("| Game | Engine | Symptom | Fix | Backend | DX | CrossOver | Status |\n"
-        "| --- | --- | --- | --- | --- | --- | --- | --- |\n")
+HEAD = ("| Game | Engine | Symptom | Fix | Backend | DX | GPTK | CrossOver | Status |\n"
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
 
 NOTE = """
+**The GPTK column is the one that decides, and it is newer than this table.**
+Apple's Game Porting Toolkit is what actually draws these games, and CrossOver
+ships it inside the bundle rather than as something you pick: 26.3 carries
+D3DMetal 3.0, Preview 27.0 carries 4.0b2 and uses it unless
+`CX_GRAPHICS_BACKEND_VERSION` says otherwise. So "this only works on Preview"
+has, for at least two titles here, meant "this needs the newer toolkit" and
+nothing about Wine at all.
+
+The two rows in bold are where that stops being a footnote. **NINJA GAIDEN 4
+runs on 3.0 and stalls on 4.0b2. Life is Strange runs on 4.0b2 and crashes on
+3.0.** Opposite requirements, same machine, so there is no single toolkit that
+serves the whole table and no version of CrossOver that is simply "better".
+Both were measured by moving the toolkit under a fixed CrossOver, which is the
+only way to separate the two.
+
+Everything else in the column is derived rather than freshly run: a title
+measured on 26.3 was measured on 3.0, and one measured on Preview was measured
+on 4.0b2. A cell naming one generation means the other was never tried, not that
+it fails.
+
 **Backend and DX are not preferences, they are requirements.** Persona 5
 Strikers, Nioh and Nioh 2 only work on DXMT: all three need a shared D3D9
 surface handle, and DXMT implements sharing where D3DMetal has none to build on.
@@ -148,12 +173,20 @@ opened.** That was not true when this project started, and it is the single
 biggest thing that changed. The qualifier is the whole of what remains, and it
 is a container question rather than a codec one.
 
-Both builds decode VP9 the same way; what only Preview can do is open a WebM,
-which is the whole of the difference. DYNASTY WARRIORS ships 355 `.webm`
-cutscenes and cannot get as far as decoding on stable, while Mortal Shell 2
-ships the same codec in `.mp4`, which both builds handle. The plugin-by-plugin
-comparison the conclusion rests on is in [Findings](Findings.md), under *The
-container, not the codec*.
+Both builds decode VP9 the same way, and for a long time what only Preview could
+do was **open** a WebM -- which was the whole of the difference. DYNASTY WARRIORS
+ships 355 `.webm` cutscenes and could not get as far as decoding on stable, while
+Mortal Shell 2 ships the same codec in `.mp4`, which both builds handle. The
+plugin-by-plugin comparison that conclusion rested on is in
+[Findings](Findings.md), under *The container, not the codec*.
+
+**That gap is now closed, and it was a missing plugin rather than a missing
+engine.** Neither build ships a Matroska demuxer; Preview reached WebM by another
+route. Staging `libgstmatroska` beside the decoder gives stable one too, and
+NINJA GAIDEN 4 is where it was measured -- it plays on stock 26.3, video and all,
+with nothing patched into CrossOver. What this means for the titles above has not
+been re-measured: their rows still say what each was measured on, and DYNASTY
+WARRIORS in particular deserves a fresh run on 26.3 before its row changes.
 
 Three titles need a codec no CrossOver ships -- VC-1 for Persona 5 Strikers,
 WMV3 for Nioh and Nioh 2 -- and it is staged beside the game rather than patched
@@ -170,9 +203,45 @@ page comes from a measurement on an installed copy.
 BEGIN, END = "<!-- games:begin -->", "<!-- games:end -->"
 
 
+def gptk(cx):
+    """Which Game Porting Toolkit a title was measured against.
+
+    Not a new measurement: every run recorded in the CrossOver cell already
+    carries this, unnamed. CrossOver 26.3 ships one toolkit and it is D3DMetal
+    3.0; CrossOver Preview 27.0 ships two and defaults to 4.0b2. So a row
+    measured on 26.3 was measured on 3.0, a row measured on Preview was measured
+    on 4.0b2, and the pair says which generations a title is known to run on.
+
+    Read as positive evidence only. "not tried on 26.3" contains the string
+    "26.3" and means the opposite of having been measured there -- an earlier
+    version of this function counted fifteen such rows as tested on both.
+
+    Titles where both toolkits were tried deliberately are in GPTK_OVERRIDE.
+    """
+    if cx in GPTK_OVERRIDE:
+        return GPTK_OVERRIDE[cx]
+    denied = ("not tried on 26.3", "crashes on 26.3", "26.3 crashes")
+    on263 = "26.3" in cx and not any(d in cx for d in denied)
+    onprev = "Preview" in cx and "Preview stalls" not in cx \
+             and "Preview not yet measured" not in cx
+    if on263 and onprev: return "3.0 and 4.0b2"
+    if on263:            return "3.0"
+    if onprev:           return "4.0b2"
+    return "not measured"
+
+
+# Titles where both toolkits were tried on purpose. Keyed on the CrossOver cell
+# so the two never drift apart.
+GPTK_OVERRIDE = {
+    "26.3 only -- Preview stalls before video": "**3.0 only** -- 4.0b2 stalls it",
+    "Preview -- 26.3 crashes":                  "**4.0b2 only** -- 3.0 crashes it",
+}
+
+
 def table():
     rows = "".join(
-        f"| [{g}]({page}.md) | {engine} | {sym} | {fix} | {backend} | {dx} | {cx} | {status} |\n"
+        f"| [{g}]({page}.md) | {engine} | {sym} | {fix} | {backend} | {dx} "
+        f"| {gptk(cx)} | {cx} | {status} |\n"
         for g, engine, sym, fix, backend, dx, cx, status, page in GAMES)
     return f"{BEGIN}\n\n{HEAD}{rows}{NOTE}\n{END}"
 

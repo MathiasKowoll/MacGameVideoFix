@@ -1090,6 +1090,46 @@ CrossOver, is where WebM stops.
 **Do not use any of this on a game with anti-cheat.** It patches a running
 process, which is exactly the behaviour anti-cheat exists to stop.
 
+## Compatibility runs backwards
+
+The pattern across everything measured here: **newer games translate better, and
+the further back a game reaches, the further the compatibility.** A modern title
+is built against the APIs and code-generation patterns the translation layer was
+tuned for; an older one leans on techniques that were ordinary in its year and
+that Rosetta 2, D3DMetal or Wine now serve poorly or not at all. The defect is
+usually not in the game — it is in how far the stack has to reach back to meet
+it.
+
+Two games sit outside the fixable set for exactly this reason, and both are
+written up separately because a bug filed against the translation layer for
+either would be misdirected:
+
+- **[Mirror's Edge Catalyst](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/mirrors-edge-catalyst.md)** (2016). A
+  Denuvo-style wrapper decrypts the game into memory and executes it there —
+  self-modifying code on W+X pages. That was ordinary anti-tamper for its year
+  and it runs on native x86 (Proton). Under Rosetta 2 the same pattern spins in a
+  jit-write-fault re-translation loop against Wine's W^X refusal
+  (`Disallowing WX permissions`), burns a core for ~21 s and aborts before the
+  graphics device exists. The licence is valid and verifies; nothing graphical
+  is reached. Jedi Survivor (2023, same publisher, same family of protection)
+  reaches the graphics stage on this machine — the newer wrapper generates its
+  code in a way the layer tolerates.
+- **[Watch Dogs 2](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/watch-dogs-2.md)** (2016). Not a translation defect at
+  all — an expired Ubisoft Connect session that the embedded Chromium client
+  cannot re-establish — but the same generational shape: an older online-DRM
+  launcher whose login view no longer draws under Wine's CEF.
+
+The reach is not only the year. It is 32/64-bit crossings (Mirror's Edge launches
+a 32-bit Qt4 activation helper from a 64-bit game via an inherited handle), dead
+publisher servers, and DRM wrappers built before Apple Silicon existed. None of
+these is something a bottle can reconfigure; each is a report for whoever
+maintains Rosetta or CrossOver.
+
+The forward-looking correlation matters when picking what to take on next: a
+2024 title that merely stutters or shows a black cutscene is usually within reach
+of a runtime patch, while a pre-2018 title that dies at startup is more often
+blocked by something structural in how its era's code meets the translator.
+
 ## Things that do not work
 
 Documented so nobody spends an evening rediscovering them.

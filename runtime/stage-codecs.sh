@@ -201,8 +201,29 @@ stage_one() {
   # and the scanner never looks.
   mkdir -p "$TMP/gstreamer-1.0" "$TMP/lib"
 
-  # The plugin itself, and ffmpeg, which is the whole point of taking it.
-  cp "$FRAMEWORK/lib/gstreamer-1.0/libgstlibav.dylib" "$TMP/gstreamer-1.0/"
+  # The plugins themselves, and ffmpeg, which is the whole point of taking the
+  # first one.
+  #
+  # libgstlibav is the decoder half: VC-1, WMV3, WMA, and VP9 as avdec_vp9.
+  #
+  # libgstmatroska is the container half, and it is here because a decoder with
+  # nothing to feed it is not a repair. CrossOver ships demuxers for asf, avi,
+  # isomp4 and wav, and none for Matroska -- so a WebM reaches typefind, is
+  # correctly identified as webm, and then finds no matroskademux to hand it to.
+  # Media Foundation reports that as MF_E_UNSUPPORTED_BYTESTREAM_TYPE, which
+  # reads like a codec problem and is not one. gst-libav does not cover it:
+  # it deliberately does not register avdemux_matroska, because gst-plugins-good
+  # owns that format. Ninja Gaiden 4 is where this was measured -- its first
+  # video is a Matroska stream, and every part of the chain except the demuxer
+  # was already present.
+  PLUGINS="libgstlibav.dylib libgstmatroska.dylib"
+  for plugin in $PLUGINS; do
+    [ -f "$FRAMEWORK/lib/gstreamer-1.0/$plugin" ] || {
+      echo "  warning: $plugin not in this framework -- skipped" >&2
+      continue
+    }
+    cp "$FRAMEWORK/lib/gstreamer-1.0/$plugin" "$TMP/gstreamer-1.0/"
+  done
 
   # Everything the plugin and ffmpeg need. Names beginning libgst, libglib,
   # libgobject and friends must come from CrossOver -- taking those from the
@@ -220,7 +241,15 @@ stage_one() {
   needed() { otool -L "$1" 2>/dev/null | grep -oE '@rpath/[^ ]+\.dylib' \
                | sed 's|@rpath/||' | sort -u || true; }
 
-  pending=$(needed "$TMP/gstreamer-1.0/libgstlibav.dylib")
+  # Seed the walk from every plugin staged above, not from one of them. They do
+  # not need the same libraries -- libgstmatroska wants libz and libgstpbutils
+  # where libgstlibav wants ffmpeg -- and a walk seeded from a single plugin
+  # leaves the other one short a dependency and silently unloadable.
+  pending=""
+  for plugin in "$TMP"/gstreamer-1.0/*.dylib; do
+    [ -e "$plugin" ] || continue
+    pending="$pending $(needed "$plugin")"
+  done
   seen=""
   while [ -n "$pending" ]; do
     next=""

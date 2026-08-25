@@ -1,22 +1,32 @@
 # How the codec staging works
 
-Six of the games here need a decoder CrossOver does not ship. This is what the
-app does about it, why it is built that way, and why the obvious approach
-crashes.
+Seven of the games here need something CrossOver does not ship: six need a
+decoder, and one needs a demuxer. This is what the app does about it, why it is
+built that way, and why the obvious approach crashes.
 
 Nothing is redistributed and no CrossOver file is touched. The whole repair is a
 directory of libraries and one line in a bottle's configuration.
 
 ## What is missing
 
-CrossOver decodes VP9, H.264 and AAC on its own. It has no decoder for **VC-1**,
-**WMV3** or **WMA** — and Persona 5 Strikers, Nioh, Nioh 2, Devil May Cry 5,
-RESIDENT EVIL 2 and RESIDENT EVIL 3 all play video in one of those.
+Two different things, and telling them apart is most of the work.
+
+**A decoder.** CrossOver decodes VP9, H.264 and AAC on its own. It has no decoder
+for **VC-1**, **WMV3** or **WMA** — and Persona 5 Strikers, Nioh, Nioh 2, Devil
+May Cry 5, RESIDENT EVIL 2 and RESIDENT EVIL 3 all play video in one of those.
+
+**A demuxer.** CrossOver ships demuxers for ASF, AVI, ISO-MP4 and WAV, and none
+for **Matroska** — so a WebM is recognised by typefind and then has nothing to
+hand off to. Media Foundation reports that as
+`MF_E_UNSUPPORTED_BYTESTREAM_TYPE`, which reads like a missing codec and is not
+one. NINJA GAIDEN 4 is where this was measured: its decoder was present the whole
+time. `gst-libav` does not cover it, because it deliberately leaves Matroska to
+gst-plugins-good.
 
 The official [GStreamer.framework](https://gstreamer.freedesktop.org/download/)
-for macOS has them, in `libgstlibav` — GStreamer's binding to FFmpeg. The
-decoder exists on the machine already. The problem is getting it in front of
-CrossOver.
+for macOS has both, in `libgstlibav` — GStreamer's binding to FFmpeg — and in
+`libgstmatroska`. They exist on the machine already. The problem is getting them
+in front of CrossOver.
 
 ## Why loading it in place crashes
 
@@ -40,8 +50,9 @@ Give the plugin a directory of its own, and be deliberate about which
 dependencies come from where.
 
     gst-codecs/<CrossOver>/x86_64/
-      gstreamer-1.0/libgstlibav.dylib     the decoder
-      lib/                                 what it needs
+      gstreamer-1.0/libgstlibav.dylib     the decoders
+      gstreamer-1.0/libgstmatroska.dylib  the demuxer
+      lib/                                 what they need
       .built-against                       the engine version it was built for
       .complete                            written last, when it really is
 
@@ -50,9 +61,10 @@ includes `@loader_path/../lib` — so `lib/` beside it is where everything is
 found. That directory is filled two different ways, and the difference is the
 whole design:
 
-- **FFmpeg is copied.** Seven real files — `libavcodec`, `libavformat`,
-  `libavfilter`, `libavutil`, `libswresample` and their support. CrossOver does
-  not have these at all, which is the entire reason for doing any of this.
+- **FFmpeg is copied**, and so are the few libraries Matroska needs. Nine real
+  files — `libavcodec`, `libavformat`, `libavfilter`, `libavutil`,
+  `libswresample` and their support, plus `libz` and `libbz2`. CrossOver does not
+  have these at all, which is the entire reason for doing any of this.
 - **GStreamer's own core is symlinked into CrossOver.** Twelve links, pointing
   at that CrossOver's `libgstreamer`, `libglib`, `libgobject`, `libgstvideo` and
   the rest.
@@ -152,7 +164,10 @@ What it does, in order:
 5. **For each engine**, skip it if `.built-against` already records this exact
    version, unless forced. Otherwise build a fresh staging in a temporary
    directory:
-   - copy `libgstlibav.dylib` and the FFmpeg libraries it needs
+   - copy `libgstlibav.dylib` and `libgstmatroska.dylib`, and the libraries they
+     need. The dependency walk is seeded from **every** plugin staged, not from
+     one of them: the two do not want the same libraries, and a walk seeded from
+     a single plugin leaves the other short one and silently unloadable.
    - walk the plugin's dependencies and, for each one CrossOver already has,
      symlink to CrossOver's copy instead of taking the framework's
    - write `.built-against`, then `.complete` **last**, so a half-built staging
@@ -167,8 +182,8 @@ What it does, in order:
 The two counts it prints at the end of each engine are the whole design in one
 line:
 
-    ffmpeg and friends copied : 7
-    CrossOver libraries linked: 12
+    ffmpeg and friends copied : 9
+    CrossOver libraries linked: 13
 
 ## What it is not
 

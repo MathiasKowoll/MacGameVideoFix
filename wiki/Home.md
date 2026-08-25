@@ -80,26 +80,47 @@ videos".
 
 <!-- games:begin -->
 
-| Game | Engine | Symptom | Fix | Backend | DX | CrossOver | Status |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| [Mortal Shell 2](Mortal-Shell-2.md) | Unreal Engine 5.6.1 | Crash on the first cutscene | Runtime patch, 4 sites | D3DMetal | 12 | 26.3 and Preview | Fixed |
-| [Life is Strange: Reunion](Life-is-Strange-Reunion.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard | D3DMetal | 12 | Preview -- 26.3 crashes | Fixed |
-| [Life is Strange: Double Exposure](Life-is-Strange-Double-Exposure.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard, same DLL | D3DMetal | 12 | Preview -- 26.3 crashes | Fixed |
-| [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | Video bridge, D3D11 to D3D12 | D3DMetal | 12 | Preview -- crashes on 26.3 | Fixed |
-| [Beast of Reincarnation](Beast-of-Reincarnation.md) | Unreal Engine 5 | Startup video plays with sound, no picture | NV12 restored, Electra forced to software | D3DMetal | 12 | 26.3 and Preview | Fixed |
-| [Persona 5 Strikers](Persona-5-Strikers.md) | Koei Tecmo, in-house | Video never starts; sound only | Staged VC-1 codec, and a D3D9 to D3D11 bridge | **DXMT** | 11 | 26.3 and Preview | Fixed |
-| [Nioh](Nioh.md) | Koei Tecmo, in-house | Cutscene refuses to play, then crashes | Staged WMV3 codec, and the same D3D9 to D3D11 bridge | **DXMT** | 11 | Preview -- not tried on 26.3 | Fixed |
-| [Nioh 2](Nioh-2.md) | Koei Tecmo, in-house | Cutscene refuses to play, then crashes | Same codec and same bridge as Nioh, unchanged | **DXMT** | 11 | Preview -- not tried on 26.3 | Fixed |
-| [Nioh 3](Nioh-3.md) | Koei Tecmo, in-house | Failed to play movie | The DYNASTY WARRIORS bridge, unchanged | D3DMetal | 12 | Preview -- not tried on 26.3 | Fixed |
-| [Wo Long: Fallen Dynasty](Wo-Long-Fallen-Dynasty.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | The DYNASTY WARRIORS bridge, unchanged | D3DMetal | 12 | Preview -- not tried on 26.3 | Fixed |
-| [NieR Replicant ver.1.22474487139](NieR-Replicant.md) | Toylogic, in-house | Crashes when the first video starts | Software decode, and the frame written into the game's target | D3DMetal | 11 | Preview -- not tried on 26.3 | Fixed |
-| [KINGDOM HEARTS Dream Drop Distance](Kingdom-Hearts.md) | Square Enix, in-house | Cutscene runs with sound, picture solid green | Software decode, and the luma and chroma planes written into the game's own textures | D3DMetal | 11 + 12 | Preview -- not tried on 26.3 | Fixed |
-| [KINGDOM HEARTS HD 1.5+2.5 ReMIX](Kingdom-Hearts.md) | Square Enix, in-house | Cutscene runs with sound, picture solid green | The Dream Drop Distance fix, unchanged -- six executables, same route | D3DMetal | 11 + 12 | Preview -- not tried on 26.3 | Fixed |
-| [TMNT: Splintered Fate](TMNT-Splintered-Fate.md) | Rebirth, in-house | Opens a window, then closes silently | A guard on the D3D12 call that ends the process instead of failing | D3DMetal | 12 | Preview -- not tried on 26.3 | Fixed |
-| [Tormented Souls 2](Tormented-Souls-2.md) | Unreal Engine 5 | Fatal error before the first frame | 16:9 modes added to a list that offered none | D3DMetal | 12 | Preview -- not tried on 26.3 | Fixed |
-| [Devil May Cry 5](RE-Engine-VC1.md) | RE Engine | Crashes when a skill preview video plays | Staged VC-1 codec. Nothing installed beside the game | D3DMetal | 12 | 26.3 and Preview | Fixed |
-| [RESIDENT EVIL 2](RE-Engine-VC1.md) | RE Engine | Crashes when a video plays | The same staged VC-1 codec, unchanged | D3DMetal | 12 | 26.3 and Preview | Fixed |
-| [RESIDENT EVIL 3](RE-Engine-VC1.md) | RE Engine | Crashes when a video plays | The same staged VC-1 codec, unchanged | D3DMetal | 12 | 26.3 and Preview | Fixed |
+| Game | Engine | Symptom | Fix | Backend | DX | GPTK | CrossOver | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| [Mortal Shell 2](Mortal-Shell-2.md) | Unreal Engine 5.6.1 | Crash on the first cutscene | Runtime patch, 4 sites | D3DMetal | 12 | 3.0 and 4.0b2 | 26.3 and Preview | Fixed |
+| [Life is Strange: Reunion](Life-is-Strange-Reunion.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard | D3DMetal | 12 | **4.0b2 only** -- 3.0 crashes it | Preview -- 26.3 crashes | Fixed |
+| [Life is Strange: Double Exposure](Life-is-Strange-Double-Exposure.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard, same DLL | D3DMetal | 12 | **4.0b2 only** -- 3.0 crashes it | Preview -- 26.3 crashes | Fixed |
+| [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | Video bridge, D3D11 to D3D12 | D3DMetal | 12 | 4.0b2 | Preview -- crashes on 26.3 | Fixed |
+| [Beast of Reincarnation](Beast-of-Reincarnation.md) | Unreal Engine 5 | Startup video plays with sound, no picture | NV12 restored, Electra forced to software | D3DMetal | 12 | 3.0 and 4.0b2 | 26.3 and Preview | Fixed |
+| [Persona 5 Strikers](Persona-5-Strikers.md) | Koei Tecmo, in-house | Video never starts; sound only | Staged VC-1 codec, and a D3D9 to D3D11 bridge | **DXMT** | 11 | 3.0 and 4.0b2 | 26.3 and Preview | Fixed |
+| [Nioh](Nioh.md) | Koei Tecmo, in-house | Cutscene refuses to play, then crashes | Staged WMV3 codec, and the same D3D9 to D3D11 bridge | **DXMT** | 11 | 4.0b2 | Preview -- not tried on 26.3 | Fixed |
+| [Nioh 2](Nioh-2.md) | Koei Tecmo, in-house | Cutscene refuses to play, then crashes | Same codec and same bridge as Nioh, unchanged | **DXMT** | 11 | 4.0b2 | Preview -- not tried on 26.3 | Fixed |
+| [Nioh 3](Nioh-3.md) | Koei Tecmo, in-house | Failed to play movie | The DYNASTY WARRIORS bridge, unchanged | D3DMetal | 12 | 4.0b2 | Preview -- not tried on 26.3 | Fixed |
+| [Wo Long: Fallen Dynasty](Wo-Long-Fallen-Dynasty.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | The DYNASTY WARRIORS bridge, unchanged | D3DMetal | 12 | 4.0b2 | Preview -- not tried on 26.3 | Fixed |
+| [NieR Replicant ver.1.22474487139](NieR-Replicant.md) | Toylogic, in-house | Crashes when the first video starts | Software decode, and the frame written into the game's target | D3DMetal | 11 | 4.0b2 | Preview -- not tried on 26.3 | Fixed |
+| [KINGDOM HEARTS Dream Drop Distance](Kingdom-Hearts.md) | Square Enix, in-house | Cutscene runs with sound, picture solid green | Software decode, and the luma and chroma planes written into the game's own textures | D3DMetal | 11 + 12 | 4.0b2 | Preview -- not tried on 26.3 | Fixed |
+| [KINGDOM HEARTS HD 1.5+2.5 ReMIX](Kingdom-Hearts.md) | Square Enix, in-house | Cutscene runs with sound, picture solid green | The Dream Drop Distance fix, unchanged -- six executables, same route | D3DMetal | 11 + 12 | 4.0b2 | Preview -- not tried on 26.3 | Fixed |
+| [TMNT: Splintered Fate](TMNT-Splintered-Fate.md) | Rebirth, in-house | Opens a window, then closes silently | A guard on the D3D12 call that ends the process instead of failing | D3DMetal | 12 | 4.0b2 | Preview -- not tried on 26.3 | Fixed |
+| [Tormented Souls 2](Tormented-Souls-2.md) | Unreal Engine 5 | Fatal error before the first frame | 16:9 modes added to a list that offered none | D3DMetal | 12 | 4.0b2 | Preview -- not tried on 26.3 | Fixed |
+| [Devil May Cry 5](RE-Engine-VC1.md) | RE Engine | Crashes when a skill preview video plays | Staged VC-1 codec. Nothing installed beside the game | D3DMetal | 12 | 3.0 and 4.0b2 | 26.3 and Preview | Fixed |
+| [RESIDENT EVIL 2](RE-Engine-VC1.md) | RE Engine | Crashes when a video plays | The same staged VC-1 codec, unchanged | D3DMetal | 12 | 3.0 and 4.0b2 | 26.3 and Preview | Fixed |
+| [RESIDENT EVIL 3](RE-Engine-VC1.md) | RE Engine | Crashes when a video plays | The same staged VC-1 codec, unchanged | D3DMetal | 12 | 3.0 and 4.0b2 | 26.3 and Preview | Fixed |
+| [NINJA GAIDEN 4](Ninja-Gaiden-4.md) | Koei Tecmo, in-house | Says the VP9 codec is missing, then exits | Staged Matroska demuxer, and the MFT gate answered | D3DMetal | 12 | **3.0 only** -- 4.0b2 stalls it | 26.3 only -- Preview stalls before video | Fixed |
+
+**The GPTK column is the one that decides, and it is newer than this table.**
+Apple's Game Porting Toolkit is what actually draws these games, and CrossOver
+ships it inside the bundle rather than as something you pick: 26.3 carries
+D3DMetal 3.0, Preview 27.0 carries 4.0b2 and uses it unless
+`CX_GRAPHICS_BACKEND_VERSION` says otherwise. So "this only works on Preview"
+has, for at least two titles here, meant "this needs the newer toolkit" and
+nothing about Wine at all.
+
+The two rows in bold are where that stops being a footnote. **NINJA GAIDEN 4
+runs on 3.0 and stalls on 4.0b2. Life is Strange runs on 4.0b2 and crashes on
+3.0.** Opposite requirements, same machine, so there is no single toolkit that
+serves the whole table and no version of CrossOver that is simply "better".
+Both were measured by moving the toolkit under a fixed CrossOver, which is the
+only way to separate the two.
+
+Everything else in the column is derived rather than freshly run: a title
+measured on 26.3 was measured on 3.0, and one measured on Preview was measured
+on 4.0b2. A cell naming one generation means the other was never tried, not that
+it fails.
 
 **Backend and DX are not preferences, they are requirements.** Persona 5
 Strikers, Nioh and Nioh 2 only work on DXMT: all three need a shared D3D9
@@ -143,12 +164,20 @@ opened.** That was not true when this project started, and it is the single
 biggest thing that changed. The qualifier is the whole of what remains, and it
 is a container question rather than a codec one.
 
-Both builds decode VP9 the same way; what only Preview can do is open a WebM,
-which is the whole of the difference. DYNASTY WARRIORS ships 355 `.webm`
-cutscenes and cannot get as far as decoding on stable, while Mortal Shell 2
-ships the same codec in `.mp4`, which both builds handle. The plugin-by-plugin
-comparison the conclusion rests on is in [Findings](Findings.md), under *The
-container, not the codec*.
+Both builds decode VP9 the same way, and for a long time what only Preview could
+do was **open** a WebM -- which was the whole of the difference. DYNASTY WARRIORS
+ships 355 `.webm` cutscenes and could not get as far as decoding on stable, while
+Mortal Shell 2 ships the same codec in `.mp4`, which both builds handle. The
+plugin-by-plugin comparison that conclusion rested on is in
+[Findings](Findings.md), under *The container, not the codec*.
+
+**That gap is now closed, and it was a missing plugin rather than a missing
+engine.** Neither build ships a Matroska demuxer; Preview reached WebM by another
+route. Staging `libgstmatroska` beside the decoder gives stable one too, and
+NINJA GAIDEN 4 is where it was measured -- it plays on stock 26.3, video and all,
+with nothing patched into CrossOver. What this means for the titles above has not
+been re-measured: their rows still say what each was measured on, and DYNASTY
+WARRIORS in particular deserves a fresh run on 26.3 before its row changes.
 
 Three titles need a codec no CrossOver ships -- VC-1 for Persona 5 Strikers,
 WMV3 for Nioh and Nioh 2 -- and it is staged beside the game rather than patched

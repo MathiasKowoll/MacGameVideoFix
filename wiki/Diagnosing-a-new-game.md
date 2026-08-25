@@ -26,6 +26,47 @@ Given a whole library instead of one game it surveys everything under it, which
 helps when hunting for a title worth working on. The wiki still only covers
 games we deliberately took on.
 
+## A bottle is locked to one CrossOver version
+
+Before anything else, check which engine a bottle belongs to:
+
+    grep '"Version"' ~/Library/Application\ Support/CrossOver/Bottles/<name>/cxbottle.conf
+
+**A bottle recorded for an older CrossOver will not run under a newer one, and
+says nothing about it.** `wine --bottle X --cx-app ...` exits 0, prints not one
+line, and starts no process. There is no error, no dialog and no log entry. It
+reads exactly like a broken launcher script, and the temptation is to debug the
+script.
+
+So a measurement "on Preview" needs a bottle that records Preview's version, not
+a 26.3 bottle launched with Preview's `wine`. Bottles are otherwise shared
+between installs -- the engine supplies the runtime and the bottle supplies the
+prefix -- which is what makes `diagnostics/launch-with.sh` useful, and it is easy
+to over-generalise that into believing any bottle runs under any engine. It does
+not: it runs under its own version and newer-refuses-older is silent.
+
+Two consequences worth carrying:
+
+- **Keep one bottle per engine version** for anything that has to be measured on
+  both, and say which is which. Comparing "26.3 versus Preview" means two
+  bottles, and the game installed where both can see it -- a Steam library on a
+  shared volume does this without a second copy.
+**The recorded version is not stable while a CrossOver app is open.** The
+`"Version"` line gets rewritten as bottles are touched, so a value read while
+CrossOver or CrossOver Preview is running can be stale within the minute. An
+afternoon went into correcting `GST_PLUGIN_PATH` entries three times before this
+was noticed: each correction was right when made and wrong shortly after, because
+the version it was keyed to had changed underneath. Quit every CrossOver app,
+confirm no `wineserver` remains, and only then read the file and act on it.
+
+- **A bottle's `GST_PLUGIN_PATH` must match the bottle's own version.** The
+  staged codec symlinks into one specific CrossOver's GStreamer, so pointing a
+  26.3 bottle at a Preview-built tree puts two GStreamer cores in one process.
+  That failure is loud where this one is silent -- `objc: Class
+  GstCocoaApplicationDelegate is implemented in both ...` -- but the audit is
+  cheap: compare each bottle's `"Version"` against the third field of
+  `gst-codecs/.map`.
+
 ## 2. Does the crash actually apply to this build?
 
 ```

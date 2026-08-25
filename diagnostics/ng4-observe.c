@@ -1748,6 +1748,15 @@ static BOOL make_sysmem(void)
 static const GUID iid_multithread =
     { 0x9b7e4e00, 0x342c, 0x4106, { 0xa1, 0x9f, 0x4f, 0x27, 0x04, 0xf6, 0x89, 0xf0 } };
 
+/* Patching the game's own OpenSharedResource is only useful when the write path
+ * is on. It is applied unconditionally, and on 26.3 that is harmless because
+ * VirtualProtect refuses the page and the patch never lands. On CrossOver
+ * Preview the same patch DOES land, and Preview is where this title stops
+ * dead immediately afterwards -- so the one behaviour that differs between the
+ * two engines needs to be switchable before it can be ruled in or out.
+ * NG4_NO_D3D11_PATCH=1 leaves the vtable alone. */
+static BOOL no_d3d11_patch;
+
 static void *game_device, *game_context, *game_texture, *game_mt;
 static HRESULT (WINAPI *real_OpenSharedResource)(void *, HANDLE, const GUID *, void **);
 static HRESULT (WINAPI *real_D3D11CreateDevice)(void *, UINT, void *, UINT, const UINT *,
@@ -1844,8 +1853,12 @@ static HRESULT WINAPI my_D3D11CreateDevice(void *adapter, UINT type, void *sw, U
         void **vt = *(void ***)*device;
         real_OpenSharedResource = (HRESULT (WINAPI *)(void *, HANDLE, const GUID *, void **))
                                   vt[SLOT_DEV11_OPENSHARED];
-        if (!patch_slot("d3d11 OpenSharedResource", *device, SLOT_DEV11_OPENSHARED,
-                        (void *)my_OpenSharedResource, &os))
+        if (no_d3d11_patch)
+        {
+            logf_("  d3d11 OpenSharedResource: left alone (NG4_NO_D3D11_PATCH)");
+        }
+        else if (!patch_slot("d3d11 OpenSharedResource", *device, SLOT_DEV11_OPENSHARED,
+                             (void *)my_OpenSharedResource, &os))
             real_OpenSharedResource = NULL;
     }
     return hr;
@@ -3190,6 +3203,9 @@ static DWORD WINAPI worker(LPVOID unused)
         v[0] = 0;
         if (GetEnvironmentVariableA("NG4_PATCH_D3D12", v, sizeof(v)) && v[0] == '1')
             patch_d3d12 = TRUE;
+        v[0] = 0;
+        if (GetEnvironmentVariableA("NG4_NO_D3D11_PATCH", v, sizeof(v)) && v[0] == '1')
+            no_d3d11_patch = TRUE;
         v[0] = 0;
         if (GetEnvironmentVariableA("NG4_REFUSE_DSTORAGE", v, sizeof(v)) && v[0] == '1')
             refuse_dstorage_factory = TRUE;
