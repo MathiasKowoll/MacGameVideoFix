@@ -21,7 +21,10 @@
 
 set -uo pipefail
 
-BOTTLE="${1:-Steam}"
+# No default. Bottle names belong to whoever made them -- ours are not a
+# reasonable guess for anybody else's machine, and a default that happens to
+# exist would capture the wrong one without saying so.
+BOTTLE="${1:?usage: launch-and-capture.sh <bottle name or full path> [...]}"
 ENGINE="${2:-CrossOver Preview}"
 
 # The bottle by name, in whatever root holds it -- fixes are raised against

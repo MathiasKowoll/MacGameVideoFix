@@ -93,8 +93,9 @@ crossover_for_bottle() {
 
 # A bottle by name, across every root, refusing to guess.
 #
-# The name is not unique. This machine has SteamARM under CrossOver's root and
-# SteamArm under Procyon's, and macOS filesystems are case-insensitive, so a
+# The name is not unique, and it is not ours to predict: each user names their
+# own bottles. Two roots can hold one that differs only in case, and macOS
+# filesystems do not distinguish those, so a
 # first-match-wins lookup answered "Procyon's ARM bottle" with CrossOver's --
 # silently, which is the same failure that had a fix writing its override into
 # the wrong bottle and then verifying against it. An absolute path is taken as

@@ -153,6 +153,35 @@ for dll in "$HERE"/*.dll; do
   fi
 done
 
+# Nobody else's bottle names in anything we ship.
+#
+# Bottle names are made up by whoever makes the bottle: ours are not a fact
+# about anyone else's machine, and they are not ours to publish. They had leaked
+# twice -- once into the wiki, once into comments inside installers that travel
+# in the fixes bundle -- so this reads the names actually on THIS machine and
+# refuses to find them in anything that goes out.
+#
+# A bottle simply called "Steam" cannot be checked this way and is not: the word
+# appears legitimately all over a project about Steam games. Names that are
+# merely the default are not the ones that identify somebody's setup anyway.
+echo
+name_leak=0
+while IFS= read -r root; do
+  for b in "$root"/*/; do
+    [ -d "$b" ] || continue
+    n="$(basename "${b%/}")"
+    [ ${#n} -gt 5 ] || continue
+    case "$n" in Steam|steam) continue ;; esac
+    hits="$(grep -rl -- "$n" "$HERE" "$ROOT/crossover" "$ROOT/wiki" "$ROOT/README.md" 2>/dev/null \
+            | grep -v '/check-builds\.sh$' || true)"
+    [ -n "$hits" ] || continue
+    echo "  bottle name leaked: \"$n\" appears in" >&2
+    printf '%s\n' "$hits" | sed "s|$ROOT/|       |" >&2
+    name_leak=1
+  done
+done < <(. "$HERE/bottles.sh"; bottle_roots)
+[ "$name_leak" = 0 ] && echo "  no bottle name of this machine appears in anything shipped or published"
+
 # The MGVF-GAME lines against the app's own table.
 #
 # Those lines are a second copy of something the app already knows -- name,
@@ -230,5 +259,5 @@ fi
 echo
 echo "  $checked rebuilt and compared, $drifted drifted, $missing_source unattributed"
 [ "$drifted" = 0 ] && [ "$bundle_drift" = 0 ] && [ "$missing_source" = 0 ] \
-  && [ "$decl_drift" = 0 ] || exit 1
+  && [ "$decl_drift" = 0 ] && [ "$name_leak" = 0 ] || exit 1
 exit 0

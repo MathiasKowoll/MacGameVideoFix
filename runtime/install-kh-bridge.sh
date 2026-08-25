@@ -166,9 +166,9 @@ find_crossover() {
 # `wine --bottle` takes a NAME, and resolves it against that CrossOver's own
 # bottle directory -- there is no way to hand it a path. CX_BOTTLE_PATH was
 # tried and lands nowhere. So a bottle in another product's root cannot be
-# written to by name, and worse, a bottle called "Steam" in two roots collapses
+# written to by name, and worse, one name held in two roots collapses
 # onto whichever one the engine finds first: the run that exposed this wrote
-# "Steam" twice and then reported "failed: Steam" for the copy it could not
+# that name twice and then reported it as failed for the copy it could not
 # reach, which took a correctly installed game to `broken` and kept it there.
 #
 # Run a CrossOver command against a bottle identified by its PATH.
@@ -179,8 +179,8 @@ find_crossover() {
 # resolves THERE instead, silently.
 #
 # That is measured, not feared. With a stock engine and no CX_BOTTLE_PATH,
-# `--bottle SteamArm` reached ~/Library/Application Support/CrossOver/Bottles/
-# SteamARM rather than the intended bottle in another root, because macOS does
+# a bottle named in one root was reached in the other -- the two spellings
+# differed only in case -- rather than the intended one, because macOS does
 # not distinguish the case: the two registries answered differently and only
 # a key present in one of them gave it away. Writing an override that way puts
 # it in a bottle the user never plays in, and says nothing.
