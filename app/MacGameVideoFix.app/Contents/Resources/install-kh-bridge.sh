@@ -39,6 +39,18 @@
 
 set -euo pipefail
 
+# HOME is required, and its absence must not be answerable.
+#
+# Both bottle roots are built from it, and under `set -u` a missing HOME kills
+# the function that finds them -- after which --status still printed a state
+# word, reporting `broken` for a fix it had not been able to look at. A wrong
+# answer is worse than no answer, so this refuses instead.
+#
+# It goes missing in exactly one situation, and it is the situation this script
+# is heading for: an application that runs it with an explicit environment
+# dictionary rather than inheriting one.
+: "${HOME:?this needs HOME; a caller passing an explicit environment must include it}"
+
 usage() { sed -n '3,36p' "$0" >&2; exit 1; }
 [ $# -ge 1 ] || usage
 
@@ -68,7 +80,7 @@ done
 LIVE="$GAME/dinput8.dll"
 REAL="$GAME/dinput8_real.dll"
 PROXY="$HERE/dinput8-kh.dll"
-EXPORTS="$HERE/pe.py"
+EXPORTS="$HERE/pe.pl"
 MARKER='dwo-video-bridge.log'
 
 is_ours() { [ -f "$1" ] && LC_ALL=C grep -qa "$MARKER" "$1"; }
@@ -166,14 +178,29 @@ find_crossover() {
 # "Steam" twice and then reported "failed: Steam" for the copy it could not
 # reach, which took a correctly installed game to `broken` and kept it there.
 #
-# Finding those bottles is still useful -- it is how the user is told a fix is
-# not covering the bottle they actually play in. Claiming to have written to
-# them is not. They are skipped out loud.
-addressable() {
-  case "$1" in
-    "$HOME/Library/Application Support/CrossOver/Bottles"/*) return 0 ;;
-    *) return 1 ;;
-  esac
+# Run a CrossOver command against a bottle identified by its PATH.
+#
+# `wine --bottle` takes a NAME and resolves it against that CrossOver's own
+# bottle root, so a bottle living in another product's root cannot be reached
+# by name at all -- and worse, a name that also exists in the default root
+# resolves THERE instead, silently.
+#
+# That is measured, not feared. With a stock engine and no CX_BOTTLE_PATH,
+# `--bottle SteamArm` reached ~/Library/Application Support/CrossOver/Bottles/
+# SteamARM rather than the intended bottle in another root, because macOS does
+# not distinguish the case: the two registries answered differently and only
+# a key present in one of them gave it away. Writing an override that way puts
+# it in a bottle the user never plays in, and says nothing.
+#
+# CX_BOTTLE_PATH names the root explicitly, which removes the ambiguity and
+# makes every bottle addressable regardless of which product created it. The
+# check after each write still stands on its own: a write that did not land is
+# never counted, whatever the addressing did.
+wine_in_bottle() {
+  local bottle="$1" cx="$2"
+  shift 2
+  CX_BOTTLE_PATH="$(dirname "$bottle")" \
+    "$cx/bin/wine" --bottle "$(basename "$bottle")" "$@"
 }
 
 # The CrossOver that can actually open a given bottle. A bottle records the
@@ -182,9 +209,35 @@ addressable() {
 # CrossOver for the whole machine writes the keys into whichever bottles happen
 # to match and counts the rest as done.
 crossover_for_bottle() {
-  local want a ver
+  local want a ver root parent
   want="$(sed -n 's/^"Version" = "\(.*\)"$/\1/p' "$1/cxbottle.conf" 2>/dev/null | head -1)"
   [ -n "$want" ] || return 1
+  parent="$(cd "$(dirname "$1")" && pwd)"
+
+  # First pass: the engine whose OWN bottle root holds this bottle.
+  #
+  # Matching on CFBundleVersion alone is not enough, and the failure is silent.
+  # A patched copy of a CrossOver declares the same version as the original it
+  # was copied from -- this machine has three engines all declaring 27.0.0.40921
+  # -- and only the one whose etc/CrossOver.conf redirects CX_BOTTLE_PATH at a
+  # given root can open bottles there. Measured: stock Preview cannot even query
+  # HKCU\Software in a bottle under another product's root, while the patched
+  # copy writes and reads it.
+  #
+  # And the wrong engine does not fail loudly. `--bottle <name>` falls back to
+  # its own root, where a bottle of the same name may well exist and may well
+  # already hold the key -- so the write goes somewhere else and the check that
+  # follows passes against the wrong registry.
+  for a in /Applications/*.app "$HOME"/Applications/*.app; do
+    [ -x "$a/Contents/SharedSupport/CrossOver/bin/wine" ] || continue
+    root="$(sed -n 's/^"CX_BOTTLE_PATH" = "\(.*\)"$/\1/p' \
+            "$a/Contents/SharedSupport/CrossOver/etc/CrossOver.conf" 2>/dev/null | head -1)"
+    [ -n "$root" ] || continue
+    [ "${root%/}" = "$parent" ] || continue
+    printf '%s' "$a/Contents/SharedSupport/CrossOver"; return 0
+  done
+
+  # Second pass: the version, which is right for bottles in the default root.
   for a in /Applications/*.app "$HOME"/Applications/*.app; do
     [ -x "$a/Contents/SharedSupport/CrossOver/bin/wine" ] || continue
     ver="$(defaults read "$a/Contents/Info" CFBundleVersion 2>/dev/null)"
@@ -205,7 +258,7 @@ crossover_for_bottle() {
 # So the bottle is asked something that must be there. If even that fails, the
 # bottle is unreachable and is skipped rather than judged.
 reachable() {
-  "$2/bin/wine" --bottle "$(basename "$1")" --cx-app reg.exe query \
+  wine_in_bottle "$1" "$2" --cx-app reg.exe query \
     "HKEY_CURRENT_USER\\Software" >/dev/null 2>&1
 }
 
@@ -220,12 +273,11 @@ override_ok() {
   local b cx exe seen=0
   while read -r b; do
     [ -n "$b" ] || continue
-    addressable "$b" || continue
     cx="$(crossover_for_bottle "$b")" || continue
     reachable "$b" "$cx" || continue
     seen=$((seen + 1))
     for exe in "${EXE_NAMES[@]}"; do
-      "$cx/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe query \
+      wine_in_bottle "$b" "$cx" --cx-app reg.exe query \
         "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$exe\\DllOverrides" \
         /v dinput8 >/dev/null 2>&1 || return 1
     done
@@ -258,7 +310,7 @@ case "$MODE" in
     [ -n "$b" ] || continue
     CX="$(crossover_for_bottle "$b")" || continue
     for exe in "${EXE_NAMES[@]}"; do
-      "$CX/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe delete \
+      wine_in_bottle "$b" "$CX" --cx-app reg.exe delete \
         "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$exe\\DllOverrides" \
         /v dinput8 /f >/dev/null 2>&1 || true
     done
@@ -318,10 +370,10 @@ cp "$BOTTLE/drive_c/windows/system32/dinput8.dll" "$REAL" || {
 }
 
 echo "[3/4] checking the proxy forwards everything the original exports"
-if ! real_exports="$(python3 "$EXPORTS" exports "$REAL" 2>&1)"; then
+if ! real_exports="$(/usr/bin/perl "$EXPORTS" exports "$REAL" 2>&1)"; then
   echo "error: cannot read the exports of $REAL" >&2; rm -f "$REAL"; exit 1
 fi
-if ! proxy_exports="$(python3 "$EXPORTS" exports "$PROXY" 2>&1)"; then
+if ! proxy_exports="$(/usr/bin/perl "$EXPORTS" exports "$PROXY" 2>&1)"; then
   echo "error: cannot read the exports of $PROXY" >&2; rm -f "$REAL"; exit 1
 fi
 missing="$(comm -23 <(printf '%s\n' "$real_exports" | sort) \
@@ -342,11 +394,6 @@ skipped=0
 failed=0
 while read -r b; do
   [ -n "$b" ] || continue
-  addressable "$b" || {
-    echo "      skipped $(basename "$b"): it lives outside CrossOver's own bottle" >&2
-    echo "               directory, and --bottle can only name bottles there" >&2
-    skipped=$((skipped + 1)); continue
-  }
   CX="$(crossover_for_bottle "$b")" || {
     echo "      skipped $(basename "$b"): no installed CrossOver matches its engine" >&2
     skipped=$((skipped + 1)); continue
@@ -357,7 +404,7 @@ while read -r b; do
   # construction, because the `continue` below skips to the next exe.
   bad=0
   for exe in "${EXE_NAMES[@]}"; do
-    "$CX/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe add \
+    wine_in_bottle "$b" "$CX" --cx-app reg.exe add \
       "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$exe\\DllOverrides" \
       /v dinput8 /d "native,builtin" /f >/dev/null 2>&1 || {
         bad=$((bad + 1)); echo "      failed: $exe" >&2; continue
@@ -365,7 +412,7 @@ while read -r b; do
     # Ask the registry, not the file. wineserver flushes user.reg on its own
     # schedule, so a key that was just written is often not on disk yet -- and
     # reading the file makes a lazy flush look like a failed write.
-    "$CX/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe query \
+    wine_in_bottle "$b" "$CX" --cx-app reg.exe query \
       "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$exe\\DllOverrides" \
       /v dinput8 >/dev/null 2>&1 || { bad=$((bad + 1)); echo "      failed: $exe" >&2; }
   done
@@ -399,7 +446,7 @@ if [ "$wrote" = 0 ] || [ "$failed" -gt 0 ]; then
       [ -n "$b" ] || continue
       cx="$(crossover_for_bottle "$b")" || continue
       for exe in "${EXE_NAMES[@]}"; do
-        "$cx/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe delete \
+        wine_in_bottle "$b" "$cx" --cx-app reg.exe delete \
           "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$exe\\DllOverrides" \
           /v dinput8 /f >/dev/null 2>&1 || true
       done

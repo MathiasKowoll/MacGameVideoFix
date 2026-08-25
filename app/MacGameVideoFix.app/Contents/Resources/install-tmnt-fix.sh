@@ -40,7 +40,7 @@ EXE_NAME='TMNTSF.exe'
 LIVE="$GAME/fmod.dll"
 REAL="$GAME/fmod_real.dll"
 PROXY="$HERE/fmod-tmnt.dll"
-EXPORTS="$HERE/pe.py"
+EXPORTS="$HERE/pe.pl"
 # Two ways to recognise our own proxy, because one of them has already gone
 # stale once: the log path moved when rootsig-guard.c became d3d12-guards.c and
 # this string was not updated with it, which made is_ours() answer no about a
@@ -124,10 +124,10 @@ if is_ours "$LIVE"; then
 fi
 
 echo "[2/3] checking the proxy forwards everything the original exports"
-if ! real_exports="$(python3 "$EXPORTS" exports "$LIVE" 2>&1)"; then
+if ! real_exports="$(/usr/bin/perl "$EXPORTS" exports "$LIVE" 2>&1)"; then
   echo "error: cannot read the exports of $LIVE" >&2; exit 1
 fi
-if ! proxy_exports="$(python3 "$EXPORTS" exports "$PROXY" 2>&1)"; then
+if ! proxy_exports="$(/usr/bin/perl "$EXPORTS" exports "$PROXY" 2>&1)"; then
   echo "error: cannot read the exports of $PROXY" >&2; exit 1
 fi
 missing="$(comm -23 <(printf '%s\n' "$real_exports" | sort) \

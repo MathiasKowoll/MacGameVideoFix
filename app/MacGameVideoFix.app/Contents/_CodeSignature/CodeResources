@@ -42,11 +42,11 @@
 		</data>
 		<key>Resources/install-dwo-bridge.sh</key>
 		<data>
-		85wwthVELlEFCIAyfHlefB9K6n0=
+		U09M8TS5VytI/roJMxOaRlhDW34=
 		</data>
 		<key>Resources/install-kh-bridge.sh</key>
 		<data>
-		vTDMyCflxhYkxCQCgZQgXP+B3B8=
+		8tYPsiz9pnyBhECZ0GiW02Xol3c=
 		</data>
 		<key>Resources/install-ng4-fix.sh</key>
 		<data>
@@ -54,31 +54,31 @@
 		</data>
 		<key>Resources/install-nier-bridge.sh</key>
 		<data>
-		KwZnVMBUZY33GMAo5zUBx8HLlPU=
+		DLalmDyqzKVO7HoyBdNbOC5k2zk=
 		</data>
 		<key>Resources/install-nioh-bridge.sh</key>
 		<data>
-		bDZu2A7Fyif1yftwkA/AsUrsBkY=
+		OzAhaykXcTLJZKhQOPMzA+wJ+8c=
 		</data>
 		<key>Resources/install-nioh3-bridge.sh</key>
 		<data>
-		4ZS5Rtzy9IMCMPnLcn1zR0AKm9Q=
+		4q7Ai3WWt8KwUD42EUgz0JyaXcs=
 		</data>
 		<key>Resources/install-p5s-bridge.sh</key>
 		<data>
-		sd8FWZPUkeDXEbSJKnB2oeyS+eM=
+		uZxkj9CLusx4PGXdT6d6tRGyWCE=
 		</data>
 		<key>Resources/install-runtime-fix.sh</key>
 		<data>
-		GZd0Y2JouKwvkwmWlfY9rtWyJ7o=
+		4F6von4el4ByTfvvjHUrfVN5EWc=
 		</data>
 		<key>Resources/install-tmnt-fix.sh</key>
 		<data>
-		WGFK/dFZ4/fX5N5W+sKIjwfkDr8=
+		aU/gJb0xM5vUOV27Ala6oUeviXI=
 		</data>
 		<key>Resources/install-tormented-fix.sh</key>
 		<data>
-		ZIAzJWv5/OL0NLSA+aNYpqaflpM=
+		7YLPW3gOP3DU4BICA8ahVz0KlaE=
 		</data>
 		<key>Resources/libogg_64.dll</key>
 		<data>
@@ -92,9 +92,9 @@
 		<data>
 		7B46q3A8QynvQHd4WsKJ7ytL8Ig=
 		</data>
-		<key>Resources/pe.py</key>
+		<key>Resources/pe.pl</key>
 		<data>
-		MX4pwD79RmoQKdJRh4ZEG6ucsh0=
+		F2JdaPJ1fX/d3ywGrEyGK7YXFTo=
 		</data>
 		<key>Resources/stage-codecs.sh</key>
 		<data>
@@ -174,14 +174,14 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			/CFAhAcLs9JX3ylrpBKWx3mN6X0uy1nnNm4q2mUcDpc=
+			RRNO+nn2z6mKo2DFHkc0SAGv4AUoWCTdDaiVw7vw9dI=
 			</data>
 		</dict>
 		<key>Resources/install-kh-bridge.sh</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			S9X3FLBhTL86mlF601M0Mf/OTg3g8b4KbKqcsG7be5M=
+			jVbvSQ+eS1KCXa5muzaZufQOz+uGU80OEHJ215cQ0bc=
 			</data>
 		</dict>
 		<key>Resources/install-ng4-fix.sh</key>
@@ -195,49 +195,49 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			V5f4jEGkrObenjsPh+grkTRm2v2H52mB9IlCsZIxKIA=
+			rMrSYeCsWx7pKZOR4ua861Osd841mldISiyUsz6sdTY=
 			</data>
 		</dict>
 		<key>Resources/install-nioh-bridge.sh</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			ni2Y8ohSrTpN8KXJQGen0ibj9pNJaumw/FR6btI+5Mg=
+			/PGU0O+McXm8Wgna/H2MvDKLK7o/6usJTD1ffLQVtjQ=
 			</data>
 		</dict>
 		<key>Resources/install-nioh3-bridge.sh</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			msjYY2XzS9Pf7WtrOC4zok510hxWkE3/3SLN+i+abEw=
+			GuI24dQoiNq4gDg7Ntgfhc21fNqiVOR89o6VsY49pEc=
 			</data>
 		</dict>
 		<key>Resources/install-p5s-bridge.sh</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			nVsInlLqKb3/thYCqQDQJ8FjqvKAQQ6sOscnvKaQ554=
+			4EW3Fp6d58FyyDZVMB5N2q0z9xq7AhqxKm3cBnnrcKM=
 			</data>
 		</dict>
 		<key>Resources/install-runtime-fix.sh</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			ffqNPN5qUS+1Y06EkbP790HG58sFu9aLweLPnys7BA8=
+			r9gjGQGhBot5hbBulpbEH6PYtJO69GBNO2oNLmK23Go=
 			</data>
 		</dict>
 		<key>Resources/install-tmnt-fix.sh</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			9OILef1blHMHOPsI/LW9u5G4bMQPKIrmj4mu8Sr+VvM=
+			05YRrMpsG29TAGalJBF9Y93b1GHyoKpWEiVjkwMmGRM=
 			</data>
 		</dict>
 		<key>Resources/install-tormented-fix.sh</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			Cjw41Vl7kWn9DLohugBfPurPbF3VgBJfnphhc9OAQQg=
+			a50USDfHXqHpjVY/g5H8yaPdAXt9g4+AUwvreqxUV48=
 			</data>
 		</dict>
 		<key>Resources/libogg_64.dll</key>
@@ -261,11 +261,11 @@
 			qFNRMaodkTGBRI7SM0ZFkxSI9yb9Hgf4SwFrdKdLv/o=
 			</data>
 		</dict>
-		<key>Resources/pe.py</key>
+		<key>Resources/pe.pl</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			lN/FfviVbfPt4XkdIDsou6Yr10QGu4szptklayH/a98=
+			IuESnhN+eflX31flKA8QKB7e0im24nMfszNK4Qoo2og=
 			</data>
 		</dict>
 		<key>Resources/stage-codecs.sh</key>

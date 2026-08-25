@@ -25,7 +25,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PROXY="${PROXY_DLL:-$HERE/libogg_64.dll}"
-EXPORTS="$HERE/pe.py"
+EXPORTS="$HERE/pe.pl"
 
 # The proxy writes this path at runtime; finding it inside a DLL is how we tell
 # our file apart from the game's. Releases up to 3.2 wrote the other name, and
@@ -186,7 +186,7 @@ echo "[1/4] checking $(basename "$LIVE")"
   # missing, which reads exactly like "everything is forwarded" -- and the next
   # step then moves that unreadable file over the saved original. Whatever
   # $LIVE is, if its exports cannot be read it is not a DLL worth keeping.
-  if ! live_exports="$(python3 "$EXPORTS" exports "$LIVE" 2>&1)"; then
+  if ! live_exports="$(/usr/bin/perl "$EXPORTS" exports "$LIVE" 2>&1)"; then
     echo "error: cannot read the exports of $LIVE" >&2
     echo "$live_exports" | sed 's/^/       /' >&2
     if [ -f "$REAL" ] || [ -f "$LEGACY_REAL" ]; then
@@ -198,7 +198,7 @@ echo "[1/4] checking $(basename "$LIVE")"
     fi
     exit 1
   fi
-  if ! proxy_exports="$(python3 "$EXPORTS" exports "$PROXY" 2>&1)"; then
+  if ! proxy_exports="$(/usr/bin/perl "$EXPORTS" exports "$PROXY" 2>&1)"; then
     echo "error: cannot read the exports of the shipped proxy $PROXY" >&2
     echo "$proxy_exports" | sed 's/^/       /' >&2
     exit 1
