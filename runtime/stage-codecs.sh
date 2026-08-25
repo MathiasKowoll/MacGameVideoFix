@@ -28,14 +28,23 @@
 # living under an .app filename that does not say Preview.
 #
 #     runtime/stage-codecs.sh [arch] [engine version]
-#     runtime/stage-codecs.sh x86_64                   every engine installed
-#     runtime/stage-codecs.sh x86_64 26.3.0.39832      just that one
+#     runtime/stage-codecs.sh                          every engine, every arch
+#     runtime/stage-codecs.sh all 26.3.0.39832         that engine, every arch
+#     runtime/stage-codecs.sh x86_64                   one arch only
+#
+# BOTH ARCHITECTURES, IN ONE PASS. CrossOver 27 runs ARM Windows binaries as
+# well as x86_64 ones, and a bottle says which it is: `"WineArch" = "arm64"`
+# against `"win64"`. They do not share a plugin directory, and staging only
+# x86_64 left an ARM bottle with no VC-1, WMV or WMA decoder at all -- the
+# GStreamer framework is universal, so the material was there the whole time and
+# the gap was this script's. Each engine gets every architecture it actually
+# ships; naming one stages only that one.
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 set -euo pipefail
 
-ARCH="${1:-x86_64}"
+ARCH="${1:-all}"
 WANT="${2:-}"
 FRAMEWORK=/Library/Frameworks/GStreamer.framework/Versions/1.0
 ROOT="$HOME/Library/Application Support/MacGameVideoFix/gst-codecs"
@@ -138,6 +147,7 @@ if [ -n "$gst_minor" ]; then
   printf '%s\n' "$ENGINES" | while IFS='|' read -r eng_ver eng_app; do
     [ -n "$eng_app" ] || continue
     eng_core="$eng_app/Contents/SharedSupport/CrossOver/lib/x86_64/libgstreamer-1.0.0.dylib"
+    [ -f "$eng_core" ] || eng_core="$eng_app/Contents/SharedSupport/CrossOver/lib/aarch64/libgstreamer-1.0.0.dylib"
     [ -f "$eng_core" ] || eng_core="$eng_app/Contents/SharedSupport/CrossOver/lib64/libgstreamer-1.0.0.dylib"
     [ -f "$eng_core" ] || continue
     eng_compat="$(otool -L "$eng_core" 2>/dev/null \
@@ -177,7 +187,10 @@ stage_one() {
   SLUG="$(printf '%s' "$(basename "$APP" .app)" | tr -c 'A-Za-z0-9._-' '-')"
   CX="$APP/Contents/SharedSupport/CrossOver"
   SRC="$CX/lib/$ARCH"
-  [ -d "$SRC" ] || SRC="$CX/lib64"
+  # lib64 is the old single-architecture layout, and it holds x86_64. Falling
+  # back to it for aarch64 would fill an ARM directory with x86_64 libraries
+  # that resolve at stage time and fail at load.
+  if [ ! -d "$SRC" ] && [ "$ARCH" = x86_64 ]; then SRC="$CX/lib64"; fi
   if [ ! -d "$SRC" ]; then
     echo "  skipped   : $ENGINE ($VER) has no $ARCH libraries" >&2
     return 0
@@ -357,11 +370,24 @@ mkdir -p "$ROOT"
 # Truncated only for a full run. Per-engine staging is now the normal case --
 # every repair invokes this with one version -- and wiping the map would leave
 # it describing whichever engine was fixed last.
+# Truncated once, before any architecture runs. Doing it inside the loop made
+# the second pass delete the first one's lines, and the map is what tells a
+# bottle which directory is its own.
 [ -n "$WANT" ] || : > "$ROOT/.map"
-printf '%s\n' "$ENGINES" | while IFS='|' read -r ver app; do
-  [ -n "$ver" ] || continue
+
+case "$ARCH" in
+  all|"") ARCHES="x86_64 aarch64" ;;
+  *)      ARCHES="$ARCH" ;;
+esac
+
+for ARCH in $ARCHES; do
   echo
-  stage_one "$ver" "$app"
+  echo "=== $ARCH ==="
+  printf '%s\n' "$ENGINES" | while IFS='|' read -r ver app; do
+    [ -n "$ver" ] || continue
+    echo
+    stage_one "$ver" "$app"
+  done
 done
 
 # The map is what the app reads to point each bottle at its own engine: a

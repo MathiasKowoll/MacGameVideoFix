@@ -50,7 +50,7 @@ CrossOver ships no scanner, so there is nothing to absorb it.
 Give the plugin a directory of its own, and be deliberate about which
 dependencies come from where.
 
-    gst-codecs/<CrossOver>/x86_64/
+    gst-codecs/<CrossOver>/<arch>/
       gstreamer-1.0/libgstlibav.dylib     the decoders
       gstreamer-1.0/libgstmatroska.dylib  the demuxer
       lib/                                 what they need
@@ -73,6 +73,29 @@ whole design:
 That second half is what avoids the crash. The plugin loads **CrossOver's**
 GStreamer, not the framework's, so there is one core, one type registry, and the
 decoders register into the same place everything else lives.
+
+## Two architectures, because a bottle picks one
+
+CrossOver 27 runs ARM Windows binaries as well as x86_64 ones, and a bottle says
+which it is: `"WineArch" = "arm64"` against `"win64"`. The two do not share a
+plugin directory, and pointing an ARM bottle at the x86_64 staging points it at
+libraries it cannot load.
+
+So each engine is staged for **every architecture it actually ships**, in one
+pass, and the app reads the bottle's own `WineArch` to decide which directory
+that bottle's `GST_PLUGIN_PATH` gets. The GStreamer framework is universal, so
+the material was always there; staging only x86_64 was a gap in the script, and
+it left an ARM bottle with no VC-1, WMV or WMA decoder at all.
+
+Two things follow from it being per-engine rather than per-machine:
+
+- CrossOver 26.3 ships no ARM GStreamer, so an ARM bottle recorded against it
+  has no staging to point at and cannot have one. The app says that instead of
+  writing a path that is not there — a key that is set, on a bottle that reads
+  as configured, with nothing behind it.
+- The old single-architecture layout, `lib64`, holds x86_64. The script falls
+  back to it only when staging x86_64; doing it for `aarch64` would fill an ARM
+  directory with x86_64 libraries that resolve while staging and fail on load.
 
 ## One staging per engine, and why the name is the key
 
@@ -100,12 +123,13 @@ directory:
 
     26.3.0.39832|CrossOver|…/gst-codecs/CrossOver/x86_64/gstreamer-1.0
     27.0.0.40921|CrossOver Preview|…/gst-codecs/CrossOver-Preview/x86_64/gstreamer-1.0
+    27.0.0.40921|CrossOver Preview|…/gst-codecs/CrossOver-Preview/aarch64/gstreamer-1.0
 
 ## Getting it in front of CrossOver
 
 One line in the bottle's `cxbottle.conf`:
 
-    "GST_PLUGIN_PATH" = "…/gst-codecs/<CrossOver>/x86_64/gstreamer-1.0"
+    "GST_PLUGIN_PATH" = "…/gst-codecs/<CrossOver>/<arch>/gstreamer-1.0"
 
 A bottle's environment is applied before CrossOver's launcher runs, and the
 launcher sets only `GST_PLUGIN_SYSTEM_PATH` and never touches this one, so the
@@ -145,8 +169,9 @@ All of it is in
 runs exactly this file — it ships a copy in its bundle and shells out to it, so
 what you read is what runs.
 
-    runtime/stage-codecs.sh x86_64                  every engine installed
-    runtime/stage-codecs.sh x86_64 26.3.0.39832     just that one
+    runtime/stage-codecs.sh                         every engine, every arch
+    runtime/stage-codecs.sh all 26.3.0.39832        that engine, every arch
+    runtime/stage-codecs.sh x86_64                  one architecture only
 
 What it does, in order:
 

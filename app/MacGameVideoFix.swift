@@ -1320,7 +1320,7 @@ final class Runner: ObservableObject {
         note("Staging the codec for \(Codecs.label(engine))…")
         status = "Staging the codec for \(Codecs.label(engine))…"
         let script = resources.appendingPathComponent("stage-codecs.sh").path
-        _ = await run(.stagingCodec, "/bin/bash", [script, "x86_64", engine],
+        _ = await run(.stagingCodec, "/bin/bash", [script, "all", engine],
                       register: { [box = codecProcess] proc in box.hold(proc) })
         Codecs.refresh()
         if Codecs.staged(forEngine: engine) { return true }
@@ -1546,7 +1546,7 @@ final class Runner: ObservableObject {
             }
             status = "Staging the codec…"
             let script = resources.appendingPathComponent("stage-codecs.sh").path
-            let ok = await run(.stagingCodec, "/bin/bash", [script, "x86_64"],
+            let ok = await run(.stagingCodec, "/bin/bash", [script, "all"],
                                register: { [box = codecProcess] proc in box.hold(proc) })
             guard ok else { status = stopping ? "Stopped." : "Staging failed."; return }
             // A Stop pressed during the staging used to change nothing: the flag
@@ -2180,19 +2180,34 @@ enum Codecs {
         return String(safe)
     }
 
-    static func stagedPath(forEngine version: String) -> String? {
+    /// Which architecture a bottle is, from what it says it is.
+    ///
+    /// CrossOver 27 runs ARM Windows binaries as well as x86_64 ones, and the
+    /// two do not share a plugin directory: pointing an ARM bottle at the
+    /// x86_64 staging points it at libraries it cannot load. The bottle records
+    /// which it is -- `"WineArch" = "arm64"` against `"win64"` -- so this is
+    /// read rather than guessed, and anything that is not arm64 is x86_64,
+    /// which is also the right answer for every engine that predates the split.
+    static func arch(ofBottleConf text: String) -> String {
+        text.range(of: #"(?m)^[ \t]*"WineArch"[ \t]*=[ \t]*"arm64""#,
+                   options: .regularExpression) != nil ? "aarch64" : "x86_64"
+    }
+
+    static func stagedPath(forEngine version: String,
+                           arch: String = "x86_64") -> String? {
         guard let slug = slug(forEngine: version) else { return nil }
         return ((stagedRoot as NSString).appendingPathComponent(slug) as NSString)
-            .appendingPathComponent("x86_64/gstreamer-1.0")
+            .appendingPathComponent("\(arch)/gstreamer-1.0")
     }
 
     /// The engine version a staging was actually built from. The path outlives
     /// an update; the contents may not, because a new CrossOver can carry a
     /// different GStreamer core.
-    static func stagedAgainst(engine version: String) -> String? {
+    static func stagedAgainst(engine version: String,
+                              arch: String = "x86_64") -> String? {
         guard let slug = slug(forEngine: version) else { return nil }
         let marker = ((stagedRoot as NSString).appendingPathComponent(slug) as NSString)
-            .appendingPathComponent("x86_64/.built-against")
+            .appendingPathComponent("\(arch)/.built-against")
         return (try? String(contentsOfFile: marker, encoding: .utf8))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -2201,8 +2216,9 @@ enum Codecs {
     /// updated. Not a failure -- it may well still work, because GStreamer holds
     /// its ABI across 1.x -- but it is the one thing the user cannot find out
     /// for themselves until a cutscene crashes.
-    static func stagingIsStale(engine version: String) -> Bool {
-        guard let built = stagedAgainst(engine: version) else { return false }
+    static func stagingIsStale(engine version: String,
+                               arch: String = "x86_64") -> Bool {
+        guard let built = stagedAgainst(engine: version, arch: arch) else { return false }
         return built != version
     }
 
@@ -2361,9 +2377,13 @@ enum Codecs {
                         let slug = String(name.map { c -> Character in
                             c.isLetter || c.isNumber || c == "." || c == "_" || c == "-" ? c : "-"
                         })
-                        let marker = ((stagedRoot as NSString).appendingPathComponent(slug)
-                                      as NSString).appendingPathComponent("x86_64/.complete")
-                        return fm.fileExists(atPath: marker)
+                        // Either architecture counts: an engine staged for ARM
+                        // only is still staged.
+                        return ["x86_64", "aarch64"].contains { a in
+                            fm.fileExists(atPath: ((stagedRoot as NSString)
+                                .appendingPathComponent(slug) as NSString)
+                                .appendingPathComponent("\(a)/.complete"))
+                        }
                     }
                     if hasStaging(sitting) || !hasStaging(app) { continue }
                 }
@@ -2800,8 +2820,26 @@ enum Codecs {
         // resolves to nothing, in a file the app then reports as correctly
         // configured. The compiler said so as a warning; warnings in a function
         // that edits somebody's configuration are errors.
-        guard let want = stagedPath(forEngine: engine) else {
+        // Its own architecture, not the machine's default one.
+        let bottleArch = arch(ofBottleConf: text)
+        guard let want = stagedPath(forEngine: engine, arch: bottleArch) else {
             return "\(bottle.lastPathComponent) names a CrossOver that is not installed."
+        }
+        // And it has to exist. stagedPath builds a path from the engine name; it
+        // does not go and look. Writing one that is not there is worse than
+        // writing the wrong one: the key is set, the bottle reads as configured,
+        // and nothing loads. The case that produced this is an ARM bottle
+        // recorded against CrossOver 26.3, which ships no ARM GStreamer at all --
+        // the staging cannot exist, and saying so beats pointing at where it
+        // would have been.
+        let stagedHere = (want as NSString).deletingLastPathComponent
+        guard FileManager.default.fileExists(
+                atPath: (stagedHere as NSString).appendingPathComponent(".complete")) else {
+            return bottleArch == "aarch64"
+                ? "\(bottle.lastPathComponent) is an ARM bottle, and the CrossOver it "
+                + "records ships no ARM GStreamer to stage from. Point it at a "
+                + "CrossOver that does, or run it as x86_64."
+                : "\(bottle.lastPathComponent) has no staged codec for its CrossOver yet."
         }
 
         // Every existing line is stripped and exactly one is inserted.
