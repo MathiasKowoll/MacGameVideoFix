@@ -75,6 +75,9 @@ MODE="${2:---install}"
 if [ "${MGVF_STATUS_ONLY:-0}" = 1 ]; then MODE=--status; fi
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
+# Bottle roots and which engine owns each: one file, because this was in two.
+. "$HERE/bottles.sh"
+
 # Every executable in either package that opens a source reader. Checked
 # against the folder, so only the ones actually there are touched.
 KNOWN=(
@@ -108,32 +111,6 @@ is_ours() { [ -f "$1" ] && LC_ALL=C grep -qa "$MARKER" "$1"; }
   exit 1
 }
 
-# Where bottles live. Not one directory -- a Mac can hold several roots at once.
-#
-# CrossOver's own root is configurable through its BottleDir preference, and a
-# launcher that patches a copy of CrossOver redirects its bottles somewhere else
-# entirely with CX_BOTTLE_PATH; Procyon puts them under its own support folder.
-# Looking only in the default root made this script report a fix as installed
-# while the override went nowhere the game would ever read it -- the DLL sat
-# beside the game, Wine kept preferring its own, and nothing said so.
-#
-# MGVF_BOTTLES adds a root explicitly, for anything neither of those finds.
-bottle_roots() {
-  local r seen=""
-  for r in \
-    "${MGVF_BOTTLES:-}" \
-    "$(defaults read com.codeweavers.CrossOver BottleDir 2>/dev/null || true)" \
-    "$HOME/Library/Application Support/CrossOver/Bottles" \
-    "$HOME/Library/Application Support/Procyon/CXPBottles"
-  do
-    [ -n "$r" ] || continue
-    r="${r%/}"
-    [ -d "$r" ] || continue
-    case "$seen" in *"|$r|"*) continue ;; esac
-    seen="$seen|$r|"
-    printf '%s\n' "$r"
-  done
-}
 
 find_bottles() {
   local b root vdf lib key hit=0
@@ -219,49 +196,6 @@ wine_in_bottle() {
     "$cx/bin/wine" --bottle "$(basename "$bottle")" "$@"
 }
 
-# The CrossOver that can actually open a given bottle. A bottle records the
-# CFBundleVersion of the engine that last updated it, and an engine refuses a
-# bottle newer than itself SILENTLY -- exit 0 and no output. Picking one
-# CrossOver for the whole machine writes the keys into whichever bottles happen
-# to match and counts the rest as done.
-crossover_for_bottle() {
-  local want a ver root parent
-  want="$(sed -n 's/^"Version" = "\(.*\)"$/\1/p' "$1/cxbottle.conf" 2>/dev/null | head -1)"
-  [ -n "$want" ] || return 1
-  parent="$(cd "$(dirname "$1")" && pwd)"
-
-  # First pass: the engine whose OWN bottle root holds this bottle.
-  #
-  # Matching on CFBundleVersion alone is not enough, and the failure is silent.
-  # A patched copy of a CrossOver declares the same version as the original it
-  # was copied from -- this machine has three engines all declaring 27.0.0.40921
-  # -- and only the one whose etc/CrossOver.conf redirects CX_BOTTLE_PATH at a
-  # given root can open bottles there. Measured: stock Preview cannot even query
-  # HKCU\Software in a bottle under another product's root, while the patched
-  # copy writes and reads it.
-  #
-  # And the wrong engine does not fail loudly. `--bottle <name>` falls back to
-  # its own root, where a bottle of the same name may well exist and may well
-  # already hold the key -- so the write goes somewhere else and the check that
-  # follows passes against the wrong registry.
-  for a in /Applications/*.app "$HOME"/Applications/*.app; do
-    [ -x "$a/Contents/SharedSupport/CrossOver/bin/wine" ] || continue
-    root="$(sed -n 's/^"CX_BOTTLE_PATH" = "\(.*\)"$/\1/p' \
-            "$a/Contents/SharedSupport/CrossOver/etc/CrossOver.conf" 2>/dev/null | head -1)"
-    [ -n "$root" ] || continue
-    [ "${root%/}" = "$parent" ] || continue
-    printf '%s' "$a/Contents/SharedSupport/CrossOver"; return 0
-  done
-
-  # Second pass: the version, which is right for bottles in the default root.
-  for a in /Applications/*.app "$HOME"/Applications/*.app; do
-    [ -x "$a/Contents/SharedSupport/CrossOver/bin/wine" ] || continue
-    ver="$(defaults read "$a/Contents/Info" CFBundleVersion 2>/dev/null)"
-    [ "$ver" = "$want" ] || continue
-    printf '%s' "$a/Contents/SharedSupport/CrossOver"; return 0
-  done
-  return 1
-}
 
 # Can this bottle answer at all?
 #

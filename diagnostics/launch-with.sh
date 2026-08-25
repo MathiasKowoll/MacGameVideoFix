@@ -41,6 +41,12 @@ list() {
 [ $# -ge 2 ] || { echo "usage: $0 <engine> <bottle>" >&2; exit 1; }
 
 ENGINE="$1"; BOTTLE="$2"
+# The bottle by name, in whatever root holds it -- fixes are raised against
+# Procyon now, whose bottles live under its own support folder rather than
+# CrossOver's. Naming the root here would have meant this tool could not reach
+# the environment the fixes are being developed in.
+. "$(cd "$(dirname "$0")/../runtime" && pwd)/bottles.sh"
+
 APP=""
 for root in /Applications "$HOME/Applications"; do
   [ -d "$root/$ENGINE.app" ] && APP="$root/$ENGINE.app" && break
@@ -50,8 +56,11 @@ done
 WINE="$APP/Contents/SharedSupport/CrossOver/bin/wine"
 [ -x "$WINE" ] || { echo "error: no wine binary inside $APP" >&2; exit 1; }
 
-B="$HOME/Library/Application Support/CrossOver/Bottles/$BOTTLE"
-[ -d "$B" ] || { echo "error: no bottle named $BOTTLE" >&2; ls "$HOME/Library/Application Support/CrossOver/Bottles" >&2; exit 1; }
+B="$(find_bottle_dir "$BOTTLE")" || {
+  echo "error: no bottle named $BOTTLE in any root" >&2
+  while IFS= read -r r; do echo "  $r:" >&2; ls "$r" 2>/dev/null | sed 's/^/    /' >&2; done < <(bottle_roots)
+  exit 1
+}
 
 # Say out loud which side of the experiment this is, so a screenshot of the
 # terminal is enough to tell the two runs apart afterwards.

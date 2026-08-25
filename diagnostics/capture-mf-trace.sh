@@ -24,8 +24,19 @@ usage() { sed -n '3,17p' "$0" >&2; exit 1; }
 
 BOTTLE="$1"; EXE="$2"; shift 2
 
-CX_APP="${CX_APP:-$HOME/Applications/CrossOver-winevideo.app}"
-[ -d "$CX_APP" ] || CX_APP="/Applications/CrossOver.app"
+# The engine that owns this bottle, not a path guessed here. Two installs on
+# this machine declare the same version and only one can open a given bottle, so
+# choosing by name or by version is how a capture ends up running somewhere else
+# entirely. CX_APP still overrides, for deliberately crossing engines.
+. "$(cd "$(dirname "$0")/../runtime" && pwd)/bottles.sh"
+if [ -z "${CX_APP:-}" ]; then
+  for _r in $(bottle_roots); do
+    [ -d "$_r/$BOTTLE" ] || continue
+    _cx="$(crossover_for_bottle "$_r/$BOTTLE")" && CX_APP="${_cx%/Contents/SharedSupport/CrossOver}"
+    break
+  done
+fi
+CX_APP="${CX_APP:-/Applications/CrossOver.app}"
 WINE="$CX_APP/Contents/SharedSupport/CrossOver/bin/wine"
 [ -x "$WINE" ] || { echo "error: no wine at $WINE (set CX_APP)" >&2; exit 1; }
 

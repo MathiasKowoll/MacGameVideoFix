@@ -24,13 +24,19 @@ set -uo pipefail
 BOTTLE="${1:-Steam}"
 ENGINE="${2:-CrossOver Preview}"
 
+# The bottle by name, in whatever root holds it -- fixes are raised against
+# Procyon now, whose bottles live under its own support folder rather than
+# CrossOver's. Naming the root here would have meant this tool could not reach
+# the environment the fixes are being developed in.
+. "$(cd "$(dirname "$0")/../runtime" && pwd)/bottles.sh"
+
 APP=""
 for root in /Applications "$HOME/Applications"; do
   [ -d "$root/$ENGINE.app" ] && APP="$root/$ENGINE.app" && break
 done
 [ -n "$APP" ] || { echo "error: no $ENGINE.app" >&2; exit 1; }
 
-B="$HOME/Library/Application Support/CrossOver/Bottles/$BOTTLE"
+B="$(find_bottle_dir "$BOTTLE")" || { echo "error: no bottle named $BOTTLE in any root" >&2; exit 1; }
 [ -d "$B" ] || { echo "error: no bottle named $BOTTLE" >&2; exit 1; }
 
 OUT="$HOME/Desktop/crossover-capture-$(date +%H%M%S).log"
