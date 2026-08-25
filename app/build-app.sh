@@ -75,9 +75,15 @@ chmod +x "$RES/transcode-movies.sh" "$RES/pak-hide-videos.py" \
 
 # The runtime patch: the installer resolves the proxy and the PE reader next to
 # itself, so all three have to land in the same folder.
+#
+# pe.pl, not pe.py. The installers read PE exports with /usr/bin/perl now,
+# because macOS does not ship python: /usr/bin/python3 is one of 78 hard links
+# to the xcrun dispatcher and fails on a Mac without developer tools. Shipping
+# the Python one would put installers in the bundle that call a file which
+# never travels with them.
 cp "$ROOT/runtime/install-runtime-fix.sh" "$ROOT/runtime/install-dwo-bridge.sh" \
-   "$ROOT/runtime/pe.py" "$RES/"
-chmod +x "$RES/install-runtime-fix.sh" "$RES/install-dwo-bridge.sh" "$RES/pe.py"
+   "$ROOT/runtime/pe.pl" "$RES/"
+chmod +x "$RES/install-runtime-fix.sh" "$RES/install-dwo-bridge.sh" "$RES/pe.pl"
 
 # One prebuilt carrier per game. Missing one disables that game's fix rather
 # than failing the build, so the app is still usable for the other.

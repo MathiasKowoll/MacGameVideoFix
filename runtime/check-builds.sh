@@ -158,7 +158,7 @@ echo
 bundle="$ROOT/app/MacGameVideoFix.app/Contents/Resources"
 bundle_drift=0
 if [ -d "$bundle" ]; then
-  for f in "$HERE"/*.dll "$HERE"/install-*.sh "$HERE"/stage-codecs.sh "$HERE"/pe.py; do
+  for f in "$HERE"/*.dll "$HERE"/install-*.sh "$HERE"/stage-codecs.sh "$HERE"/pe.pl; do
     [ -f "$f" ] || continue
     b="$bundle/$(basename "$f")"
     [ -f "$b" ] || continue

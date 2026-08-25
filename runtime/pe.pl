@@ -10,8 +10,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 use strict; use warnings;
 
-my ($verb, $path) = @ARGV;
-die "usage: pe.pl exports <file>\n" unless defined $verb && defined $path && $verb eq 'exports';
+my ($verb, $path, @rest) = @ARGV;
+die "usage: pe.pl exports <file> [--ordinals]\n"
+    unless defined $verb && defined $path && $verb eq 'exports';
+# --ordinals prints "<ordinal> <name>", which is what the proxy generators read
+# with `while read -r ordinal sym`. Emitting only the name there would put the
+# symbol in $ordinal, leave $sym empty, and produce a .def whose every entry
+# reads "= X_real. @" -- an export table that builds and forwards nothing.
+my $with_ordinals = grep { $_ eq '--ordinals' } @rest;
 open my $fh, '<:raw', $path or die "cannot open $path: $!\n";
 my $buf = do { local $/; <$fh> };
 
@@ -54,11 +60,21 @@ sub rva2off {
 }
 
 my $e = rva2off($exp_rva) // exit 0;
+my $base     = unpack('V', substr($buf, $e + 16, 4));   # ordinal base
 my $nnames   = unpack('V', substr($buf, $e + 24, 4));
 my $names_rva= unpack('V', substr($buf, $e + 32, 4));
+my $ords_rva = unpack('V', substr($buf, $e + 36, 4));   # AddressOfNameOrdinals
 my $names    = rva2off($names_rva) // exit 0;
+my $ords     = rva2off($ords_rva);
 for my $i (0 .. $nnames - 1) {
     my $off = rva2off(unpack('V', substr($buf, $names + $i * 4, 4))) // next;
     my $end = index($buf, "\0", $off);
-    print substr($buf, $off, $end - $off), "\n";
+    my $name = substr($buf, $off, $end - $off);
+    if ($with_ordinals && defined $ords) {
+        # The ordinal is an index into the export address table, biased by Base.
+        my $ord = unpack('v', substr($buf, $ords + $i * 2, 2)) + $base;
+        print "$ord $name\n";
+    } else {
+        print "$name\n";
+    }
 }
