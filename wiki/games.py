@@ -63,7 +63,7 @@ GAMES = [
      "Fixed", "Wo-Long-Fallen-Dynasty"),
     ("NieR Replicant ver.1.22474487139", "Toylogic, in-house",
      "Crashes when the first video starts", "Software decode, and the frame written into the game's target",
-     "D3DMetal", "11", "Preview -- not tried on 26.3",
+     "D3DMetal", "11", "Preview only -- 26.3 crashes before the fix loads",
      "Fixed", "NieR-Replicant"),
     ("KINGDOM HEARTS Dream Drop Distance", "Square Enix, in-house",
      "Cutscene runs with sound, picture solid green",
@@ -264,6 +264,10 @@ GPTK_BY_TITLE = {
     "TMNT: Splintered Fate": "4.0b2",
     "Tormented Souls 2": "4.0b2",
     "DYNASTY WARRIORS: ORIGINS": "4.0b2",
+    # Runs on 4.0b2 under Wine 27 and dies on the same toolkit under Wine 26.3,
+    # which makes it the one title here whose variable is the Wine rather than
+    # the renderer -- the exact mirror of NINJA GAIDEN 4.
+    "NieR Replicant ver.1.22474487139": "4.0b2 -- but only on Wine 27",
     "Life is Strange: Reunion": "**4.0b2 only** -- 3.0 crashes it",
     "Life is Strange: Double Exposure": "**4.0b2 only** -- 3.0 crashes it",
 }
