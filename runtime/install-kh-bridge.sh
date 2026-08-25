@@ -194,6 +194,21 @@ crossover_for_bottle() {
   return 1
 }
 
+# Can this bottle answer at all?
+#
+# A query that fails is not evidence of a missing key. An ARM bottle recorded
+# against a CrossOver with no ARM support has its keys on disk and cannot run
+# reg.exe to say so, and counting that as "the override is gone" reported a
+# working game as broken -- the same mistake as claiming to have written to a
+# bottle we cannot address, arrived at from the other side.
+#
+# So the bottle is asked something that must be there. If even that fails, the
+# bottle is unreachable and is skipped rather than judged.
+reachable() {
+  "$2/bin/wine" --bottle "$(basename "$1")" --cx-app reg.exe query \
+    "HKEY_CURRENT_USER\\Software" >/dev/null 2>&1
+}
+
 # Whether every override this package needs is really there.
 #
 # The proxy and the copied original are two of the three things the bridge
@@ -207,6 +222,7 @@ override_ok() {
     [ -n "$b" ] || continue
     addressable "$b" || continue
     cx="$(crossover_for_bottle "$b")" || continue
+    reachable "$b" "$cx" || continue
     seen=$((seen + 1))
     for exe in "${EXE_NAMES[@]}"; do
       "$cx/bin/wine" --bottle "$(basename "$b")" --cx-app reg.exe query \
