@@ -27,6 +27,18 @@
 
 set -euo pipefail
 
+# HOME is required, and its absence must not be answerable.
+#
+# Both bottle roots are built from it, and under `set -u` a missing HOME kills
+# the function that finds them -- after which --status still printed a state
+# word, reporting `broken` for a fix it had not been able to look at. A wrong
+# answer is worse than no answer, so this refuses instead.
+#
+# It goes missing in exactly one situation, and it is the situation this script
+# is heading for: an application that runs it with an explicit environment
+# dictionary rather than inheriting one.
+: "${HOME:?this needs HOME; a caller passing an explicit environment must include it}"
+
 usage() { sed -n '3,25p' "$0" >&2; exit 1; }
 [ $# -ge 1 ] || usage
 
