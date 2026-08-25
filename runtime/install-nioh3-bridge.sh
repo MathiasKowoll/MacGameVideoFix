@@ -36,7 +36,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 LIVE="$GAME/amd_ags_x64.dll"
 REAL="$GAME/amd_ags_x64_real.dll"
 PROXY="$HERE/amd_ags_x64-nioh3.dll"
-EXPORTS="$HERE/pe.py"
+EXPORTS="$HERE/pe.pl"
 MARKER='dwo-video-bridge.log'
 
 is_ours() { [ -f "$1" ] && LC_ALL=C grep -qa "$MARKER" "$1"; }
@@ -88,13 +88,13 @@ fi
 echo "[2/3] checking the proxy forwards everything the game imports"
 # Read each side separately: piping into comm hides a failure, and an
 # unreadable file would then be moved over the saved original.
-if ! live_exports="$(python3 "$EXPORTS" exports "$LIVE" 2>&1)"; then
+if ! live_exports="$(/usr/bin/perl "$EXPORTS" exports "$LIVE" 2>&1)"; then
   echo "error: cannot read the exports of $LIVE" >&2
   echo "$live_exports" | sed 's/^/       /' >&2
   [ -f "$REAL" ] && echo "       Your original is beside it; restore before anything else." >&2
   exit 1
 fi
-if ! proxy_exports="$(python3 "$EXPORTS" exports "$PROXY" 2>&1)"; then
+if ! proxy_exports="$(/usr/bin/perl "$EXPORTS" exports "$PROXY" 2>&1)"; then
   echo "error: cannot read the exports of $PROXY" >&2
   exit 1
 fi

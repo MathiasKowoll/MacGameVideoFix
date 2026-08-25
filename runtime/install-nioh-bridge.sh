@@ -37,7 +37,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 LIVE="$GAME/GfeSDK.dll"
 REAL="$GAME/GfeSDK_real.dll"
 PROXY="$HERE/GfeSDK.dll"
-EXPORTS="$HERE/pe.py"
+EXPORTS="$HERE/pe.pl"
 # Built from the same source as the Strikers bridge, so it carries the same
 # log name -- which is what identifies one of ours.
 MARKER='p5s-video-bridge.log'
@@ -97,13 +97,13 @@ fi
 echo "[2/3] checking the proxy forwards everything the game imports"
 # Read each side separately: piping into comm hides a failure, and an
 # unreadable file would then be moved over the saved original.
-if ! live_exports="$(python3 "$EXPORTS" exports "$LIVE" 2>&1)"; then
+if ! live_exports="$(/usr/bin/perl "$EXPORTS" exports "$LIVE" 2>&1)"; then
   echo "error: cannot read the exports of $LIVE" >&2
   echo "$live_exports" | sed 's/^/       /' >&2
   [ -f "$REAL" ] && echo "       Your original is beside it; restore before anything else." >&2
   exit 1
 fi
-if ! proxy_exports="$(python3 "$EXPORTS" exports "$PROXY" 2>&1)"; then
+if ! proxy_exports="$(/usr/bin/perl "$EXPORTS" exports "$PROXY" 2>&1)"; then
   echo "error: cannot read the exports of $PROXY" >&2
   exit 1
 fi

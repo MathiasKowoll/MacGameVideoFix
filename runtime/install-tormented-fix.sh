@@ -55,7 +55,7 @@ BIN="$GAME/TormentedSouls2/Binaries/Win64"
 LIVE="$BIN/OpenColorIO_2_3.dll"
 REAL="$BIN/OpenColorIO_2_3_real.dll"
 PROXY="$HERE/OpenColorIO_2_3-tormented.dll"
-EXPORTS="$HERE/pe.py"
+EXPORTS="$HERE/pe.pl"
 MARKER='d3d12-guards.log'
 
 is_ours() { [ -f "$1" ] && LC_ALL=C grep -qa "$MARKER" "$1"; }
@@ -129,10 +129,10 @@ if is_ours "$LIVE"; then
 fi
 
 echo "[2/3] checking the proxy forwards everything the original exports"
-if ! real_exports="$(python3 "$EXPORTS" exports "$LIVE" 2>&1)"; then
+if ! real_exports="$(/usr/bin/perl "$EXPORTS" exports "$LIVE" 2>&1)"; then
   echo "error: cannot read the exports of $LIVE" >&2; exit 1
 fi
-if ! proxy_exports="$(python3 "$EXPORTS" exports "$PROXY" 2>&1)"; then
+if ! proxy_exports="$(/usr/bin/perl "$EXPORTS" exports "$PROXY" 2>&1)"; then
   echo "error: cannot read the exports of $PROXY" >&2; exit 1
 fi
 missing="$(comm -23 <(printf '%s\n' "$real_exports" | sort) \
