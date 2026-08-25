@@ -64,6 +64,13 @@ for f in "$REPO"/runtime/install-*.sh; do
 done
 echo "      $count installers, $(( $(ls "$stage" | wc -l) - count )) files they name"
 
+# stage-codecs.sh is not named by any installer and is not optional: nine titles
+# need a plugin staged in front of CrossOver, and three of them need nothing
+# else. Leaving it out meant a launcher could apply the NINJA GAIDEN 4 or
+# Persona 5 Strikers fix and hand the user back the exact symptom it was for.
+# It travels because it is a script the launcher runs, the same as the others.
+cp "$REPO/runtime/stage-codecs.sh" "$stage/"
+
 echo "[2/4] refusing anything that still needs python"
 if grep -l 'python3' "$stage"/*.sh >/dev/null 2>&1; then
   echo "error: these installers still call python3, which a clean Mac does not have:" >&2
@@ -79,10 +86,13 @@ echo "[3/4] writing the manifest"
 # is how this repository's counts went wrong twice in one day. Empty is a real
 # answer: a generation is reported only where it is a requirement.
 CONFIG="$(cd "$REPO/wiki" && python3 games.py --config-json 2>/dev/null)"
+ONLYEXE="$(cd "$REPO/wiki" && python3 -c 'import json,games; print(json.dumps(games.CODEC_ONLY_EXE))' 2>/dev/null)"
 [ -n "$CONFIG" ] || { echo "error: wiki/games.py --config-json produced nothing" >&2; exit 1; }
-/usr/bin/perl - "$stage" "$version" "$commit" "$dirty" "$released" "$REPO" "$CONFIG" <<'PERL' > "$stage/manifest.json"
+/usr/bin/perl - "$stage" "$version" "$commit" "$dirty" "$released" "$REPO" "$CONFIG" "$ONLYEXE" <<'PERL' > "$stage/manifest.json"
 use strict; use warnings;
-my ($stage, $version, $commit, $dirty, $released, $repo, $config) = @ARGV;
+my ($stage, $version, $commit, $dirty, $released, $repo, $config, $onlyexe) = @ARGV;
+my %only_exe;
+while ($onlyexe =~ /"([^"]+)":\s*"([^"]+)"/g) { $only_exe{$1} = $2; }
 
 # Hand-parsed rather than pulled in with a JSON module: this runs on whatever
 # perl the machine has, and the shape is one this file produced a line ago.
@@ -92,10 +102,13 @@ while ($config =~ /"([^"]+)":\s*\{(.*?)\}\s*,?\s*(?="[^"]+":\s*\{|\z)/gs) {
     my ($backend) = $body =~ /"backend":\s*"([^"]*)"/;
     my ($gptk)    = $body =~ /"gptk":\s*"([^"]*)"/;
     my ($env)     = $body =~ /"env":\s*(\{.*?\})/s;
-    $cfg{$title} = { backend => $backend // "", gptk => $gptk // "", env => $env // "{}" };
+    my ($codec)   = $body =~ /"codec":\s*"([^"]*)"/;
+    $cfg{$title} = { backend => $backend // "", gptk => $gptk // "",
+                     codec => $codec // "", env => $env // "{}" };
     $cfg{$title}{env} =~ s/\s+/ /g;
 }
 my @games;
+my %seen_title;
 for my $f (sort glob("$repo/runtime/install-*.sh")) {
     open my $fh, '<', $f or next;
     my $s = do { local $/; <$fh> };
@@ -122,6 +135,7 @@ for my $f (sort glob("$repo/runtime/install-*.sh")) {
     # game, and a launcher matching a folder needs the executable, which is the
     # only identity there is. No AppID exists anywhere in this project, and the
     # folder name belongs to Valve.
+    $seen_title{$_} = 1 for map { (split(/\|/, $_, 3))[0] =~ s/^\s+|\s+$//gr } ($s =~ /^# MGVF-GAME: (.+)$/mg);
     my @titles = ($s =~ /^# MGVF-GAME: (.+)$/mg);
     for my $line (@titles) {
         my ($name, $exe, $dir) = map { s/^\s+|\s+$//gr } split(/\|/, $line, 3);
@@ -134,12 +148,35 @@ for my $f (sort glob("$repo/runtime/install-*.sh")) {
             $c = { backend => "", gptk => "", env => "{}" };
         }
         push @games, sprintf(
-          qq({"name":"%s","exe":"%s","script":"%s","carrier":"%s","keptAs":"%s","carrierDir":"%s","writesRegistry":%s,"backend":"%s","gptk":"%s","env":%s,"why":"%s","files":[%s]}),
+          qq({"name":"%s","exe":"%s","script":"%s","carrier":"%s","keptAs":"%s","carrierDir":"%s","writesRegistry":%s,"backend":"%s","gptk":"%s","codec":"%s","env":%s,"why":"%s","files":[%s]}),
           $esc->($name), $esc->($exe), $script, $esc->($carrier), $esc->($kept),
-          $esc->($dir // ""), $reg, $esc->($c->{backend}), $esc->($c->{gptk}), $c->{env},
+          $esc->($dir // ""), $reg, $esc->($c->{backend}), $esc->($c->{gptk}), $esc->($c->{codec}), $c->{env},
           $esc->($why), join(",", map { qq("$_") } @files));
     }
 }
+# Titles whose whole fix is the staged codec. No installer names them, because
+# nothing is installed beside the game -- so without this they were absent from
+# the manifest entirely and a launcher had no way to know they exist.
+for my $title (sort keys %cfg) {
+    next if $seen_title{$title};
+    my $c = $cfg{$title};
+    next unless $c->{codec};
+    my $exe = $only_exe{$title} // "";
+    unless ($exe) {
+        # Said out loud. An entry with no executable cannot be matched to a
+        # folder, and a silent absence is indistinguishable from a title that
+        # needs nothing.
+        warn "  note: \"$title\" needs $c->{codec} and no installer; its executable has not been read off a real install, so it is not in the manifest\n";
+        next;
+    }
+    my $esc = sub { my ($t) = @_; $t //= ""; $t =~ s/(["\\])/\\$1/g; $t };
+    push @games, sprintf(
+      qq({"name":"%s","exe":"%s","script":"","carrier":"","keptAs":"","carrierDir":"","writesRegistry":false,"backend":"%s","gptk":"%s","codec":"%s","env":%s,"why":"%s","files":[]}),
+      $esc->($title), $esc->($exe), $esc->($c->{backend}), $esc->($c->{gptk}),
+      $esc->($c->{codec}), $c->{env},
+      $esc->("The whole fix is the staged codec: nothing is installed beside the game."));
+}
+
 printf qq({\n  "schema": 3,\n  "version": "%s",\n  "commit": "%s",\n  "treeDirty": %s,\n  "fromReleasedTag": %s,\n  "note": "Generated by runtime/make-fixes-bundle.sh from the installers themselves. Do not edit.",\n  "scopeWarning": "gptk is a requirement of the title, not an isolation guarantee. The toolkit is installed into the shared CrossOver application, so whichever game was launched last leaves its generation in place for every other one. A launcher can honour this field and should say so plainly; nothing here makes it per-game.",\n  "games": [\n    %s\n  ]\n}\n),
   $version, $commit, $dirty, $released, join(",\n    ", @games);
 PERL

@@ -612,6 +612,20 @@ def hand_counts(paths):
 # toolkit for a game that did not care, which is worse than leaving it alone.
 
 
+# Titles whose whole fix is the staged codec: nothing is installed beside the
+# game, so there is no installer to declare them and they were invisible to
+# anything reading the manifest.
+#
+# The executable is read off a real install rather than guessed, which is why
+# this table is short: Devil May Cry 5 is on the machine this was written on and
+# the two RESIDENT EVIL folders are empty shells. The generator says out loud
+# which titles it could not carry, so the gap is a line of output rather than an
+# absence nobody notices.
+CODEC_ONLY_EXE = {
+    "Devil May Cry 5": "DevilMayCry5.exe",
+}
+
+
 def config_json():
     """Per-title setup, for runtime/make-fixes-bundle.sh. JSON, no dependencies."""
     import json
@@ -627,6 +641,11 @@ def config_json():
         out[g] = {
             "backend": "dxmt" if "DXMT" in backend.upper() else "d3dmetal",
             "gptk": gen,
+            # Which plugin stage-codecs.sh has to put in front of CrossOver for
+            # this title. It travelled as prose inside `why` -- "needs the
+            # staged Matroska demuxer too" -- which no interface can act on.
+            # Stripped of the backticks the table needs and a launcher does not.
+            "codec": CODEC.get(g, "").strip("`") if "libgst" in CODEC.get(g, "") else "",
             # Nothing has yet needed one as a standing requirement. D3DM_MTL4=0
             # was tried on this project and never became one.
             "env": {},
