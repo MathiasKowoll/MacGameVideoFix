@@ -209,9 +209,35 @@ wine_in_bottle() {
 # CrossOver for the whole machine writes the keys into whichever bottles happen
 # to match and counts the rest as done.
 crossover_for_bottle() {
-  local want a ver
+  local want a ver root parent
   want="$(sed -n 's/^"Version" = "\(.*\)"$/\1/p' "$1/cxbottle.conf" 2>/dev/null | head -1)"
   [ -n "$want" ] || return 1
+  parent="$(cd "$(dirname "$1")" && pwd)"
+
+  # First pass: the engine whose OWN bottle root holds this bottle.
+  #
+  # Matching on CFBundleVersion alone is not enough, and the failure is silent.
+  # A patched copy of a CrossOver declares the same version as the original it
+  # was copied from -- this machine has three engines all declaring 27.0.0.40921
+  # -- and only the one whose etc/CrossOver.conf redirects CX_BOTTLE_PATH at a
+  # given root can open bottles there. Measured: stock Preview cannot even query
+  # HKCU\Software in a bottle under another product's root, while the patched
+  # copy writes and reads it.
+  #
+  # And the wrong engine does not fail loudly. `--bottle <name>` falls back to
+  # its own root, where a bottle of the same name may well exist and may well
+  # already hold the key -- so the write goes somewhere else and the check that
+  # follows passes against the wrong registry.
+  for a in /Applications/*.app "$HOME"/Applications/*.app; do
+    [ -x "$a/Contents/SharedSupport/CrossOver/bin/wine" ] || continue
+    root="$(sed -n 's/^"CX_BOTTLE_PATH" = "\(.*\)"$/\1/p' \
+            "$a/Contents/SharedSupport/CrossOver/etc/CrossOver.conf" 2>/dev/null | head -1)"
+    [ -n "$root" ] || continue
+    [ "${root%/}" = "$parent" ] || continue
+    printf '%s' "$a/Contents/SharedSupport/CrossOver"; return 0
+  done
+
+  # Second pass: the version, which is right for bottles in the default root.
   for a in /Applications/*.app "$HOME"/Applications/*.app; do
     [ -x "$a/Contents/SharedSupport/CrossOver/bin/wine" ] || continue
     ver="$(defaults read "$a/Contents/Info" CFBundleVersion 2>/dev/null)"
