@@ -7,3 +7,4 @@ app/MortalShell2MacFix.app/
 runtime/build/
 diagnostics/build/
 __pycache__/
+build/
