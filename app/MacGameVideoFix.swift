@@ -2216,8 +2216,14 @@ enum Codecs {
     /// updated. Not a failure -- it may well still work, because GStreamer holds
     /// its ABI across 1.x -- but it is the one thing the user cannot find out
     /// for themselves until a cutscene crashes.
-    static func stagingIsStale(engine version: String,
-                               arch: String = "x86_64") -> Bool {
+    /// Stale if any architecture staged for this engine was built against a
+    /// different version. Both are built together, so one lagging means the
+    /// pass was interrupted -- which is exactly the case worth reporting.
+    static func stagingIsStale(engine version: String) -> Bool {
+        ["x86_64", "aarch64"].contains { stagingIsStale(engine: version, arch: $0) }
+    }
+
+    static func stagingIsStale(engine version: String, arch: String) -> Bool {
         guard let built = stagedAgainst(engine: version, arch: arch) else { return false }
         return built != version
     }
@@ -2302,14 +2308,24 @@ enum Codecs {
     /// directory it then moves into place in one step, so a run that was
     /// stopped or crashed leaves either the previous complete staging or
     /// nothing at all.
-    static func staged(forEngine version: String) -> Bool {
+    /// Staged for any architecture this engine ships, or for one named.
+    ///
+    /// Asking only about x86_64 would call an engine unstaged that is staged
+    /// for ARM -- which an engine that ships only ARM libraries would always
+    /// be. Both are built in one pass, so in practice they agree; the point is
+    /// that the question no longer has a hidden architecture in it.
+    static func staged(forEngine version: String, arch: String? = nil) -> Bool {
         let fm = FileManager.default
-        guard let dir = stagedPath(forEngine: version) else { return false }
-        let arch = (dir as NSString).deletingLastPathComponent
-        guard fm.fileExists(atPath: (arch as NSString).appendingPathComponent(".complete"))
-        else { return false }
-        return fm.fileExists(
-            atPath: (dir as NSString).appendingPathComponent("libgstlibav.dylib"))
+        for a in arch.map({ [$0] }) ?? ["x86_64", "aarch64"] {
+            guard let dir = stagedPath(forEngine: version, arch: a) else { return false }
+            let here = (dir as NSString).deletingLastPathComponent
+            guard fm.fileExists(atPath: (here as NSString).appendingPathComponent(".complete")),
+                  fm.fileExists(atPath: (dir as NSString)
+                      .appendingPathComponent("libgstlibav.dylib"))
+            else { continue }
+            return true
+        }
+        return false
     }
 
     private static var cachedEngines: [String: URL]?
