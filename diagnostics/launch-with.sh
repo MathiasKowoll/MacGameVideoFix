@@ -89,7 +89,13 @@ GST="$(sed -n 's/^[[:space:]]*"GST_PLUGIN_PATH" = "\(.*\)"$/\1/p' "$CONF" 2>/dev
 if [ -n "$GST" ]; then
   MAP="$HOME/Library/Application Support/MacGameVideoFix/gst-codecs/.map"
   ENGVER="$(defaults read "$APP/Contents/Info" CFBundleVersion 2>/dev/null)"
-  MATCH="$(grep "^$ENGVER|" "$MAP" 2>/dev/null | cut -d'|' -f3 | head -1)"
+  # Match the staging that belongs to THIS bundle rather than the first line
+  # sharing its version: a patched copy declares the same CFBundleVersion as
+  # the original it was copied from, so the version alone can name the wrong
+  # engine -- and pointing a run at another engine's staging is precisely the
+  # two-cores crash this script exists to warn about.
+  SLUG="$(printf '%s' "$(basename "$APP" .app)" | tr -c 'A-Za-z0-9._-' '-')"
+  MATCH="$(awk -F'|' -v s="/$SLUG/" 'index($3, s) { print $3; exit }' "$MAP" 2>/dev/null)"
   if [ "$GST" = "$MATCH" ]; then
     echo "codec  : staged for this engine"
   else

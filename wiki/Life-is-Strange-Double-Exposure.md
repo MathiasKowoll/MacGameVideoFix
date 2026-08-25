@@ -62,4 +62,4 @@ Preview until GPTK 3 is understood.
 
 ---
 
-Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md) · [Findings](Findings.md), what the six have in common
+Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md) · [Findings](Findings.md), what what they have in common

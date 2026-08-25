@@ -1,6 +1,6 @@
 # Findings
 
-What the nine titles have in common: the results that are not about any one of
+What these titles have in common: the results that are not about any one of
 them, the mechanism the fixes share, and what was tried and did not work.
 
 **This page is addressed to whoever maintains Wine, D3DMetal, DXMT or
@@ -317,7 +317,7 @@ change it.**
 **No VC-1 or WMV3 decoder is shipped in either line.**
 
 - *Observed.* Neither build carries `libgstlibav` or `libgstvpx`.
-- *Consequence.* Three titles here need a decoder staged from the user's own
+- *Consequence.* The titles marked `libgstlibav` in the stack table need a decoder staged from the user's own
   GStreamer install to play at all.
 - *Standing.* **Measured.**
 
@@ -455,7 +455,7 @@ pattern happens to match:
   silent-but-blank.
 
 They share one file because they share one carrier DLL. Separate files would
-mean a title could only ever have one of the three. The merged DLL logs to
+mean a title could only ever have one of the three. <!-- count-ok --> The merged DLL logs to
 `C:\ue5-media-fix.log`; releases from before the merge wrote
 `C:\ue5-runtime-fix.log`, which is the name to look for in an old log.
 
@@ -981,7 +981,7 @@ unaffected by all of them, whatever its container or codec.
         dedicated video 38338 MB, dedicated system 38338 MB, shared 38338 MB
 
   `0x66af` is AMD's Radeon VII. `0x10de` is NVIDIA's vendor id. The name says
-  AMD. Two of the three say AMD, and the one that disagrees is the field
+  AMD. Two of the three say AMD, and the one that disagrees is the field <!-- count-ok -->
   software actually branches on.
 - *Consequence.* DXMT reads the vendor id, concludes NVIDIA, and says so:
   `info:  Vendor extension enabled: NVEXT`. It then has `nvapi64.dll` and

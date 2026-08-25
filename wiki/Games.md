@@ -70,7 +70,7 @@ Strikers, Nioh and Nioh 2 only work on DXMT: all three need a shared D3D9
 surface handle, and DXMT implements sharing where D3DMetal has none to build on.
 Nioh 3, despite the name, belongs with the other group -- it is D3D12 on
 D3DMetal and never touches D3D9, and NieR Replicant is D3D11 on D3DMetal. The
-other nine run on
+rest run on
 D3DMetal with the D3D12 renderer, which is also what keeps PSO precompilation
 -- `-dx11` dodges some of these faults and costs permanent shader-compilation
 stutter.
@@ -114,17 +114,20 @@ plugin-by-plugin comparison that conclusion rested on is in
 [Findings](Findings.md), under *The container, not the codec*.
 
 **That gap is now closed, and it was a missing plugin rather than a missing
-engine.** Neither build ships a Matroska demuxer; Preview reached WebM by another
-route. Staging `libgstmatroska` beside the decoder gives stable one too, and
-NINJA GAIDEN 4 is where it was measured -- it plays on stock 26.3, video and all,
-with nothing patched into CrossOver. What this means for the titles above has not
-been re-measured: their rows still say what each was measured on, and DYNASTY
-WARRIORS in particular deserves a fresh run on 26.3 before its row changes.
+engine.** Preview ships `libgstmatroska`, for both architectures, and stable
+26.3 ships it for neither -- so the difference between the two builds on a WebM
+was one plugin the whole time. Staging it beside the decoder gives stable one
+too, and NINJA GAIDEN 4 is where that was measured: it plays on stock 26.3,
+video and all, with nothing patched into CrossOver.
 
-Three titles need a codec no CrossOver ships -- VC-1 for Persona 5 Strikers,
-WMV3 for Nioh and Nioh 2 -- and it is staged beside the game rather than patched
-into it. Nioh 3 needs none: its video is already NV12 by the time Media
-Foundation is asked for it.
+Several titles need a codec no CrossOver ships -- VC-1, WMV3, WMV2 or WMA -- and
+it is staged beside the game rather than patched into it. Which titles, and
+which plugin each one needs, is the Codec column of
+[what each title actually loads](Games.md#what-each-title-actually-loads); the
+count is derived there rather than repeated here, because the number written
+here was three for as long as it took two more titles to join the list.
+Nioh 3 needs none: its video is already NV12 by the time Media Foundation is
+asked for it.
 
 None of these fixes decodes anything. The frames existed all along; they were
 being crashed on, mislabelled, or thrown away.
@@ -134,10 +137,70 @@ page comes from a measurement on an installed copy.
 
 <!-- games:end -->
 
+## What each title actually loads
+
+The table above says whether a title works. This one says what it is made of:
+which DLL the fix rides on, which bridge it was built from, which plugin has to
+be staged in front of CrossOver, and whether Wine has to be told to prefer our
+file at all.
+
+<!-- stack:begin -->
+
+| Game | Backend | DX | GPTK | Carrier | Kept as | Bridge | Codec | Env levers | Registry |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| [Mortal Shell 2](Mortal-Shell-2.md) | D3DMetal | 12 | 3.0 and 4.0b2 | `libogg_64.dll` | `libogg_64_real.dll` | `ue5-media-fix.c` | — | — | — |
+| [Life is Strange: Reunion](Life-is-Strange-Reunion.md) | D3DMetal | 12 | **4.0b2 only** -- 3.0 crashes it | `libogg_64.dll` | `libogg_64_real.dll` | `ue5-media-fix.c` | — | — | — |
+| [Life is Strange: Double Exposure](Life-is-Strange-Double-Exposure.md) | D3DMetal | 12 | **4.0b2 only** -- 3.0 crashes it | `libogg_64.dll` | `libogg_64_real.dll` | `ue5-media-fix.c` | — | — | — |
+| [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) | D3DMetal | 12 | 4.0b2 | `libxess.dll` | `libxess_real.dll` | `dwo-video-bridge.c` | `libgstmatroska` | — | — |
+| [Beast of Reincarnation](Beast-of-Reincarnation.md) | D3DMetal | 12 | 3.0 and 4.0b2 | `libogg_64.dll` | `libogg_64_real.dll` | `ue5-media-fix.c` | — | — | — |
+| [Persona 5 Strikers](Persona-5-Strikers.md) | **DXMT** | 11 | 3.0 and 4.0b2 | `amd_ags_x64.dll` | `amd_ags_x64_real.dll` | `p5s-video-bridge.c` | `libgstlibav` | `BEAST_FORCE_NV12`, `BEAST_REFUSE_D3D_MANAGER` | — |
+| [Nioh](Nioh.md) | **DXMT** | 11 | 4.0b2 | `GfeSDK.dll` | `GfeSDK_real.dll` | `p5s-video-bridge.c` | `libgstlibav` | `BEAST_FORCE_NV12`, `BEAST_REFUSE_D3D_MANAGER` | — |
+| [Nioh 2](Nioh-2.md) | **DXMT** | 11 | 4.0b2 | `GfeSDK.dll` | `GfeSDK_real.dll` | `p5s-video-bridge.c` | `libgstlibav` | `BEAST_FORCE_NV12`, `BEAST_REFUSE_D3D_MANAGER` | — |
+| [Nioh 3](Nioh-3.md) | D3DMetal | 12 | 4.0b2 | `amd_ags_x64.dll` | `amd_ags_x64_real.dll` | `dwo-video-bridge.c` | — | — | — |
+| [Wo Long: Fallen Dynasty](Wo-Long-Fallen-Dynasty.md) | D3DMetal | 12 | 4.0b2 | `libxess.dll` | `libxess_real.dll` | `dwo-video-bridge.c` | — | — | — |
+| [NieR Replicant ver.1.22474487139](NieR-Replicant.md) | D3DMetal | 11 | 4.0b2 | `dinput8.dll` | `dinput8_real.dll` | `dwo-video-bridge.c` | `libgstlibav` | — | yes |
+| [KINGDOM HEARTS Dream Drop Distance](Kingdom-Hearts.md) | D3DMetal | 11 + 12 | 4.0b2 | `dinput8.dll` | `dinput8_real.dll` | `dwo-video-bridge.c` | — | — | yes |
+| [KINGDOM HEARTS HD 1.5+2.5 ReMIX](Kingdom-Hearts.md) | D3DMetal | 11 + 12 | 4.0b2 | `dinput8.dll` | `dinput8_real.dll` | `dwo-video-bridge.c` | — | — | yes |
+| [TMNT: Splintered Fate](TMNT-Splintered-Fate.md) | D3DMetal | 12 | 4.0b2 | `fmod.dll` | `fmod_real.dll` | `d3d12-guards.c` | — | — | — |
+| [Tormented Souls 2](Tormented-Souls-2.md) | D3DMetal | 12 | 4.0b2 | `OpenColorIO_2_3.dll` | `OpenColorIO_2_3_real.dll` | `d3d12-guards.c` | — | — | — |
+| [Devil May Cry 5](RE-Engine-VC1.md) | D3DMetal | 12 | 3.0 and 4.0b2 | — | — | — | `libgstlibav` | — | — |
+| [RESIDENT EVIL 2](RE-Engine-VC1.md) | D3DMetal | 12 | 3.0 and 4.0b2 | — | — | — | `libgstlibav` | — | — |
+| [RESIDENT EVIL 3](RE-Engine-VC1.md) | D3DMetal | 12 | 3.0 and 4.0b2 | — | — | — | `libgstlibav` | — | — |
+| [NINJA GAIDEN 4](Ninja-Gaiden-4.md) | D3DMetal | 12 | **3.0 only** -- 4.0b2 stalls it | `dstorage.dll` | `dstorage_real.dll` | `ng4-observe.c` | `libgstmatroska` | `BEAST_FORCE_NV12`, `BEAST_REFUSE_D3D_MANAGER`, `NG4_ANSWER_MFT`, `NG4_CPU_DECOMP`, `NG4_FAKE_OPTIONS17`, `NG4_NO_D3D11_PATCH`, `NG4_PATCH_D3D12`, `NG4_REFUSE_DSTORAGE`, `NG4_SMALL_STAGING` | — |
+
+**Carrier** is the DLL the fix rides on -- one the game already loads, chosen
+because it has nothing to do with video. **Kept as** is what the original is
+renamed to; where the carrier is a DLL Wine implements itself, that original is
+a copy taken from your own CrossOver and nothing is redistributed. **Bridge** is
+the source the shipped proxy was built from: 5 sources serve every title
+here, so a fault found in one is often already fixed in the others.
+
+**Registry** says whether Wine has to be told to prefer our DLL. 2 fixes
+need it, and for the same reason: their carrier is `dinput8`, which Wine
+implements, so without the override the file beside the game is never opened.
+That key is the part that goes missing on its own -- a bottle reset, a bottle
+made after a CrossOver upgrade -- and a fix whose files are present is not
+therefore a fix that is running. Both installers check the registry now, and
+answer `broken` rather than `installed` when it is gone.
+
+**Env levers** are the environment variables the shipped DLL reads. They are
+levers, not requirements: each one defaults to the setting the fix was measured
+with, and they exist so a failing title can be bisected without a rebuild.
+
+**Codec** is the plugin `stage-codecs.sh` must put in front of CrossOver.
+7 titles need a decoder no CrossOver ships, 2 need a demuxer,
+and telling those two cases apart is most of the work -- see
+[How the codec staging works](How-the-codec-staging-works.md). The decoder
+column is the same on every build; the demuxer one is not, because Preview
+ships `matroska` and stable 26.3 does not, so those rows describe what stable
+needs and what Preview already has.
+
+<!-- stack:end -->
+
 ## One bottle cannot hold all of these
 
-`CX_GRAPHICS_BACKEND` divides them. Five run on `d3dmetal`; Persona 5 Strikers
-runs only on `dxmt`, because it needs a shared D3D9 surface handle and
+`CX_GRAPHICS_BACKEND` divides them, and the Backend column above says which is
+which. The `dxmt` group because it needs a shared D3D9 surface handle and
 D3DMetal has none to give.
 
 Steam libraries are shared between bottles, so giving that one a bottle of its
@@ -149,30 +212,35 @@ a fix that stopped working.
 
 The older form of this question was "does a fix need winevideo?", which framed
 it as a codec problem. It is not one, and asking it that way produced the wrong
-answer for the single title it existed to describe. What separates these six is
-what each fix needs CrossOver to have already done before it can start: open a
-container, decode a codec, or neither.
+answer for the single title it existed to describe. What separates these titles
+is what each fix needs CrossOver to have already done before it can start: open
+a container, decode a codec, or neither. The Codec column above answers it per
+title. The distinction behind it is the part worth carrying:
 
-- **DYNASTY WARRIORS: ORIGINS — a WebM demuxer.** Its 355 cutscenes are
-  `.webm`, and the bridge only presents frames that Media Foundation has
-  already produced. Preview ships the `matroska` plugin and stable 26.3 does
-  not, so on stable `MFCreateSourceReaderFromByteStream` fails at the open and
-  nothing reaches a decoder at all. Both builds decode the VP9 inside a WebM
-  identically, through `applemedia` and VideoToolbox. The evidence and its
-  limits are on
-  [that title's page](Dynasty-Warriors-Origins.md).
-- **Persona 5 Strikers — a VC-1 decoder, which it brings with it.** No
-  CrossOver ships one. It is staged beside the game rather than patched into
-  the engine, so this fix depends on nothing CrossOver decodes.
-- **Everything else — nothing.** Mortal Shell 2 decodes in-process with
-  Electra's own libvpx; Beast of Reincarnation goes through an H.264 decoder
-  both builds have; both Life is Strange freezes are inside DXGI and never
-  touch video. One qualification on the last of those: the DLL those two
-  install carries all three repairs, and its policy table arms only the node
-  guard for them — but the Media Foundation hooks it installs go in for every
-  title regardless, and that unconditional instrumentation is the standing
-  suspicion for why those two crash on 26.3. The fault has nothing to do with
-  video; the DLL touches video anyway.
+- **A demuxer is a container problem.** DYNASTY WARRIORS: ORIGINS and NINJA
+  GAIDEN 4 both play WebM, and Media Foundation cannot open one without a
+  Matroska demuxer -- `MFCreateSourceReaderFromByteStream` fails at the open
+  and nothing reaches a decoder at all. It reports that as
+  `MF_E_UNSUPPORTED_BYTESTREAM_TYPE`, which reads like a missing codec and is
+  not one. **This one depends on the engine**: Preview ships `matroska` for
+  both architectures and stable 26.3 ships it for neither, so on stable the
+  plugin has to be staged and on Preview it is already there. The VP9 inside is
+  decoded identically by both builds.
+- **A decoder is a codec problem.** No CrossOver decodes VC-1, WMV3, WMV2 or
+  WMA, and seven titles play video in one of those -- the RE Engine three, the
+  two Nioh, Persona 5 Strikers, and NieR Replicant, which joined the list by
+  measurement after years of being filed as needing nothing. `libgstlibav` is
+  staged beside the game rather than patched into the engine, so those fixes
+  depend on nothing CrossOver decodes and behave the same on both builds.
+- **Neither, for the rest.** Mortal Shell 2 decodes in-process with Electra's
+  own libvpx; Beast of Reincarnation goes through an H.264 decoder both builds
+  have; both Life is Strange freezes are inside DXGI and never touch video. One
+  qualification on the last of those: the DLL those two install carries all
+  three repairs, and its policy table arms only the node guard for them -- but
+  the Media Foundation hooks it installs go in for every title regardless, and
+  that unconditional instrumentation is the standing suspicion for why those
+  two crash on 26.3. The fault has nothing to do with video; the DLL touches
+  video anyway.
 
 **On winevideo.** On a current Preview none of these fixes needs it, and the
 VP9 and WebM plugins it installs are redundant there. On a stable build it
@@ -184,7 +252,7 @@ dependency on it has been measured here. One unbuilt alternative, and the
 reasoning behind it, is in [Findings](Findings.md), under *The container, not
 the codec*.
 
-## The mechanism these six share
+## The mechanism they share
 
 Why each hook exists, which vtable slot each one takes, how a carrier DLL is
 picked and what was tried and did not work is in [Findings](Findings.md). The

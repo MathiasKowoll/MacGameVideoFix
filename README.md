@@ -7,7 +7,7 @@ Makes Windows games show their cutscenes under CrossOver on Apple Silicon.
 > Specifically **`crossover-preview-arm64-20260821`**. That is where every title
 > here is measured, and it is the only configuration this project supports.
 >
-> Six of the eighteen also run on stable CrossOver 26.3 and the table says
+> Most also run on stable CrossOver 26.3 and the table says
 > which. Treat that as a bonus: stable is not tested before a release, and what
 > stops the rest is in the translation stack shipped with it rather than in
 > anything installed beside the game.
@@ -24,26 +24,31 @@ than the translation layer's: it keeps 16:9 resolutions and nothing else, and a
 laptop display has none. They install the same way: open the app, pick the game
 from the list, drop its folder on it, press Apply.
 
+<!-- readme-games:begin -->
+
 | Game | Symptom | CrossOver |
 | --- | --- | --- |
-| [**Mortal Shell 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Mortal-Shell-2) | Crash on the first cutscene | 26.3 and Preview 20260821 |
-| [**Life is Strange: Reunion**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Reunion) | Runs, then freezes after a while | Preview 20260821 — freezes on 26.3 |
-| [**Life is Strange: Double Exposure**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Double-Exposure) | Runs, then freezes after a while | Preview 20260821 — freezes on 26.3 |
-| [**Beast of Reincarnation**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Beast-of-Reincarnation) | Startup video plays with sound, no picture | 26.3 and Preview 20260821 |
-| [**Persona 5 Strikers**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Persona-5-Strikers) | Video never starts; sound only | 26.3 and Preview 20260821 |
-| [**DYNASTY WARRIORS: ORIGINS**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Dynasty-Warriors-Origins) | Cutscene plays with sound, picture black | Preview 20260821 — no video on 26.3 |
-| [**Nioh**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Nioh) | Cutscene refuses to play, then crashes | Preview 20260821 — not tried on 26.3 |
-| [**Nioh 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Nioh-2) | Cutscene refuses to play, then crashes | Preview 20260821 — not tried on 26.3 |
-| [**Nioh 3**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Nioh-3) | Failed to play movie | Preview 20260821 — not tried on 26.3 |
-| [**Wo Long: Fallen Dynasty**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Wo-Long-Fallen-Dynasty) | Cutscene runs with sound, picture black | Preview 20260821 — not tried on 26.3 |
-| [**NieR Replicant ver.1.22474487139**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/NieR-Replicant) | Crashes when the first video starts | Preview 20260821 — not tried on 26.3 |
-| [**KINGDOM HEARTS Dream Drop Distance**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Kingdom-Hearts) | Cutscene runs with sound, picture solid green | Preview 20260821 — not tried on 26.3 |
-| [**KINGDOM HEARTS HD 1.5+2.5 ReMIX**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Kingdom-Hearts) | Cutscene runs with sound, picture solid green | Preview 20260821 — not tried on 26.3 |
-| [**TMNT: Splintered Fate**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/TMNT-Splintered-Fate) | Opens a window, then closes silently | Preview 20260821 — not tried on 26.3 |
-| [**Tormented Souls 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Tormented-Souls-2) | Fatal error before the first frame | Preview 20260821 — not tried on 26.3 |
-| [**Devil May Cry 5**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/RE-Engine-VC1) | Crashes when a skill preview video plays | 26.3 and Preview 20260821 |
-| [**RESIDENT EVIL 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/RE-Engine-VC1) | Crashes when a video plays | 26.3 and Preview 20260821 |
-| [**RESIDENT EVIL 3**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/RE-Engine-VC1) | Crashes when a video plays | 26.3 and Preview 20260821 |
+| [**Mortal Shell 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Mortal-Shell-2) | Crash on the first cutscene | 26.3 and Preview |
+| [**Life is Strange: Reunion**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Reunion) | Freezes after a while, anywhere | 26.3 and Preview |
+| [**Life is Strange: Double Exposure**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Double-Exposure) | Freezes after a while, anywhere | 26.3 and Preview |
+| [**DYNASTY WARRIORS: ORIGINS**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Dynasty-Warriors-Origins) | Cutscene runs with sound, picture black | 26.3 and Preview |
+| [**Beast of Reincarnation**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Beast-of-Reincarnation) | Startup video plays with sound, no picture | 26.3 and Preview |
+| [**Persona 5 Strikers**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Persona-5-Strikers) | Video never starts; sound only | 26.3 and Preview |
+| [**Nioh**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Nioh) | Cutscene refuses to play, then crashes | 26.3 and Preview |
+| [**Nioh 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Nioh-2) | Cutscene refuses to play, then crashes | 26.3 and Preview |
+| [**Nioh 3**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Nioh-3) | Failed to play movie | 26.3 and Preview |
+| [**Wo Long: Fallen Dynasty**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Wo-Long-Fallen-Dynasty) | Cutscene runs with sound, picture black | 26.3 and Preview |
+| [**NieR Replicant ver.1.22474487139**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/NieR-Replicant) | Crashes when the first video starts | 26.3 and Preview |
+| [**KINGDOM HEARTS Dream Drop Distance**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Kingdom-Hearts) | Cutscene runs with sound, picture solid green | Preview -- not tried on 26.3 |
+| [**KINGDOM HEARTS HD 1.5+2.5 ReMIX**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Kingdom-Hearts) | Cutscene runs with sound, picture solid green | Preview -- not tried on 26.3 |
+| [**TMNT: Splintered Fate**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/TMNT-Splintered-Fate) | Opens a window, then closes silently | 26.3 and Preview |
+| [**Tormented Souls 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Tormented-Souls-2) | Fatal error before the first frame | 26.3 and Preview |
+| [**Devil May Cry 5**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/RE-Engine-VC1) | Crashes when a skill preview video plays | 26.3 and Preview |
+| [**RESIDENT EVIL 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/RE-Engine-VC1) | Crashes when a video plays | 26.3 and Preview |
+| [**RESIDENT EVIL 3**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/RE-Engine-VC1) | Crashes when a video plays | 26.3 and Preview |
+| [**NINJA GAIDEN 4**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Ninja-Gaiden-4) | Says the VP9 codec is missing, then exits | 26.3 only -- Preview stalls before video |
+
+<!-- readme-games:end -->
 
 **This project targets `crossover-preview-arm64-20260821`**, and that is what
 "Preview" means in the column above and everywhere else in this file. Every title
@@ -74,7 +79,7 @@ Tested on an M4 Max, macOS 27, against CrossOver 26.3 and
 
 ## Quick start
 
-Read [Requirements](#requirements) first. Twelve of the eighteen entries have
+Read [Requirements](#requirements) first. Most entries have
 only been measured on CrossOver Preview, and three need a GStreamer package
 installed before they can work at all. Each of those looks exactly like the fix
 not working.
@@ -106,7 +111,7 @@ at, repairs a bottle whose CrossOver has changed since it was last configured,
 and lets you name the CrossOver a bottle uses when the automatic answer is
 wrong.
 
-The other five titles need nothing from that sheet.
+The titles with a dash in that column need nothing from it.
 
 ### All your games at once
 
@@ -183,7 +188,7 @@ first launch. Right click it and choose **Open**, then confirm.
 - **For Persona 5 Strikers only:** the official GStreamer runtime package,
   [1.24.14](https://gstreamer.freedesktop.org/data/pkg/osx/1.24.14/)
   (`gstreamer-1.0-1.24.14-universal.pkg`; the development package is not
-  needed), installed at `/Library/Frameworks`. It is the only title here needing
+  needed), installed at `/Library/Frameworks`. The Codec column of the wiki's stack table says which titles need
   a codec CrossOver does not ship, and nothing is redistributed — the decoder is
   borrowed from an install you already have. Where it comes from, and why it is
   staged rather than patched in, is in
@@ -199,7 +204,7 @@ these titles into two groups that cannot share a bottle:
 | Backend | Games |
 | --- | --- |
 | `d3dmetal` | Mortal Shell 2, both Life is Strange, Beast of Reincarnation, DYNASTY WARRIORS: ORIGINS |
-| `dxmt` | **Persona 5 Strikers**, and only it |
+| `dxmt` | the titles marked **DXMT** in the wiki's stack table |
 
 So Persona 5 Strikers wants a bottle of its own. Steam libraries are shared
 between bottles, so a second bottle sees the same installed games without
@@ -355,6 +360,6 @@ cannot get as far as a decoder on stable, while Mortal Shell 2 ships the same
 codec in `.mp4`, which `isomp4` handles on both, and works on stable.
 
 That lead is in what the build can open, not in what it can decode. It is not a
-recommendation about which build to run generally, and six entries here are
+recommendation about which build to run generally, and the entries confirmed there are
 confirmed on stable 26.3.
 

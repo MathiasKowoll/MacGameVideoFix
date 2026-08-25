@@ -208,7 +208,7 @@ Measured on Preview and D3DMetal only. 26.3 has not been tried.
 0.2 Birth by Sleep and KINGDOM HEARTS III are untouched by this and need to be.
 Both decode their own video in software.
 
-Seven of the eight executables have been run and watched, covering every
+Seven of the eight executables have been run and watched, covering every <!-- count-ok -->
 distinct engine in both packages: Dream Drop Distance, 2.8's launcher playing
 Back Cover, FINAL MIX, Re_Chain of Memories, II FINAL MIX, Birth by Sleep
 FINAL MIX and 1.5+2.5's launcher.

@@ -1681,7 +1681,6 @@ static HRESULT WINAPI my_D3D11CreateDevice(void *adapter, UINT type, void *sw, U
  * at the start: the first samples read 16,16 then 15..50, which is a fade in
  * from black. It is entirely possible the video is being carried correctly and
  * only its dark opening was ever measured. */
-static BOOL paint_magenta = FALSE;
 static void *owning_device;
 
 static void fill_sidecar_from_surface(const char *why)
@@ -1966,18 +1965,7 @@ static void take_from_source(void *self, void *src)
              * Solid magenta tells them apart in one run. Set P5S_REAL_FRAMES=1
              * to carry the video instead. This is the measurement that settled
              * the same question on DYNASTY WARRIORS. */
-            if (paint_magenta)
-            {
-                UINT i, n = sidecar_w * sidecar_h;
-                for (i = 0; i < n; i++)
-                {
-                    scratch[i * 4 + 0] = 0xFF;
-                    scratch[i * 4 + 1] = 0x00;
-                    scratch[i * 4 + 2] = 0xFF;
-                    scratch[i * 4 + 3] = 0xFF;
-                }
-            }
-            else if (d.fmt == 0x3231564E)      /* NV12 */
+            if (d.fmt == 0x3231564E)      /* NV12 */
                 nv12_to_bgra((const BYTE *)r.pBits, (UINT)r.Pitch, scratch,
                              sidecar_w * 4, sidecar_w, sidecar_h);
             else
@@ -2145,9 +2133,6 @@ static DWORD WINAPI worker(LPVOID unused)
         v[0] = 0;
         if (GetEnvironmentVariableA("BEAST_FORCE_NV12", v, sizeof(v)) && v[0] == '1')
             restore_nv12 = TRUE;
-        v[0] = 0;
-        if (GetEnvironmentVariableA("P5S_REAL_FRAMES", v, sizeof(v)) && v[0] == '1')
-            paint_magenta = FALSE;
     }
     /* Hook the import table as well as GetProcAddress.
      *
@@ -2194,7 +2179,7 @@ static DWORD WINAPI worker(LPVOID unused)
 
     logf_("---- write-path hooks %s | painting %s ----",
           watch_write_path ? "ON" : "off",
-          paint_magenta ? "SOLID MAGENTA" : "the real frames");
+          "the real frames");
     logf_("---- armed: D3D manager %s from the MFT | NV12 relabel %s | "
           "MFCreateDXGIDeviceManager %s ----",
           withhold_d3d_from_mft ? "WITHHELD" : "passed",

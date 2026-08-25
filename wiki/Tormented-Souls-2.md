@@ -83,7 +83,7 @@ game's window it returns having changed nothing. If none does, it appends the
 already there.
 
     mode list for format 28: 26 modes, largest 2056x1329; the screen is 2056x1329
-    not one of the 26 modes on offer is 16:9, and this game keeps nothing
+    not one of the 26 modes on offer is 16:9, <!-- count-ok --> and this game keeps nothing
     else -- added 4 of them, largest 1920x1080 @ 120 Hz
 
 The game then finds resolutions it is willing to keep, the search returns a
@@ -108,7 +108,7 @@ log showed it installed and never entered. What settled it was deleting
 `Settings.sav`, which is the only way back to a first launch:
 
     mode list for format 28: 26 modes, largest 2056x1329; the screen is 2056x1329
-    not one of the 26 modes on offer is 16:9, and this game keeps nothing
+    not one of the 26 modes on offer is 16:9, <!-- count-ok --> and this game keeps nothing
     else -- added 4 of them, largest 1920x1080 @ 120 Hz
 
 `Settings.sav` grew from 2720 to 3152 bytes on that run — the added modes,

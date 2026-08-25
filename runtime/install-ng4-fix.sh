@@ -95,14 +95,31 @@ case "$ACTION" in
   --restore)
       # Put the original back only if ours is the one in the way. Restoring over
       # a folder that was never patched would delete a real DLL.
+      #
+      # That was a comment and not a check. The only guard was `[ -f "$REAL" ]`,
+      # so a folder whose live dstorage.dll is the game's own -- after a Steam
+      # verification, say -- had that genuine DLL removed and replaced by
+      # whatever the stale copy happened to be.
       [ -f "$REAL" ] || { echo "nothing to restore"; exit 0; }
+      if [ -f "$CARRIER" ] && ! is_ours "$CARRIER"; then
+        echo "error: $CARRIER is the game's own, not ours -- nothing was changed." >&2
+        echo "       $REAL is a leftover copy; remove it by hand if you want it gone." >&2
+        exit 1
+      fi
       rm -f "$CARRIER"
       mv "$REAL" "$CARRIER"
       # Only undo the rename this script made, and never over a file that is
       # already there: a user who had renamed DirectStorage by hand keeps their
       # own arrangement.
-      if [ -f "$GAME/dstoragecore.dll.mgvf-off" ] && [ ! -f "$GAME/dstoragecore.dll" ]; then
-        mv "$GAME/dstoragecore.dll.mgvf-off" "$GAME/dstoragecore.dll"
+      if [ -f "$GAME/dstoragecore.dll.mgvf-off" ]; then
+        if [ -f "$GAME/dstoragecore.dll" ]; then
+          # Both present: the game brought its own back, so the live one wins
+          # and the copy is left alone rather than deleted. Install overwrites
+          # it next time round, so this does not wedge anything.
+          echo "note: $GAME/dstoragecore.dll.mgvf-off is a leftover copy; the game's own is back" >&2
+        else
+          mv "$GAME/dstoragecore.dll.mgvf-off" "$GAME/dstoragecore.dll"
+        fi
       fi
       echo "restored — the game is back to its own dstorage.dll"
       exit 0 ;;
@@ -116,15 +133,42 @@ esac
 # Idempotent: installing twice must not rename our own proxy into the slot the
 # original belongs in, which would leave the game with two copies of the fix and
 # no DirectStorage at all.
-if [ ! -f "$REAL" ]; then
-  mv "$CARRIER" "$REAL"
+#
+# Asking `[ ! -f "$REAL" ]` was the wrong question, and a destructive one. After
+# a Steam verification the live dstorage.dll is the game's own again -- possibly
+# newer -- while our saved copy is stale; that test saw $REAL and skipped the
+# move, and the cp below then overwrote the freshly restored original, whose
+# only copy it was. The right question is which of the two is ours.
+moved=0
+if is_ours "$CARRIER"; then
+  [ -f "$REAL" ] || {
+    echo "error: $CARRIER is already ours but $REAL is gone." >&2
+    echo "       Verify the game files in Steam, then run this again." >&2
+    exit 1
+  }
+else
+  [ -e "$REAL" ] && echo "  $REAL was left over from before; the live dstorage.dll is the game's own, so it replaces it"
+  mv -f "$CARRIER" "$REAL"
+  moved=1
 fi
-cp "$PROXY" "$CARRIER"
+# The rollback undoes this run, and only this run. Re-running over an install
+# that is already ours moves nothing, so putting $REAL back there would not be a
+# rollback -- it would be an uninstall performed by a failed repair.
+cp "$PROXY" "$CARRIER" || {
+  [ "$moved" = 1 ] && mv -f "$REAL" "$CARRIER" 2>/dev/null
+  echo "error: could not install the proxy" >&2; exit 1
+}
 
 # DirectStorage off, which the header has always declared mandatory and which
-# nothing here ever did. Reversible, and skipped if the user already did it.
-if [ -f "$GAME/dstoragecore.dll" ] && [ ! -f "$GAME/dstoragecore.dll.mgvf-off" ]; then
-  mv "$GAME/dstoragecore.dll" "$GAME/dstoragecore.dll.mgvf-off"
+# nothing here ever did. Reversible, and a no-op once it is already off.
+#
+# The move overwrites any leftover .mgvf-off on purpose. Refusing when one
+# existed made the repair impossible exactly where it was needed: a Steam
+# verification brings dstoragecore.dll back beside the old copy, --status calls
+# that `broken`, and an install that declined to touch it left the state
+# unreachable by any button while still printing "installed".
+if [ -f "$GAME/dstoragecore.dll" ]; then
+  mv -f "$GAME/dstoragecore.dll" "$GAME/dstoragecore.dll.mgvf-off"
   echo "  DirectStorage turned off: dstoragecore.dll -> dstoragecore.dll.mgvf-off"
 fi
 echo "installed — answer the codec gate, and decode in software"

@@ -57,6 +57,12 @@ is_ours() { [ -f "$1" ] && LC_ALL=C grep -qa "$MARKER" "$1"; }
 status() {
   if is_ours "$LIVE" && [ -f "$REAL" ]; then echo installed
   elif is_ours "$LIVE"; then echo broken
+  # Apple's dxgi is aside and nothing is in its place. Every other installer
+  # here has this branch; this one did not, so that state answered `absent`,
+  # --restore then said "nothing to do" and refused to give the file back, and
+  # --install died on the move. The one script that touches a bundle every
+  # bottle shares was the one with no way out of it.
+  elif [ ! -f "$LIVE" ] && [ -f "$REAL" ]; then echo half
   else echo absent
   fi
 }
@@ -70,6 +76,12 @@ case "$MODE" in
 --restore)
   state="$(status)"
   if [ "$state" = absent ]; then echo "not installed, nothing to do"; exit 0; fi
+  if [ "$state" = half ]; then
+    echo "[1/2] putting Apple's dxgi.dll back; nothing was in its place"
+    mv -f "$REAL" "$LIVE" || { echo "error: could not put it back" >&2; exit 1; }
+    echo "[2/2] done"
+    exit 0
+  fi
   if [ "$state" = broken ]; then
     echo "error: $LIVE is our proxy but $REAL is missing." >&2
     echo "       Reinstall CrossOver to get Apple's back." >&2
@@ -86,6 +98,17 @@ case "$MODE" in
   if is_ours "$LIVE"; then
     echo "error: $LIVE is already a proxy but $REAL is gone." >&2
     exit 1
+  fi
+  # Half: Apple's dxgi is already aside and the slot is empty, so there is
+  # nothing to compare against and nothing to move -- only the guard to put in.
+  # status() and --restore learned this state; install kept dying in it, one
+  # step earlier than before and with a message that did not name it.
+  if [ "$(status)" = half ]; then
+    echo "[1/1] the slot is empty and Apple's dxgi is already saved; installing the guard"
+    cp "$PROXY" "$LIVE" || { echo "error: could not install the guard" >&2; exit 1; }
+    echo
+    echo "installed in $(basename "$APP")"
+    exit 0
   fi
 
   echo "[1/3] checking the proxy exports everything Apple's does"
@@ -124,7 +147,16 @@ case "$MODE" in
   }
 
   echo "[3/3] installing the guard"
-  cp "$PROXY" "$LIVE"
+  # Guarded, and it puts Apple's file back if it fails. This file is
+  # `set -uo pipefail` without -e, so an unguarded cp would carry on to print
+  # "installed" with the move already done and nothing in the slot -- the exact
+  # failure the guard one line above was added to prevent. Its siblings in
+  # runtime/ all revert the move here.
+  cp "$PROXY" "$LIVE" || {
+    echo "error: could not install the guard; putting Apple's dxgi.dll back" >&2
+    mv -f "$REAL" "$LIVE" || echo "       and that failed too -- it is at $REAL" >&2
+    exit 1
+  }
 
   echo
   echo "installed in $(basename "$APP")"

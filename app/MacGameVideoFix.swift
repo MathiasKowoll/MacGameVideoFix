@@ -134,7 +134,7 @@ enum Requirements {
     /// else, for most games", and the comment beside it already conceded the
     /// text was not accurate. It is worse than inaccurate: a version floor
     /// invites someone on a stable build to read "you are fine", when every fix
-    /// here is measured on Preview and only three of the eighteen entries are
+    /// here is measured on Preview and only some entries are
     /// known to work anywhere else.
     ///
     /// A floor is the wrong shape for this. What the project supports is one
@@ -145,7 +145,7 @@ enum Requirements {
     /// the button that resolves it. That is what the banner below does now, and
     /// this line is back to one fact.
     static var note: String {
-        "Measured on CrossOver Preview. Six of the eighteen entries also work "
+        "Measured on CrossOver Preview. Most entries also work "
       + "on stable 26.3; the rest are not verified there."
     }
 }
@@ -314,6 +314,18 @@ enum SupportedGame: String, CaseIterable, Identifiable {
     /// two Nioh titles all ride a bridge, on different carrier DLLs. The Nioh
     /// pair share one installer because they share a carrier and a fault; the
     /// others do not.
+    /// True where the bridge's carrier is copied out of the CrossOver bottle
+    /// rather than shipped by the game. It decides what `half` means: the other
+    /// installers refuse that state because the carrier they need is the very
+    /// file that is missing, but these two fetch `dinput8` from the bottle, so
+    /// installing straight over a half-finished install completes normally.
+    var carrierComesFromBottle: Bool {
+        switch self {
+        case .nierReplicant, .kingdomHearts28, .kingdomHearts1525: return true
+        default: return false
+        }
+    }
+
     var installer: String {
         switch self {
         /* One installer for both: same carrier, same bridge, same fault. */
@@ -345,7 +357,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
 
     /// Said on a row that installs cleanly and still will not play.
     ///
-    /// Three games here need a codec CrossOver does not ship. The bridge goes
+    /// Some games here need a codec CrossOver does not ship. The bridge goes
     /// in either way; without the codec there is nothing for it to carry.
     var extraRequirement: String? {
         switch self {
@@ -1811,7 +1823,12 @@ final class Runner: ObservableObject {
             // count -- it cannot be fixed and is not fixed -- so a library
             // holding one applied game and one blocked one used to be announced
             // as entirely fixed, directly above a row saying it was not.
-            let ready = probed.filter { $0.actionable && $0.state != .applied }.count
+            // `half` is actionable but not fixable: it is undone with Remove,
+            // not repaired with Fix, so counting it here promised a repair the
+            // button does not perform.
+            let ready = probed.filter {
+                $0.actionable && $0.state != .applied && $0.fixable
+            }.count
             let done = probed.filter { $0.actionable && $0.state == .applied }.count
             let blocked = probed.count - ready - done
             let cannot = "\(blocked) cannot be fixed as \(blocked == 1 ? "it is" : "they are"). "
@@ -1878,6 +1895,17 @@ final class Runner: ObservableObject {
 
     private func probe(_ hit: ScanHit) async -> ScanHit {
         var hit = hit
+        // Every probe starts from nothing said. applyPlan re-probes the rows
+        // already in the plan rather than building new ones, so anything left
+        // over here survives the repair it describes: a row that was `broken`
+        // and is now installed kept the orange "the fix is not active", and a
+        // row whose --status once failed kept a blocker that put it permanently
+        // out of reach of any button. Only the default branch used to clear
+        // them, which is the one branch that cannot be reached by a fix
+        // succeeding.
+        hit.blocker = nil
+        hit.note = nil
+        hit.fixable = true
         let script = resources.appendingPathComponent(hit.game.installer).path
 
         statusAnswer = ""
@@ -1914,9 +1942,18 @@ final class Runner: ObservableObject {
         // ("Verify the game files in Steam") is better advice than a grey row.
         case "half":
             hit.state = .partial
-            hit.selected = false
-            hit.note = "Half installed: the original is saved aside and "
-                     + "nothing is in its place. Remove puts it back."
+            // Both flags move together: `ready` counts on `fixable`, so a row
+            // marked fixable but left unselected would promise a repair that
+            // applyPlan's empty-targets guard then declines to perform.
+            let fromBottle = hit.game.carrierComesFromBottle
+            hit.selected = fromBottle
+            hit.fixable = fromBottle
+            hit.note = fromBottle
+                ? "Half installed: the original is saved aside and nothing is "
+                + "in its place. Fix completes it — this carrier comes from "
+                + "your bottle, not the game."
+                : "Half installed: the original is saved aside and "
+                + "nothing is in its place. Remove puts it back."
         case "broken":
             hit.state = .partial
             hit.selected = true
@@ -3324,6 +3361,11 @@ struct ScanHit: Identifiable {
     /// this", so using it to explain a repairable state left the row visible,
     /// alarming and inert.
     var note: String?
+    /// False for a row that Fix cannot help. Both `half` and `broken` are
+    /// `.partial` and both are reachable, but only one of them is repaired by
+    /// re-running the installer -- `half` is undone with Remove. Without this
+    /// the header offered to fix rows the Fix button would not touch.
+    var fixable = true
     var selected = true
     var outcome: String?
 
@@ -4711,7 +4753,7 @@ struct ContentView: View {
     }
 
     /// Only shown when a scanned game needs it, so it is not a permanent
-    /// button for a thing five of the six games have nothing to do with.
+    /// button for a thing most of the games have nothing to do with.
     /// Everything staged AND every bottle pointing at the right one.
     ///
     /// The banner used to take its symbol, tint and title from `Codecs.staged`
@@ -4726,7 +4768,7 @@ struct ContentView: View {
     /// The first of the two things that have to be right, shown either way.
     ///
     /// Green when GStreamer is on this Mac, orange with the download when it is
-    /// not. Six games borrow a decoder from it, and nothing below can be staged
+    /// not. Several games borrow a decoder from it, and nothing below can be staged
     /// until it exists -- so it reads as a step that has passed or not, in the
     /// same shape as the codec card underneath.
     private var gstreamerBanner: some View {
@@ -4741,9 +4783,9 @@ struct ContentView: View {
                      : "GStreamer is not installed")
                     .font(.callout.weight(.medium))
                 Text(have
-                     ? "The decoder six games need is borrowed from it. Nothing is "
+                     ? "The decoder and demuxer some games need are borrowed from it. Nothing is "
                        + "redistributed and no CrossOver file is touched."
-                     : "Six games borrow a VC-1 or WMV3 decoder from it, and nothing "
+                     : "Several games borrow a decoder or a demuxer from it, and nothing "
                        + "can be staged until it is on this Mac. It is a normal macOS "
                        + "installer, and nothing from it is redistributed.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -4829,7 +4871,7 @@ struct ContentView: View {
 
     private var codecBannerTitle: String {
         if !Codecs.gstreamerInstalled && !Codecs.staged {
-            return "GStreamer is not installed, and six games need a decoder from it"
+            return "GStreamer is not installed, and some games need a codec from it"
         }
         if codecHealthy { return "Codec staged" }
         // Says what to do rather than what is wrong. The condition is real -- a
@@ -4841,7 +4883,7 @@ struct ContentView: View {
         // and stopped being true the day Devil May Cry 5, RESIDENT EVIL 2 and
         // RESIDENT EVIL 3 turned out to want the same decoder. A count does not
         // go stale the next time one is added.
-        return "Six games need a decoder CrossOver does not ship"
+        return "Several games need a codec CrossOver does not ship"
     }
 
     /// Built as a plain string rather than inline: the compiler gave up

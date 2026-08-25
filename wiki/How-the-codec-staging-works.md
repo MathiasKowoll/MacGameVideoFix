@@ -1,7 +1,8 @@
 # How the codec staging works
 
-Seven of the games here need something CrossOver does not ship: six need a
-decoder, and one needs a demuxer. This is what the app does about it, why it is
+Some of the games here need something CrossOver does not ship: most need a
+decoder, and two need a demuxer. Which is which, per title, is the Codec
+column of [what each title actually loads](Games.md#what-each-title-actually-loads). This is what the app does about it, why it is
 built that way, and why the obvious approach crashes.
 
 Nothing is redistributed and no CrossOver file is touched. The whole repair is a

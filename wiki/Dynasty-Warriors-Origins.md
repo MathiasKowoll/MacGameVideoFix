@@ -204,7 +204,7 @@ that the bridge carried what was put in it.
 
 ---
 
-Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md) · [Findings](Findings.md), what the six have in common
+Back to [the games table](Games.md) · [Diagnosing a new game](Diagnosing-a-new-game.md) · [Findings](Findings.md), what what they have in common
 
 ### Staging the demuxer was tried, and it was not enough
 

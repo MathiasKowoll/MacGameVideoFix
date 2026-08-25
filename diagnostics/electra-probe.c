@@ -1070,8 +1070,13 @@ static DWORD WINAPI worker(LPVOID unused)
         if (GetEnvironmentVariableA("BEAST_REFUSE_D3D_MANAGER", v, sizeof(v)) && v[0] == '1')
             refuse_d3d_manager = TRUE;
         v[0] = 0;
-        if (GetEnvironmentVariableA("BEAST_FORCE_NV12", v, sizeof(v)) && v[0] == '1')
-            restore_nv12 = TRUE;
+        /* On by default, so the lever is the one that turns it OFF. Asking for
+         * '1' set TRUE a flag that was already TRUE: the relabel could not be
+         * disabled, and the log below could only ever print "on" while
+         * advertising a state that had two values. This is the idiom the rest
+         * of the tree uses for a flag that ships armed. */
+        if (GetEnvironmentVariableA("BEAST_FORCE_NV12", v, sizeof(v)) && v[0] == '0')
+            restore_nv12 = FALSE;
     }
     logf_("---- armed: D3D manager %s from the MFT | NV12 relabel %s | "
           "MFCreateDXGIDeviceManager %s ----",

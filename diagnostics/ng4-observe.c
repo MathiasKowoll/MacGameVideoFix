@@ -1071,12 +1071,41 @@ static HRESULT WINAPI my_MFTEnumEx(GUID category, UINT32 flags,
     {
         REG_TYPE_INFO substitute = *in;
         static LONG said;
+        const char *how = "H264";
+
         substitute.guidSubtype = guid_H264;
         hr = real_MFTEnumEx(category, flags, &substitute, out, mfts, count);
+
+        /* H.264 is the first choice and not the only one.
+         *
+         * Borrowing one named format's list assumed that format is registered,
+         * and on a CrossOver that offers no H.264 decoder at all the fallback
+         * had nothing to hand back: the gate still saw zero and the game still
+         * quit, on an engine where everything else about the fix was working.
+         * Measured on a patched Preview 27, where MFTEnumEx offers zero H.264
+         * MFTs while 26.3 offers some -- so the answer was engine-dependent
+         * through no property of this title.
+         *
+         * Asking with no input type at all means "every video decoder you
+         * have", whatever this engine happens to register. It keeps the reason
+         * the substitution is done this way -- these are real MFTs with real
+         * lifetimes, not an array we fabricated for the game to free -- while
+         * depending on nothing being present by name. */
+        if (SUCCEEDED(hr) && *count == 0)
+        {
+            hr = real_MFTEnumEx(category, flags, NULL, out, mfts, count);
+            how = "any video decoder";
+        }
         if (InterlockedIncrement(&said) == 1)
-            logf_("VP90 had no decoder; asked again for H264 and got %u -- the "
-                  "game only counts these, it never activates them",
-                  count ? *count : 0);
+            logf_("VP90 had no decoder; asked again for %s and got %u. On 26.3 "
+                  "the game only counts these and never activates them -- if "
+                  "an IMFActivate::ActivateObject line follows on this engine, "
+                  "that assumption does not hold here and this answer is "
+                  "hiding a legible error behind a later one",
+                  how, count ? *count : 0);
+        if (count && *count == 0)
+            logf_("  and this engine registers NO video decoder of any kind, so "
+                  "the gate cannot be answered from what is here");
     }
     logf_("MFTEnumEx flags=0x%lx -> 0x%08lx, %u decoder(s) offered",
           flags, hr, count ? *count : 0);
@@ -1871,7 +1900,6 @@ static HRESULT WINAPI my_D3D11CreateDevice(void *adapter, UINT type, void *sw, U
  * at the start: the first samples read 16,16 then 15..50, which is a fade in
  * from black. It is entirely possible the video is being carried correctly and
  * only its dark opening was ever measured. */
-static BOOL paint_magenta = FALSE;
 static void *owning_device;
 
 static void fill_sidecar_from_surface(const char *why)
@@ -2153,21 +2181,14 @@ static void take_from_source(void *self, void *src)
              * the game samples something else. On a black screen those look
              * identical.
              *
-             * Solid magenta tells them apart in one run. Set P5S_REAL_FRAMES=1
-             * to carry the video instead. This is the measurement that settled
-             * the same question on DYNASTY WARRIORS. */
-            if (paint_magenta)
-            {
-                UINT i, n = sidecar_w * sidecar_h;
-                for (i = 0; i < n; i++)
-                {
-                    scratch[i * 4 + 0] = 0xFF;
-                    scratch[i * 4 + 1] = 0x00;
-                    scratch[i * 4 + 2] = 0xFF;
-                    scratch[i * 4 + 3] = 0xFF;
-                }
-            }
-            else if (d.fmt == 0x3231564E)      /* NV12 */
+             * Solid magenta told them apart in one run, and the screen came out
+             * magenta: the write path was right and the fault was upstream of
+             * it. The same measurement settled the same question on DYNASTY
+             * WARRIORS. The scaffolding that painted it is gone -- it had been
+             * wired to a P5S_REAL_FRAMES lever that only ever set its flag back
+             * to the value it already had, so the compiler dropped the branch
+             * and the lever moved nothing while still being advertised. */
+            if (d.fmt == 0x3231564E)      /* NV12 */
                 nv12_to_bgra((const BYTE *)r.pBits, (UINT)r.Pitch, scratch,
                              sidecar_w * 4, sidecar_w, sidecar_h);
             else
@@ -3242,9 +3263,6 @@ static DWORD WINAPI worker(LPVOID unused)
         v[0] = 0;
         if (GetEnvironmentVariableA("NG4_SMALL_STAGING", v, sizeof(v)) && v[0] == '1')
             small_staging = TRUE;
-        v[0] = 0;
-        if (GetEnvironmentVariableA("P5S_REAL_FRAMES", v, sizeof(v)) && v[0] == '1')
-            paint_magenta = FALSE;
     }
     /*
      * MFCreateFile is called, never intercepted, so what matters is having its
@@ -3316,7 +3334,7 @@ static DWORD WINAPI worker(LPVOID unused)
     watch_directstorage();
     logf_("---- write-path hooks %s | painting %s ----",
           watch_write_path ? "ON" : "off",
-          paint_magenta ? "SOLID MAGENTA" : "the real frames");
+          "the real frames");
     logf_("---- armed: D3D manager %s from the MFT | NV12 relabel %s | "
           "MFCreateDXGIDeviceManager %s ----",
           withhold_d3d_from_mft ? "WITHHELD" : "passed",

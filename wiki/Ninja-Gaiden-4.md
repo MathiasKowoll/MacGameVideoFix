@@ -20,7 +20,7 @@ already staged for six other games -- decodes these files, and so does `vp9dec`;
 sampling twenty-five of them produced identical `I420` output either way.
 
 What is missing sits one step earlier. NG4's videos live in
-`Assets/Movies/*.msd`, an extension Koei Tecmo invented, and 399 of the 400 files
+`Assets/Movies/*.msd`, an extension Koei Tecmo invented, and 399 of the 400 files <!-- count-ok -->
 are ordinary Matroska/WebM carrying VP9 Profile 0. The chain that has to run is
 
     typefind  ->  matroskademux  ->  a VP9 decoder

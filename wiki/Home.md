@@ -6,7 +6,7 @@ out about a game that is not listed yet.
 >
 > Specifically **`crossover-preview-arm64-20260821`**. That is where every title
 > here is measured, and it is the only configuration this project supports.
-> Three of the nine also run on stable 26.3; treat that as a bonus rather than a
+> Most of them also run on stable 26.3; treat that as a bonus rather than a
 > promise.
 
 The tooling lives in [MacGameVideoFix](https://github.com/MathiasKowoll/MacGameVideoFix).
@@ -138,7 +138,7 @@ Strikers, Nioh and Nioh 2 only work on DXMT: all three need a shared D3D9
 surface handle, and DXMT implements sharing where D3DMetal has none to build on.
 Nioh 3, despite the name, belongs with the other group -- it is D3D12 on
 D3DMetal and never touches D3D9, and NieR Replicant is D3D11 on D3DMetal. The
-other nine run on
+rest run on
 D3DMetal with the D3D12 renderer, which is also what keeps PSO precompilation
 -- `-dx11` dodges some of these faults and costs permanent shader-compilation
 stutter.
@@ -182,17 +182,20 @@ plugin-by-plugin comparison that conclusion rested on is in
 [Findings](Findings.md), under *The container, not the codec*.
 
 **That gap is now closed, and it was a missing plugin rather than a missing
-engine.** Neither build ships a Matroska demuxer; Preview reached WebM by another
-route. Staging `libgstmatroska` beside the decoder gives stable one too, and
-NINJA GAIDEN 4 is where it was measured -- it plays on stock 26.3, video and all,
-with nothing patched into CrossOver. What this means for the titles above has not
-been re-measured: their rows still say what each was measured on, and DYNASTY
-WARRIORS in particular deserves a fresh run on 26.3 before its row changes.
+engine.** Preview ships `libgstmatroska`, for both architectures, and stable
+26.3 ships it for neither -- so the difference between the two builds on a WebM
+was one plugin the whole time. Staging it beside the decoder gives stable one
+too, and NINJA GAIDEN 4 is where that was measured: it plays on stock 26.3,
+video and all, with nothing patched into CrossOver.
 
-Three titles need a codec no CrossOver ships -- VC-1 for Persona 5 Strikers,
-WMV3 for Nioh and Nioh 2 -- and it is staged beside the game rather than patched
-into it. Nioh 3 needs none: its video is already NV12 by the time Media
-Foundation is asked for it.
+Several titles need a codec no CrossOver ships -- VC-1, WMV3, WMV2 or WMA -- and
+it is staged beside the game rather than patched into it. Which titles, and
+which plugin each one needs, is the Codec column of
+[what each title actually loads](Games.md#what-each-title-actually-loads); the
+count is derived there rather than repeated here, because the number written
+here was three for as long as it took two more titles to join the list.
+Nioh 3 needs none: its video is already NV12 by the time Media Foundation is
+asked for it.
 
 None of these fixes decodes anything. The frames existed all along; they were
 being crashed on, mislabelled, or thrown away.
@@ -209,7 +212,7 @@ Each row links to a page with the findings and the fix for that title.
 - [Games](Games.md) — the table above, what each fix needs from CrossOver, and
   how a row gets added
 - [Diagnosing a new game](Diagnosing-a-new-game.md) — the tools, and what each one answers
-- [Findings](Findings.md) — what the nine have in common: root causes, the
+- [Findings](Findings.md) — what they have in common: root causes, the
   vtable slots each hook takes, the carrier DLLs, the container-versus-codec
   comparison, the open defect on 26.3, and what was tried and did not work.
   These pages hold the per-title findings; that one holds what is shared.

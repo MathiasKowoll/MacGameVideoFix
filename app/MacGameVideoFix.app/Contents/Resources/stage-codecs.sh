@@ -59,12 +59,40 @@ EOF
 # Both /Applications and ~/Applications. Staging every engine found is cheap
 # and reversible; the choice of which one a bottle uses is made in the app,
 # against this list, so a missing entry is a CrossOver the user cannot select.
-ENGINES="$(printf '%s' "$ENGINES" | sort -u -t'|' -k1,1 | grep -v '^$' || true)"
+#
+# Unique by the whole line, NOT by the version field. A tool that copies a
+# CrossOver bundle and patches the copy -- which is how Procyon and CXPatcher
+# work -- produces a second engine declaring the SAME CFBundleVersion as the
+# original it was copied from. Deduplicating on the version dropped one of each
+# pair silently: on the machine this was found, two of four engines never
+# reached the map, and the bottle pointing at one of them could not be repaired
+# because the app was never told it existed.
+ENGINES="$(printf '%s' "$ENGINES" | sort -u | grep -v '^$' || true)"
 [ -n "$ENGINES" ] || { echo "error: no CrossOver installation found" >&2; exit 1; }
 
+# The selector is a bundle path or a version, and the difference matters.
+#
+# A version is ambiguous the moment a patched copy exists, because the copy
+# inherits it. A path is not: the caller that already knows which CrossOver it
+# is about to launch -- a launcher handing us its own engine -- can say so
+# exactly. Both forms are exact matches, never prefixes: two bundles can share
+# a prefix and staging against the wrong engine is a crash, not a warning.
 if [ -n "$WANT" ]; then
-  ENGINES="$(printf '%s\n' "$ENGINES" | grep "^$WANT|" || true)"
-  [ -n "$ENGINES" ] || { echo "error: no CrossOver with version $WANT" >&2; exit 1; }
+  case "$WANT" in
+    /*|*.app)
+      WANT_PATH="${WANT%/}"
+      ENGINES="$(printf '%s\n' "$ENGINES" | awk -F'|' -v p="$WANT_PATH" '$2 == p' || true)"
+      [ -n "$ENGINES" ] || {
+        echo "error: no CrossOver bundle at $WANT_PATH" >&2
+        echo "       It must exist and contain Contents/SharedSupport/CrossOver." >&2
+        exit 1
+      }
+      ;;
+    *)
+      ENGINES="$(printf '%s\n' "$ENGINES" | awk -F'|' -v v="$WANT" '$1 == v' || true)"
+      [ -n "$ENGINES" ] || { echo "error: no CrossOver with version $WANT" >&2; exit 1; }
+      ;;
+  esac
 fi
 
 [ -d "$FRAMEWORK" ] || {
@@ -175,7 +203,7 @@ stage_one() {
     # engine that was already built appended a second answer for the same
     # version -- and the map is what tells a bottle which directory is its own.
     if [ -f "$ROOT/.map" ]; then
-      grep -v "^$VER|" "$ROOT/.map" > "$ROOT/.map.new" 2>/dev/null || true
+      awk -F'|' -v p="$OUT/gstreamer-1.0" '$3 != p' "$ROOT/.map" > "$ROOT/.map.new" 2>/dev/null || true
       mv "$ROOT/.map.new" "$ROOT/.map"
     fi
     printf '%s|%s|%s\n' "$VER" "$ENGINE" "$OUT/gstreamer-1.0" >> "$ROOT/.map"
@@ -308,8 +336,13 @@ stage_one() {
   # subshell, so a variable would not survive it. This engine's own line is
   # replaced rather than appended, so re-staging one engine cannot leave the
   # map holding two answers for it.
+  #
+  # Keyed on the staging directory, not the version. Two engines can declare
+  # the same CFBundleVersion -- a patched copy always does -- and keying the
+  # replacement on the version made the second one delete the first one's line
+  # instead of adding its own.
   if [ -f "$ROOT/.map" ]; then
-    grep -v "^$VER|" "$ROOT/.map" > "$ROOT/.map.new" || true
+    awk -F'|' -v p="$OUT/gstreamer-1.0" '$3 != p' "$ROOT/.map" > "$ROOT/.map.new" 2>/dev/null || true
     mv "$ROOT/.map.new" "$ROOT/.map"
   fi
   # The version it was built against. The path survives an update; the contents

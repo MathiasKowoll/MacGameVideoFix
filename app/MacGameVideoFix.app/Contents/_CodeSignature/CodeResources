@@ -10,7 +10,7 @@
 		</data>
 		<key>Resources/GfeSDK.dll</key>
 		<data>
-		wG5rSxkutVSq2WB/fBdimJEzF9g=
+		LROCBwRX6gRYr7v9B7/00dKfxvE=
 		</data>
 		<key>Resources/OpenColorIO_2_3-tormented.dll</key>
 		<data>
@@ -34,7 +34,7 @@
 		</data>
 		<key>Resources/dstorage-ng4.dll</key>
 		<data>
-		rWfsSQE6LpSkOou0QJJkZOKNBfk=
+		p7sTBcVl6QJ6T4PuMSp9F2PwxHA=
 		</data>
 		<key>Resources/fmod-tmnt.dll</key>
 		<data>
@@ -46,15 +46,15 @@
 		</data>
 		<key>Resources/install-kh-bridge.sh</key>
 		<data>
-		5Lyp+ULxzTidVtLPgyXh8bB5Qsw=
+		Nh4nouW9eMGBbmIgTOaPpDpO8ec=
 		</data>
 		<key>Resources/install-ng4-fix.sh</key>
 		<data>
-		kqDtX98EiT/9JU1eSTA4rIN+wf8=
+		zSuSyMBlWo/rzBPkN4Npe6JiJs4=
 		</data>
 		<key>Resources/install-nier-bridge.sh</key>
 		<data>
-		d752CXyqi7l4nKdkybEAIBRHFbA=
+		e2CpEBIJ33O62XPPE9PEjn/ghVg=
 		</data>
 		<key>Resources/install-nioh-bridge.sh</key>
 		<data>
@@ -98,7 +98,7 @@
 		</data>
 		<key>Resources/stage-codecs.sh</key>
 		<data>
-		rgkPpX4n86/mCN+cRzpf3hGYTYc=
+		Z9ZZJT23fRIuuq0EodbL5I++aGg=
 		</data>
 		<key>Resources/transcode-movies.sh</key>
 		<data>
@@ -118,7 +118,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			63LET2v0N+nUBn1FwRcI1fxKiZv4b6F7zHS4aeN2tC4=
+			OrWxiDxvM84KOhNlFr/iO/JIHFvCkoKDG0cwWGXdvIA=
 			</data>
 		</dict>
 		<key>Resources/OpenColorIO_2_3-tormented.dll</key>
@@ -160,7 +160,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			N/uBaP95Cl1VPnvNpC/NOD3xb1wtQPKx8unJCwKT6wc=
+			qRwxe/I8SVXMHa/1UuwNAaVxoonPiiV5eGUc8UeCI+M=
 			</data>
 		</dict>
 		<key>Resources/fmod-tmnt.dll</key>
@@ -181,21 +181,21 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			SZATusZ81LnkqiqX4GAP/yFGj+Ha+PcyS5iEDapXivM=
+			xAY456I5Nh7ptJTn5ectiV0Jp3B2+EjsO0ZHprrCCqU=
 			</data>
 		</dict>
 		<key>Resources/install-ng4-fix.sh</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			GAvM0cS9yyWl5D9CmmmKWpX7yTvzauxSEnX8b7zvrvc=
+			nceCoOs4s8yx3XDM4ye5UMLUwuQuaTIWvG43AN/gen4=
 			</data>
 		</dict>
 		<key>Resources/install-nier-bridge.sh</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			39zAC7egZRxuw6XrXkdRU4TfujnqPE0w61O3ioHFn20=
+			tVs4TZeiBk8LetmDqWtFaOZ8Z3naRssHVaryXjDE6LU=
 			</data>
 		</dict>
 		<key>Resources/install-nioh-bridge.sh</key>
@@ -272,7 +272,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			sGRJAYYTDD6ZI2doHcIjxS8OehxH0PxmwgGTspnH6VE=
+			ggjV2kjPhHFpCc+wBdlMlrI/rgzudmZrGinXkBq6YEQ=
 			</data>
 		</dict>
 		<key>Resources/transcode-movies.sh</key>

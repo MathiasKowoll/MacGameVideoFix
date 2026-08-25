@@ -194,4 +194,4 @@ single-player titles whose cutscenes do not play.
 ---
 
 Back to [the games table](Games.md) ·
-[Findings](Findings.md), what the six have in common
+[Findings](Findings.md), what what they have in common
