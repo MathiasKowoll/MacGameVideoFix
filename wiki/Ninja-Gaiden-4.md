@@ -105,7 +105,7 @@ registry keys removed one group at a time. That leaves a fair objection: the
 bottle had been through winevideo's installer, and something it left behind
 could be doing the work.
 
-So it was repeated in **SteamStable**, a bottle that has never had winevideo
+So it was repeated in **a second bottle that has never had winevideo**
 installed -- no `WINEVIDEO_COMPAT_PROFILE`, no `WINEVIDEO_INSTALL_MARKER`, no
 patched engine -- under stock CrossOver 26.3, with only this project's staged
 codec and the two probe levers in its configuration. Same result:
@@ -116,10 +116,9 @@ codec and the two probe levers in its configuration. Same result:
 Game reaches its menu, video plays. The repair travels with the mechanism, not
 with the bottle.
 
-**And a third bottle settled the registry question, by accident.** SteamStable's
-registry does still carry the VP9 MFT keys, so that run confirms codec and levers
-rather than the registry-free path. `Steam` had never been prepared for this
-title at all -- **zero VP9 MFT keys**, no lever, no staged codec -- and launching
+**And a third bottle settled the registry question, by accident.** The second
+bottle's registry does still carry the VP9 MFT keys, so that run confirms codec and levers
+rather than the registry-free path. A third bottle had never been prepared for this title at all -- **zero VP9 MFT keys**, no lever, no staged codec -- and launching
 the game there produced precisely the failure the model predicts for "neither
 route active":
 

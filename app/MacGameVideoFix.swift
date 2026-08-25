@@ -2975,12 +2975,40 @@ enum Graphics {
 
     /// Whether this engine is running a toolkit that was put there rather than
     /// shipped with it -- which is exactly when there is something to undo.
+    /// Where a replaced toolkit was put, if one was.
+    ///
+    /// `apple_gptk_bak` is the name this app uses. It is not the only one that
+    /// turns up: doing the swap by hand is a `mv` and a `cp`, and a tree saved
+    /// as `apple_gptk_3` is just as much a backup -- the app simply could not
+    /// see it, so it reported an engine as running its own toolkit while it was
+    /// running someone else's, and offered no way back.
+    ///
+    /// A sibling only counts when it actually holds a framework. An engine that
+    /// *ships* two trees, as Preview does, is not a swapped engine, and that
+    /// case is kept out by `gptkRoot` resolving the active one first: the
+    /// shipped second tree is `apple_gptk3`, which this matches -- so engines
+    /// that select by `CX_GRAPHICS_BACKEND_VERSION` are excluded by name.
+    private static func savedToolkit(besides root: URL) -> URL? {
+        let fm = FileManager.default
+        let parent = root.deletingLastPathComponent()
+        let selectable = ["apple_gptk3"]   // shipped alternates, not backups
+        guard let names = try? fm.contentsOfDirectory(atPath: parent.path) else { return nil }
+        for name in names.sorted()
+        where name.hasPrefix("apple_gptk") && name != root.lastPathComponent
+              && !selectable.contains(name) {
+            let candidate = parent.appendingPathComponent(name)
+            if fm.fileExists(atPath: candidate.appendingPathComponent(
+                    "external/D3DMetal.framework").path) {
+                return candidate
+            }
+        }
+        return nil
+    }
+
     static func isSwapped(engine version: String) -> Bool {
         guard let bundle = Codecs.installedEngines()[version],
               let root = gptkRoot(bundle) else { return false }
-        return FileManager.default.fileExists(
-            atPath: root.deletingLastPathComponent()
-                        .appendingPathComponent("apple_gptk_bak").path)
+        return savedToolkit(besides: root) != nil
     }
 
     /// Put another installed engine's toolkit into this one.
@@ -3085,10 +3113,10 @@ enum Graphics {
               let root = gptkRoot(bundle) else {
             return "CrossOver \(version) has no toolkit directory."
         }
-        let saved = root.deletingLastPathComponent().appendingPathComponent("apple_gptk_bak")
-        guard fm.fileExists(atPath: saved.path) else {
+        guard let saved = savedToolkit(besides: root) else {
             return "CrossOver \(version) is running its own toolkit already."
         }
+        _ = fm
         try? fm.removeItem(at: root)
         do { try fm.moveItem(at: saved, to: root) }
         catch { return "Could not restore the toolkit: \(error.localizedDescription)" }

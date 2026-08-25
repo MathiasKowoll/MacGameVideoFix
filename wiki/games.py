@@ -111,6 +111,17 @@ HEAD = ("| Game | Engine | Symptom | Fix | Backend | DX | GPTK | CrossOver | Sta
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
 
 NOTE = """
+**Update the toolkit, then pick a CrossOver.** Every fix here was written
+against Apple's Game Porting Toolkit 4.0b2, which is what CrossOver Preview
+ships and what CrossOver 26.3 does **not** -- 26.3 carries D3DMetal 3.0, and on
+3.0 these patches do not find what they were written to find. So 26.3 is a
+perfectly good engine for all of this once its toolkit is replaced, and a poor
+one until then. The app does the replacing, and keeps the original beside it.
+
+The exception is NINJA GAIDEN 4, which is the other way round: it runs on 3.0
+and stalls on 4.0b2, before its first frame and for reasons inside the toolkit
+that nothing here can reach.
+
 **The GPTK column is the one that decides, and it is newer than this table.**
 Apple's Game Porting Toolkit is what actually draws these games, and CrossOver
 ships it inside the bundle rather than as something you pick: 26.3 carries

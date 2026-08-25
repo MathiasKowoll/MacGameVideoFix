@@ -71,7 +71,8 @@ either of them off for a measurement.
 
 ## What was measured, and in what order
 
-Each row is one run of the game, same bottle (`Steam25`, a 26.3 bottle), same
+Each row is one run of the game, same bottle -- a 26.3 one with winevideo
+installed -- same
 probe, changing one thing at a time.
 
 | Run | Engine | Codec staged | Registry | Result |
@@ -102,11 +103,11 @@ during the run.
 
 ## Repeated in a bottle winevideo never touched
 
-Run 7 above left one fair objection standing: `Steam25` had been through
+Run 7 above left one fair objection standing: that bottle had been through
 winevideo's installer, so something it left behind might have been doing the
 work even with the registry keys deleted.
 
-Repeated in **SteamStable** -- no winevideo markers in its configuration, engine
+Repeated in **a second bottle** -- no winevideo markers in its configuration, engine
 never patched -- under stock CrossOver 26.3, carrying only `GST_PLUGIN_PATH`,
 `NG4_ANSWER_MFT=1` and `BEAST_REFUSE_D3D_MANAGER=1`:
 
@@ -115,11 +116,11 @@ never patched -- under stock CrossOver 26.3, carrying only `GST_PLUGIN_PATH`,
 
 Plays to the menu with video. The repair is in the mechanism, not in that bottle.
 
-One caveat kept honest: SteamStable's registry does still carry the VP9 MFT keys
+One caveat kept honest: that bottle's registry does still carry the VP9 MFT keys
 and the three handlers, so that run confirms codec and levers, not the
 registry-free path.
 
-That was then confirmed separately, in a third bottle. `Steam` carries **zero**
+That was then confirmed separately, in a third bottle, which carries **zero**
 VP9 MFT keys. Launched unprepared it failed exactly as predicted -- `MFTEnumEx ->
 0 decoder(s)`, "missing required components", exit. Given only the staged codec
 and the two levers, no registry key anywhere, it plays. Run 7 is no longer a
