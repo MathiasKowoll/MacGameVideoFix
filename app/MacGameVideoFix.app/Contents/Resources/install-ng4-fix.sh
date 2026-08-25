@@ -59,18 +59,28 @@ ACTION="${2:-install}"
 CARRIER="$GAME/dstorage.dll"
 REAL="$GAME/dstorage_real.dll"
 
+# Our proxy names the file it forwards to in its import table, so a genuine
+# DirectStorage and ours are told apart by what they reference rather than by
+# which one happens to sit in the slot.
+is_ours() {
+  [ -f "$1" ] || return 1
+  LC_ALL=C grep -qa "dstorage_real.dll" "$1"
+}
+
+# One word, and one of exactly four. The app matches the word rather than the
+# first line -- an installer that answers "installed: ..." falls through to "not
+# applied" and the control that would put the DLL back is greyed out. Advisories
+# go to stderr for the same reason: the app merges the streams.
 status() {
-  if [ -f "$REAL" ]; then
-    echo "installed: dstorage.dll is the fix, dstorage_real.dll is the game's own"
-  elif [ -f "$CARRIER" ]; then
-    echo "not installed: dstorage.dll is the game's own"
-  else
-    echo "no dstorage.dll here -- is this the folder with NINJAGAIDEN4-Steam.exe?"
-  fi
+  if is_ours "$CARRIER" && [ -f "$REAL" ]; then echo installed
+  elif is_ours "$CARRIER"; then echo broken
+  elif [ ! -f "$CARRIER" ] && [ -f "$REAL" ]; then echo half
+  else echo absent; fi
+
   # Said either way, because both are needed and neither is this script's doing.
-  [ -f "$GAME/dstoragecore.dll" ] \
-    && echo "warning: dstoragecore.dll is still in place; the game needs it renamed" \
-    || echo "DirectStorage: disabled, as it needs to be"
+  if [ -f "$GAME/dstoragecore.dll" ]; then
+    echo "warning: dstoragecore.dll is still in place; the game needs it renamed" >&2
+  fi
 }
 
 case "$ACTION" in
@@ -81,7 +91,7 @@ case "$ACTION" in
       [ -f "$REAL" ] || { echo "nothing to restore"; exit 0; }
       rm -f "$CARRIER"
       mv "$REAL" "$CARRIER"
-      echo "restored: $GAME/dstorage.dll is the game's own again"
+      echo "restored — the game is back to its own dstorage.dll"
       exit 0 ;;
   install) ;;
   *) usage ;;
@@ -97,5 +107,4 @@ if [ ! -f "$REAL" ]; then
   mv "$CARRIER" "$REAL"
 fi
 cp "$PROXY" "$CARRIER"
-echo "installed: $GAME/dstorage.dll"
-status
+echo "installed — answer the codec gate, and decode in software"

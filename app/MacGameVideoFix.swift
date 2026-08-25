@@ -422,7 +422,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         if self == .nioh || self == .nioh2 || self == .nioh3
             || self == .nierReplicant || self == .woLong
             || self == .kingdomHearts28 || self == .kingdomHearts1525
-            || self == .tmntSplinteredFate || self == .tormentedSouls2 {
+            || self == .tmntSplinteredFate || self == .tormentedSouls2
+            || self == .ninjaGaiden4 {
             guard let exe = executable else { return nil }
             var candidates = [url]
             if let subs = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
@@ -3451,7 +3452,7 @@ extension SupportedGame {
         switch self {
         case .dynastyWarriors, .personaStrikers, .nioh, .nioh2, .nioh3,
              .nierReplicant, .woLong, .kingdomHearts28, .kingdomHearts1525,
-             .tmntSplinteredFate, .tormentedSouls2:
+             .tmntSplinteredFate, .tormentedSouls2, .ninjaGaiden4:
             return FileManager.default.fileExists(
                 atPath: folder.appendingPathComponent(exe).path)
         default:
