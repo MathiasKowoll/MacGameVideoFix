@@ -594,7 +594,50 @@ def hand_counts(paths):
     return out
 
 
+# ------------------------------------------------- what a title needs set up
+#
+# A launcher applying one fix to one game also has to configure the bottle for
+# it, and the two facts it needs are measured here already: which graphics
+# backend the title requires, and whether it is tied to one Game Porting
+# Toolkit generation.
+#
+# Emitted rather than copied. The fixes bundle ships the installers and not this
+# file, so the data has to travel -- but travelling as a second hand-written
+# list is how "three titles need a codec" became wrong while seven did.
+#
+# A generation is reported ONLY where it is a requirement, never where it is
+# merely what the title happened to be measured on. "3.0 and 4.0b2" means both
+# work and the field stays empty; "**3.0 only** -- 4.0b2 stalls it" is a
+# requirement and reports 3. Getting that backwards would have a launcher pin a
+# toolkit for a game that did not care, which is worse than leaving it alone.
+
+
+def config_json():
+    """Per-title setup, for runtime/make-fixes-bundle.sh. JSON, no dependencies."""
+    import json
+    out = {}
+    for g, engine, sym, fix, backend, dx, cx, status, page in GAMES:
+        want = gptk(cx, g)
+        gen = ""
+        if "only" in want:
+            if "3.0 only" in want:
+                gen = "3"
+            elif "4.0b2 only" in want:
+                gen = "4"
+        out[g] = {
+            "backend": "dxmt" if "DXMT" in backend.upper() else "d3dmetal",
+            "gptk": gen,
+            # Nothing has yet needed one as a standing requirement. D3DM_MTL4=0
+            # was tried on this project and never became one.
+            "env": {},
+        }
+    return json.dumps(out, indent=2, sort_keys=True)
+
+
 def main():
+    if "--config-json" in sys.argv:
+        print(config_json())
+        return 0
     check = "--check" in sys.argv
     here = pathlib.Path(__file__).parent
     stale = []
