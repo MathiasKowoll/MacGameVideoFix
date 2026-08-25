@@ -27,15 +27,15 @@ GAMES = [
      "Fixed", "Mortal-Shell-2"),
     ("Life is Strange: Reunion", "Unreal Engine 5",
      "Freezes after a while, anywhere", "DXGI node guard",
-     "D3DMetal", "12", "Preview -- 26.3 crashes",
+     "D3DMetal", "12", "26.3 and Preview",
      "Fixed", "Life-is-Strange-Reunion"),
     ("Life is Strange: Double Exposure", "Unreal Engine 5",
      "Freezes after a while, anywhere", "DXGI node guard, same DLL",
-     "D3DMetal", "12", "Preview -- 26.3 crashes",
+     "D3DMetal", "12", "26.3 and Preview",
      "Fixed", "Life-is-Strange-Double-Exposure"),
     ("DYNASTY WARRIORS: ORIGINS", "Koei Tecmo, in-house",
      "Cutscene runs with sound, picture black", "Video bridge, D3D11 to D3D12",
-     "D3DMetal", "12", "Preview -- crashes on 26.3",
+     "D3DMetal", "12", "26.3 and Preview",
      "Fixed", "Dynasty-Warriors-Origins"),
     ("Beast of Reincarnation", "Unreal Engine 5",
      "Startup video plays with sound, no picture", "NV12 restored, Electra forced to software",
@@ -47,19 +47,19 @@ GAMES = [
      "Fixed", "Persona-5-Strikers"),
     ("Nioh", "Koei Tecmo, in-house",
      "Cutscene refuses to play, then crashes", "Staged WMV3 codec, and the same D3D9 to D3D11 bridge",
-     "**DXMT**", "11", "Preview -- not tried on 26.3",
+     "**DXMT**", "11", "26.3 and Preview",
      "Fixed", "Nioh"),
     ("Nioh 2", "Koei Tecmo, in-house",
      "Cutscene refuses to play, then crashes", "Same codec and same bridge as Nioh, unchanged",
-     "**DXMT**", "11", "Preview -- not tried on 26.3",
+     "**DXMT**", "11", "26.3 and Preview",
      "Fixed", "Nioh-2"),
     ("Nioh 3", "Koei Tecmo, in-house",
      "Failed to play movie", "The DYNASTY WARRIORS bridge, unchanged",
-     "D3DMetal", "12", "Preview -- not tried on 26.3",
+     "D3DMetal", "12", "26.3 and Preview",
      "Fixed", "Nioh-3"),
     ("Wo Long: Fallen Dynasty", "Koei Tecmo, in-house",
      "Cutscene runs with sound, picture black", "The DYNASTY WARRIORS bridge, unchanged",
-     "D3DMetal", "12", "Preview -- not tried on 26.3",
+     "D3DMetal", "12", "26.3 and Preview",
      "Fixed", "Wo-Long-Fallen-Dynasty"),
     ("NieR Replicant ver.1.22474487139", "Toylogic, in-house",
      "Crashes when the first video starts", "Software decode, and the frame written into the game's target",
@@ -78,12 +78,12 @@ GAMES = [
     ("TMNT: Splintered Fate", "Rebirth, in-house",
      "Opens a window, then closes silently",
      "A guard on the D3D12 call that ends the process instead of failing",
-     "D3DMetal", "12", "Preview -- not tried on 26.3",
+     "D3DMetal", "12", "26.3 and Preview",
      "Fixed", "TMNT-Splintered-Fate"),
     ("Tormented Souls 2", "Unreal Engine 5",
      "Fatal error before the first frame",
      "16:9 modes added to a list that offered none",
-     "D3DMetal", "12", "Preview -- not tried on 26.3",
+     "D3DMetal", "12", "26.3 and Preview",
      "Fixed", "Tormented-Souls-2"),
     ("Devil May Cry 5", "RE Engine",
      "Crashes when a skill preview video plays",
@@ -203,7 +203,7 @@ page comes from a measurement on an installed copy.
 BEGIN, END = "<!-- games:begin -->", "<!-- games:end -->"
 
 
-def gptk(cx):
+def gptk(cx, title=None):
     """Which Game Porting Toolkit a title was measured against.
 
     Not a new measurement: every run recorded in the CrossOver cell already
@@ -218,6 +218,8 @@ def gptk(cx):
 
     Titles where both toolkits were tried deliberately are in GPTK_OVERRIDE.
     """
+    if title in GPTK_BY_TITLE:
+        return GPTK_BY_TITLE[title]
     if cx in GPTK_OVERRIDE:
         return GPTK_OVERRIDE[cx]
     denied = ("not tried on 26.3", "crashes on 26.3", "26.3 crashes")
@@ -234,14 +236,32 @@ def gptk(cx):
 # so the two never drift apart.
 GPTK_OVERRIDE = {
     "26.3 only -- Preview stalls before video": "**3.0 only** -- 4.0b2 stalls it",
-    "Preview -- 26.3 crashes":                  "**4.0b2 only** -- 3.0 crashes it",
+}
+
+# Titles measured on 26.3 only after its toolkit had been replaced with 4.0b2,
+# which is not what that CrossOver ships. Deriving from the engine would read
+# them as 3.0, and 3.0 is the one generation they were never tried on.
+#
+# Keyed by title rather than by the CrossOver cell, because several titles now
+# share a cell and do not share a toolkit -- which is the whole reason this
+# column exists.
+GPTK_BY_TITLE = {
+    "Nioh": "4.0b2",
+    "Nioh 2": "4.0b2",
+    "Nioh 3": "4.0b2",
+    "Wo Long: Fallen Dynasty": "4.0b2",
+    "TMNT: Splintered Fate": "4.0b2",
+    "Tormented Souls 2": "4.0b2",
+    "DYNASTY WARRIORS: ORIGINS": "4.0b2",
+    "Life is Strange: Reunion": "**4.0b2 only** -- 3.0 crashes it",
+    "Life is Strange: Double Exposure": "**4.0b2 only** -- 3.0 crashes it",
 }
 
 
 def table():
     rows = "".join(
         f"| [{g}]({page}.md) | {engine} | {sym} | {fix} | {backend} | {dx} "
-        f"| {gptk(cx)} | {cx} | {status} |\n"
+        f"| {gptk(cx, g)} | {cx} | {status} |\n"
         for g, engine, sym, fix, backend, dx, cx, status, page in GAMES)
     return f"{BEGIN}\n\n{HEAD}{rows}{NOTE}\n{END}"
 
