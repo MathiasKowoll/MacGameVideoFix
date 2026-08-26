@@ -1095,6 +1095,80 @@ static const GUID guid_friendly_name =
     { 0x314ffbae, 0x5b41, 0x4c95, { 0x9c, 0x19, 0x4e, 0x7d, 0x58, 0x6f, 0xac, 0xe3 } };
 static const GUID guid_transform_clsid =
     { 0x6821c42b, 0x65a4, 0x4e82, { 0x99, 0xbc, 0x9a, 0x88, 0x20, 0x5e, 0xcd, 0x0c } };
+/* MFT_INPUT_TYPES_Attributes: a blob of MFT_REGISTER_TYPE_INFO pairs, which is
+ * what both the enumeration filter and (the hypothesis) the caller look at when
+ * deciding whether a decoder handles a format. IMFAttributes: GetBlobSize 14,
+ * GetBlob 15. */
+static const GUID guid_input_types =
+    { 0x4276c9b1, 0x759d, 0x4bf3, { 0x9c, 0xd0, 0x0d, 0x72, 0x3d, 0x13, 0x8f, 0x96 } };
+
+static void say_what_it_declares(void *activate)
+{
+    void **vtbl = *(void ***)activate;
+    HRESULT (WINAPI *get_blob_size)(void *, REFGUID, UINT32 *) =
+        (HRESULT (WINAPI *)(void *, REFGUID, UINT32 *))vtbl[14];
+    HRESULT (WINAPI *get_blob)(void *, REFGUID, UINT8 *, UINT32, UINT32 *) =
+        (HRESULT (WINAPI *)(void *, REFGUID, UINT8 *, UINT32, UINT32 *))vtbl[15];
+    UINT32 size = 0, got = 0, i, n;
+    BYTE buf[512];
+
+    if (FAILED(get_blob_size(activate, &guid_input_types, &size)) || !size)
+    {
+        logf_("    it declares NO input types at all -- which is why the filter "
+              "excludes it, and very likely why the caller refuses it");
+        return;
+    }
+    if (size > sizeof(buf)) size = sizeof(buf);
+    if (FAILED(get_blob(activate, &guid_input_types, buf, size, &got))) return;
+
+    n = got / (sizeof(GUID) * 2);
+    logf_("    it declares %u input type(s):", n);
+    for (i = 0; i < n && i < 8; i++)
+    {
+        GUID *sub = (GUID *)(buf + i * sizeof(GUID) * 2 + sizeof(GUID));
+        char tag[5];
+        tag[0] = (char)(sub->Data1 & 0xff); tag[1] = (char)((sub->Data1 >> 8) & 0xff);
+        tag[2] = (char)((sub->Data1 >> 16) & 0xff); tag[3] = (char)((sub->Data1 >> 24) & 0xff);
+        tag[4] = 0;
+        logf_("      [%u] %s {%08lX-...}", i, tag, sub->Data1);
+    }
+}
+
+/* MFMediaType_Video, for the major type half of a registration entry. */
+static const GUID guid_major_video =
+    { 0x73646976, 0x0000, 0x0010, { 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71 } };
+
+/* Tell the decoder to say what it decodes.
+ *
+ * CMSH264DecoderMFT is registered on this engine and declares NO input types at
+ * all -- measured. That single omission causes both halves of the failure:
+ * MFTEnumEx filters on that attribute, so asking for H.264 returns zero, and
+ * the caller checks the same attribute, so handing the decoder over by identity
+ * was refused just as quietly.
+ *
+ * So the missing attribute is written. This is not a claim about what the
+ * decoder can do -- it IS the H.264 decoder, by CLSID, out of the bottle's own
+ * registry -- it is filling in a registration that arrived empty. IMFAttributes
+ * SetBlob is slot 26 (GetGUID 10 and SetGUID 24 are already relied on above).
+ *
+ * If the write fails, nothing is claimed and the caller sees exactly what it
+ * saw before. */
+static BOOL declare_input_type(void *activate, const GUID *subtype)
+{
+    void **vtbl = *(void ***)activate;
+    HRESULT (WINAPI *set_blob)(void *, REFGUID, const UINT8 *, UINT32) =
+        (HRESULT (WINAPI *)(void *, REFGUID, const UINT8 *, UINT32))vtbl[26];
+    struct { GUID major; GUID sub; } entry;
+    HRESULT hr;
+
+    entry.major = guid_major_video;
+    entry.sub   = *subtype;
+    hr = set_blob(activate, &guid_input_types, (const UINT8 *)&entry, sizeof(entry));
+    logf_("    writing the input type it never declared -> 0x%08lx%s", hr,
+          SUCCEEDED(hr) ? "" : "  (left exactly as it was)");
+    return SUCCEEDED(hr);
+}
+
 static const GUID clsid_h264_decoder =
     { 0x62ce7e72, 0x4c71, 0x4d20, { 0xb1, 0x5d, 0x45, 0x28, 0x31, 0xa8, 0x7d, 0x9d } };
 static const GUID guid_H264 =
@@ -1213,14 +1287,33 @@ static HRESULT WINAPI my_MFTEnumEx(GUID category, UINT32 flags,
                 && *mfts)
             {
                 if (keep_only_matching(want_clsid, mfts, count))
+                {
                     logf_("  the decoder for that format IS registered here and "
                           "simply does not advertise the format: handing back "
                           "%u, by identity rather than by the filter", *count);
+                    say_what_it_declares((*mfts)[0]);
+                    declare_input_type((*mfts)[0], &in->guidSubtype);
+                }
                 else
                     logf_("  none of what this engine offers decodes that "
                           "format, so the zero stands");
             }
         }
+    }
+    /* Watch the promised decoder actually be created.
+     *
+     * This is installed on whatever is being handed back, AFTER the work above,
+     * because that work is what puts something there to hook. An earlier edit
+     * moved this block away and the hook stopped being installed at all -- so
+     * three runs in a row reported "the game does not activate" when what had
+     * actually happened is that nobody was watching. An absence in a log is
+     * only evidence if the thing that writes it was running. */
+    if (SUCCEEDED(hr) && mfts && *mfts && count && *count > 0)
+    {
+        static void *ao;
+        if (patch_slot("ActivateObject", (*mfts)[0], SLOT_ACTIVATE_OBJECT,
+                       (void *)my_ActivateObject, &ao))
+            real_ActivateObject = (HRESULT (WINAPI *)(void *, REFIID, void **))ao;
     }
     if (out) describe_subtype("wants out as  ", &out->guidSubtype);
     if (count && *count == 0)
