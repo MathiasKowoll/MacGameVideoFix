@@ -477,11 +477,65 @@ static HRESULT WINAPI my_GetStreamCount(void *self, DWORD *in, DWORD *out)
     return hr;
 }
 
+/* Every attribute on a media type, by enumeration rather than by name.
+ *
+ * Looking for one attribute means knowing its GUID from memory, and a wrong
+ * GUID reports an absence that is really a typo. IMFAttributes answers
+ * GetCount (slot 30) and GetItemByIndex (slot 31), so the type can simply be
+ * asked what it carries. Types: 0=UINT32 1=UINT64 2=double 3=GUID 4=string
+ * 5=blob 6=IUnknown.
+ *
+ * What this is looking for: an H.264 decoder that produces the first keyframe
+ * and nothing after is usually one that was never given the sequence header,
+ * and this decoder declared no input types at all until this fix wrote one in
+ * -- so what Electra ended up setting is worth seeing rather than assuming. */
+static void dump_media_type(void *type, const char *what)
+{
+    void **vt;
+    HRESULT (WINAPI *get_count)(void *, UINT32 *);
+    HRESULT (WINAPI *get_by_index)(void *, UINT32, GUID *, PROPVARIANT *);
+    UINT32 count = 0, i;
+
+    if (!type) return;
+    vt = *(void ***)type;
+    get_count    = (HRESULT (WINAPI *)(void *, UINT32 *))vt[30];
+    get_by_index = (HRESULT (WINAPI *)(void *, UINT32, GUID *, PROPVARIANT *))vt[31];
+    if (FAILED(get_count(type, &count))) return;
+
+    logf_("  %s carries %u attribute(s):", what, count);
+    for (i = 0; i < count && i < 24; i++)
+    {
+        GUID key; PROPVARIANT v;
+        PropVariantInit(&v);
+        if (FAILED(get_by_index(type, i, &key, &v))) continue;
+        if (v.vt == VT_UI4)
+            logf_("    {%08lX-%04X} = %lu", key.Data1, key.Data2, (unsigned long)v.ulVal);
+        else if (v.vt == VT_UI8)
+            logf_("    {%08lX-%04X} = %lu x %lu (packed)", key.Data1, key.Data2,
+                  (unsigned long)(v.uhVal.QuadPart >> 32),
+                  (unsigned long)(v.uhVal.QuadPart & 0xffffffff));
+        else if (v.vt == VT_CLSID)
+            logf_("    {%08lX-%04X} = GUID {%08lX-...}", key.Data1, key.Data2,
+                  v.puuid ? v.puuid->Data1 : 0);
+        else if (v.vt == (VT_VECTOR | VT_UI1))
+            logf_("    {%08lX-%04X} = blob, %lu bytes  << a header of some kind",
+                  key.Data1, key.Data2, (unsigned long)v.caub.cElems);
+        else
+            logf_("    {%08lX-%04X} = type %u", key.Data1, key.Data2, v.vt);
+        PropVariantClear(&v);
+    }
+}
+
 static HRESULT WINAPI my_SetInputType(void *self, DWORD stream, void *type, DWORD flags)
 {
     HRESULT hr = real_SetInputType(self, stream, type, flags);
     logf_("SetInputType(flags=0x%lx) -> 0x%08lx%s", flags, hr,
           FAILED(hr) ? "   << the decoder refuses the stream it was chosen for" : "");
+    {
+        static LONG once;
+        if (SUCCEEDED(hr) && type && InterlockedIncrement(&once) == 1)
+            dump_media_type(type, "the input type Electra set");
+    }
     return hr;
 }
 
