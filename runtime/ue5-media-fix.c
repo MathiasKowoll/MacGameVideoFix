@@ -715,17 +715,95 @@ static BOOL poke(BYTE *at, const BYTE *expect, const BYTE *with, const char *wha
     return TRUE;
 }
 
+/* Find the two call sites instead of remembering where they were.
+ *
+ * The RVAs below came from the disassembly of one build, and a game update
+ * moved everything after it: both sites shifted by exactly 0x1E930, which is
+ * what an insertion earlier in .text does. Fixed addresses then verify their
+ * bytes, find something else and -- correctly -- do nothing, which leaves the
+ * title broken until somebody disassembles it again.
+ *
+ * They do not need remembering. The two sites are `call qword ptr [rax+0x28]`
+ * separated by exactly 0x1D3 bytes, and that pair is UNIQUE: in the 176 MB
+ * shipping executable there are 3230 occurrences of the call and exactly one
+ * pair at that distance. So the pair is the signature. If it is not unique in
+ * some future build, this does nothing and says so rather than guessing.
+ *
+ * The original RVAs stay as a comment, because they are what the distance was
+ * measured from. */
+#define RVA_ISSW_GATE_ORIG   0x0634D8D7
+#define RVA_ISSW_EXTRA_ORIG  0x0634DAAA
+#define ISSW_SPAN            (RVA_ISSW_EXTRA_ORIG - RVA_ISSW_GATE_ORIG)  /* 0x1D3 */
+
+static BOOL text_range(BYTE *base, BYTE **start, SIZE_T *size)
+{
+    IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;
+    IMAGE_NT_HEADERS *nt;
+    IMAGE_SECTION_HEADER *sec;
+    WORD i;
+
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return FALSE;
+    nt = (IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) return FALSE;
+    sec = IMAGE_FIRST_SECTION(nt);
+    for (i = 0; i < nt->FileHeader.NumberOfSections; i++, sec++)
+        if (memcmp(sec->Name, ".text", 5) == 0)
+        {
+            *start = base + sec->VirtualAddress;
+            *size  = sec->Misc.VirtualSize;
+            return TRUE;
+        }
+    return FALSE;
+}
+
+static BOOL find_issw_pair(BYTE *base, BYTE **gate, BYTE **extra)
+{
+    BYTE *t; SIZE_T n, i;
+    int found = 0;
+
+    if (!text_range(base, &t, &n)) return FALSE;
+    if (n <= ISSW_SPAN + 3) return FALSE;
+
+    for (i = 0; i + ISSW_SPAN + 3 <= n; i++)
+    {
+        if (memcmp(t + i, want_call, 3) != 0) continue;
+        if (memcmp(t + i + ISSW_SPAN, want_call, 3) != 0) continue;
+        if (++found > 1) { logf_("  the call pair is not unique in this build "
+                                 "(%d found) -- leaving it alone", found); return FALSE; }
+        *gate  = t + i;
+        *extra = t + i + ISSW_SPAN;
+    }
+    if (found == 1)
+        logf_("  found the call pair at RVA 0x%08lX / 0x%08lX%s",
+              (unsigned long)(*gate - base), (unsigned long)(*extra - base),
+              ((unsigned long)(*gate - base) == RVA_ISSW_GATE_ORIG)
+                ? " (the build these offsets were taken from)" : " (moved by an update)");
+    else
+        logf_("  the call pair is not in this build at all");
+    return found == 1;
+}
+
 static void force_electra_software(void)
 {
     BYTE *base = (BYTE *)GetModuleHandleA(NULL);
+    BYTE *gate = NULL, *extra = NULL;
     int done = 0;
     if (electra_sw_forced || !base) return;
     electra_sw_forced = TRUE;
 
     logf_("forcing Electra onto its software path");
-    if (poke(base + RVA_ISSW_EXTRA, want_call, make_true, "IsSoftware (sw value)")) done++;
-    if (poke(base + RVA_ISSW_GATE,  want_call, make_true, "IsSoftware (outer gate)")) done++;
+    if (!find_issw_pair(base, &gate, &extra)) return;
 
+    if (poke(extra, want_call, make_true, "IsSoftware (sw value)")) done++;
+    if (poke(gate,  want_call, make_true, "IsSoftware (outer gate)")) done++;
+
+    /* The console variable is a POINTER read from a fixed address and then
+     * written through. On the build those offsets came from that is safe; on
+     * any other it is a wild read followed by a wild write, which is a far
+     * worse thing to be wrong about than a missing video. So it happens only
+     * when the pair was found exactly where it used to be -- proof that this is
+     * that build. */
+    if ((unsigned long)(gate - base) == RVA_ISSW_GATE_ORIG)
     {
         int *cvar = *(int **)(base + RVA_CVAR_PTR);
         if (cvar)
@@ -738,8 +816,12 @@ static void force_electra_software(void)
         else
             logf_("  console variable not resolved yet");
     }
+    else
+        logf_("  console variable skipped: its address is from another build, "
+              "and dereferencing it there would be a wild write");
+
     if (!done)
-        logf_("nothing was patched -- this build does not match the offsets");
+        logf_("nothing was patched");
 }
 
 static HRESULT WINAPI my_ProcessOutput(void *self, DWORD flags, DWORD count,
@@ -989,6 +1071,73 @@ static HRESULT WINAPI my_MFStartup(ULONG version, DWORD flags)
     return hr;
 }
 
+/* Hand back the decoder this engine really has for the format asked about.
+ *
+ * MFTEnumEx asked for H.264 answers zero on this engine -- with either filter
+ * widened, measured -- and yet the decoder is registered. Enumerating with no
+ * format filter returns three, and their CLSIDs resolve in the bottle's own
+ * registry to:
+ *
+ *   {62CE7E72-4C71-4D20-B15D-452831A87D9D}  CMSH264DecoderMFT      (msmpeg2vdec)
+ *   {82D353DF-90BD-4382-8BC2-3F6192B76E34}  CWMVDecMediaObject     (wmvdecod)
+ *   {E3AAF548-C9A4-4C6E-234D-5ADA374B0000}  WineGStreamer VP9 MFT  (winegstreamer)
+ *
+ * So the H.264 decoder is present and simply does not advertise H.264 as an
+ * input type in a way the query matches. Handing back all three crashed this
+ * title -- it activates what it is given, and two of those decode something
+ * else. Handing back the one that matches the format is not a fabrication: it
+ * is the decoder the caller was asking for, found by identity instead of by a
+ * filter that lies.
+ *
+ * Anything not in this table is left out. A decoder for the wrong format is
+ * worse than none, which is the lesson the crash reporter taught. */
+static const GUID guid_friendly_name =
+    { 0x314ffbae, 0x5b41, 0x4c95, { 0x9c, 0x19, 0x4e, 0x7d, 0x58, 0x6f, 0xac, 0xe3 } };
+static const GUID guid_transform_clsid =
+    { 0x6821c42b, 0x65a4, 0x4e82, { 0x99, 0xbc, 0x9a, 0x88, 0x20, 0x5e, 0xcd, 0x0c } };
+static const GUID clsid_h264_decoder =
+    { 0x62ce7e72, 0x4c71, 0x4d20, { 0xb1, 0x5d, 0x45, 0x28, 0x31, 0xa8, 0x7d, 0x9d } };
+static const GUID guid_H264 =
+    { 0x34363248, 0x0000, 0x0010, { 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71 } };
+
+/* The CLSID that decodes a given subtype, or NULL if we do not know of one. */
+static const GUID *decoder_for(const GUID *subtype)
+{
+    if (subtype && IsEqualGUID(subtype, &guid_H264)) return &clsid_h264_decoder;
+    return NULL;
+}
+
+static BOOL keep_only_matching(const GUID *wanted, void ***mfts, UINT32 *count)
+{
+    void **found = *mfts;
+    UINT32 n = *count, i, kept = 0;
+
+    for (i = 0; i < n; i++)
+    {
+        void **vtbl;
+        HRESULT (WINAPI *get_guid)(void *, REFGUID, GUID *);
+        ULONG (WINAPI *release)(void *);
+        GUID clsid;
+        BOOL match = FALSE;
+
+        if (!found[i]) continue;
+        vtbl = *(void ***)found[i];
+        get_guid = (HRESULT (WINAPI *)(void *, REFGUID, GUID *))vtbl[10];
+        release  = (ULONG (WINAPI *)(void *))vtbl[2];
+
+        if (SUCCEEDED(get_guid(found[i], &guid_transform_clsid, &clsid))
+            && IsEqualGUID(&clsid, wanted))
+            match = TRUE;
+
+        if (match)
+            found[kept++] = found[i];
+        else
+            release(found[i]);          /* not ours to hand on */
+    }
+    *count = kept;
+    return kept > 0;
+}
+
 static HRESULT WINAPI my_MFTEnumEx(GUID category, UINT32 flags,
                                    const REG_TYPE_INFO *in,
                                    const REG_TYPE_INFO *out,
@@ -1055,6 +1204,23 @@ static HRESULT WINAPI my_MFTEnumEx(GUID category, UINT32 flags,
                   "it hands this title a decoder for another format, which it "
                   "activates and crashes on. Left alone deliberately."
                 : ".");
+        if (*count == 0 && in)
+        {
+            const GUID *want_clsid = decoder_for(&in->guidSubtype);
+            if (want_clsid
+                && SUCCEEDED(real_MFTEnumEx(category, MFT_ENUM_FLAG_ALL, NULL,
+                                            out, mfts, count))
+                && *mfts)
+            {
+                if (keep_only_matching(want_clsid, mfts, count))
+                    logf_("  the decoder for that format IS registered here and "
+                          "simply does not advertise the format: handing back "
+                          "%u, by identity rather than by the filter", *count);
+                else
+                    logf_("  none of what this engine offers decodes that "
+                          "format, so the zero stands");
+            }
+        }
     }
     if (out) describe_subtype("wants out as  ", &out->guidSubtype);
     if (count && *count == 0)
@@ -1459,6 +1625,16 @@ static DWORD WINAPI worker(LPVOID unused)
 
     if (want.electra_vpx) apply();
     if (want.node_guard)  install_node_guard();
+
+    /* Electra's own gate, patched as soon as the half is armed.
+     *
+     * This used to happen only from inside ActivateObject, after a decoder was
+     * instantiated -- which never runs on an engine where the enumeration
+     * answers zero, so the one patch that does not need a decoder was the one
+     * gated behind having one. Measured: three runs where the pair was never
+     * even looked for. It answers a question Electra asks of ITSELF, so it
+     * belongs here. */
+    if (want.electra_h264) force_electra_software();
     return 0;
 }
 
