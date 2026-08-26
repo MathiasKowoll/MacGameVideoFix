@@ -41,11 +41,21 @@ six still inside, and Electra ending the video 95 ms later. Neither side is
 wrong: an H.264 decoder holds frames until it knows nothing earlier is coming,
 and a player waits for pictures before sending more. `MF_LOW_LATENCY` is the
 documented way to break that, and it returned S_OK and changed nothing.
-Measured identically on CrossOver 26.3, on Preview 27 and on the Procyon fork's
-engine, in three different bottles.
+
+The same DLL, the same game build, four engines:
+
+| engine | fed | frames out | |
+| --- | --- | --- | --- |
+| CrossOver 26.3 with winevideo 0.5.0 | 480 | 475 | plays through |
+| CrossOver 26.3 | 7 | 1 | no picture |
+| CrossOver Preview 27 | 8 | 2 | no picture |
+| The Procyon fork's engine | 8 | 2 | no picture |
+
+The three that fail differ in the exact counts and not in the shape: a GOP goes
+in, one or two pictures come out, the rest stay inside, and the video ends.
 
 **winevideo dissolves it.** In its bottle the same build plays the cutscene
-whole: 420 frames, one every 16.7 ms of wall clock, ending on its own. Its
+whole: 475 frames, one every 16.7 ms of wall clock, ending on its own. Its
 patches `0018-winegstreamer-remove-compressed-queue-time-bound` and
 `0019-lift-decodebin-demux-time-bound` are the plausible reason — the bound is
 on the transform's own queue, not on the source reader, which is why this looked
