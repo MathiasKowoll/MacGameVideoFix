@@ -801,6 +801,21 @@ static BOOL poke(BYTE *at, const BYTE *expect, const BYTE *with, const char *wha
 #define RVA_ISSW_A     0x0636CB3E   /* callq IsSoftware ; testb al,al */
 #define RVA_ISSW_B     0x06370B44   /* the second site, which is not optional */
 #define RVA_ISSW_FUNC  0x0636B8B0   /* what both of them call */
+/* Where this build stores the console variable, found from the single
+ * reference to its name: the instruction after the registration call is
+ * `movq %rax, 0x94c0d25(%rip)`. The old build had it at 0x0AA29110. */
+#define RVA_CVAR_PTR_NEW 0x0AA78428
+/* From vtable slot 12: lea rax,[rcx+0x50] ; ret */
+#define CVAR_VALUES_OFFSET 0x50
+
+/* Set once the console variable has been located and understood. Until then no
+ * decoder is handed back: making one appear without putting Electra on the path
+ * that can consume it is what turned a silently skipped video into a crash at
+ * the menu -- measured, by reverting to the morning build and reaching the menu
+ * cleanly. A fix that trades a missing picture for a crash is worse than none. */
+static BOOL cvar_seen;
+/* Flipped only when the variable has actually been set. Not yet. */
+static BOOL cvar_ready;
 
 static BOOL text_range(BYTE *base, BYTE **start, SIZE_T *size)
 {
@@ -873,8 +888,49 @@ static void force_electra_software(void)
      * through -- a wild write on any build but the one it was read from, and
      * that build is gone. Left alone until it is found the same way the calls
      * were. */
-    logf_("  console variable left alone: its address is from a build that no "
-          "longer exists, and dereferencing it would be a wild write");
+    /* The values live at object + 0x50, and that was read off the vtable
+     * rather than guessed.
+     *
+     * What the fixed address holds in this build is an IConsoleVariable, not
+     * the two plain ints the old code wrote -- its first qword is a pointer
+     * into .rdata, so writing 1 at offset zero would destroy the vtable and
+     * produce exactly the null dereference this afternoon was spent chasing.
+     *
+     * Its vtable says where the data is. Slot 12 is `lea rax,[rcx+0x50] ; ret`
+     * -- AsVariableInt returning the embedded TConsoleVariableData<int32> --
+     * and slot 8 is `mov al,1 ; ret`, which is the "this is an int variable"
+     * answer. So the two int32s the old build had at offset zero are at 0x50
+     * here, and the old write is right about what to set and wrong only about
+     * where.
+     *
+     * Read before writing anyway: the default is 0, so anything else means
+     * this is not what it is thought to be, and then nothing is touched. */
+    {
+        BYTE *slot = base + RVA_CVAR_PTR_NEW;
+        void *obj = *(void **)slot;
+        if (!obj)
+        {
+            logf_("  console variable not registered yet");
+        }
+        else
+        {
+            int *values = (int *)((BYTE *)obj + CVAR_VALUES_OFFSET);
+            logf_("  console variable at %p, values at +0x%X currently [%d, %d]",
+                  obj, (unsigned)CVAR_VALUES_OFFSET, values[0], values[1]);
+            if (values[0] == 0 && values[1] == 0)
+            {
+                values[0] = 1;
+                values[1] = 1;
+                cvar_ready = TRUE;
+                logf_("    set to 1 -- Electra takes the old CPU buffer path, "
+                      "which stores the sample instead of querying for a D3D "
+                      "resource that is not there");
+            }
+            else
+                logf_("    left alone: the default for this variable is 0, so "
+                      "this is not the field it is thought to be");
+        }
+    }
 
     if (!done) logf_("nothing was patched");
 }
@@ -882,6 +938,8 @@ static void force_electra_software(void)
 static HRESULT WINAPI my_ProcessOutput(void *self, DWORD flags, DWORD count,
                                        void *samples, DWORD *status)
 {
+    { static LONG calls; LONG k = InterlockedIncrement(&calls);
+      if (k <= 12) logf_("  ProcessOutput call #%ld", (long)k); }
     OUT_DATA_BUFFER *out = (OUT_DATA_BUFFER *)samples;
     void *ours = NULL, *buffer = NULL;
     HRESULT hr;
@@ -975,11 +1033,16 @@ static HRESULT WINAPI my_ProcessOutput(void *self, DWORD flags, DWORD count,
               hr, n, frames_out);
         if (hr == 0xC00D6D72L) logf_("  (MF_E_TRANSFORM_NEED_MORE_INPUT -- normal)");
     }
+    { static LONG seen; LONG k = InterlockedIncrement(&seen);
+      if (k <= 12) logf_("    ProcessOutput #%ld -> 0x%08lx%s", (long)k, hr,
+          (hr == 0xC00D6D72L) ? "  (needs more input)" : ""); }
     return hr;
 }
 
 static HRESULT WINAPI my_ProcessInput(void *self, DWORD stream, void *sample, DWORD flags)
 {
+    { static LONG fed; LONG k = InterlockedIncrement(&fed);
+      if (k <= 12) logf_("  ProcessInput #%ld -- Electra is still feeding it", (long)k); }
     HRESULT hr = real_ProcessInput(self, stream, sample, flags);
     LONG n = InterlockedIncrement(&input_calls);
     if (FAILED(hr) && (n == 1 || (n % 200) == 0))
@@ -1075,6 +1138,38 @@ static HRESULT WINAPI my_ActivateObject(void *self, REFIID iid, void **out)
                   (void *)vt, vt[3], vt[4], vt[15], vt[16], vt[24], vt[25]);
         }
         logf_("  decoder instantiated and now watched");
+        /* Tell it not to hoard.
+         *
+         * Measured: twelve ProcessOutput calls in a row answered
+         * MF_E_TRANSFORM_NEED_MORE_INPUT while Electra fed nine samples, and
+         * exactly one frame came out before Electra gave up and shut Media
+         * Foundation down. That is not a broken decoder -- it is an H.264 decoder
+         * doing what they all do, buffering several frames before emitting the
+         * first, against a consumer that will not wait that long.
+         *
+         * MF_LOW_LATENCY is the switch for exactly that. IMFTransform GetAttributes
+         * is slot 8 (GetStreamCount is 4, which this file already patches), and
+         * IMFAttributes SetUINT32 is slot 21. */
+        {
+            static const GUID MF_LOW_LATENCY_ =
+                { 0x9c27891a, 0xed7a, 0x40e1,
+                  { 0x88, 0xe8, 0xb2, 0x27, 0x27, 0xa0, 0x24, 0xee } };
+            HRESULT (WINAPI *get_attrs)(void *, void **) =
+                (HRESULT (WINAPI *)(void *, void **))(*(void ***)*out)[8];
+            void *attrs = NULL;
+            if (SUCCEEDED(get_attrs(*out, &attrs)) && attrs)
+            {
+                void **avt = *(void ***)attrs;
+                HRESULT (WINAPI *set_u32)(void *, REFGUID, UINT32) =
+                    (HRESULT (WINAPI *)(void *, REFGUID, UINT32))avt[21];
+                HRESULT hr2 = set_u32(attrs, &MF_LOW_LATENCY_, 1);
+                logf_("  asked it for low latency -> 0x%08lx%s", hr2,
+                      SUCCEEDED(hr2) ? "  (should emit without hoarding now)"
+                                     : "  (refused; it will keep buffering)");
+                ((ULONG (WINAPI *)(void *))avt[2])(attrs);
+            }
+            else logf_("  no attribute store on the transform");
+        }
         if (h264_wanted) force_electra_software();
     }
     return hr;
@@ -1346,7 +1441,11 @@ static HRESULT WINAPI my_MFTEnumEx(GUID category, UINT32 flags,
                 : ".");
         if (*count == 0 && in)
         {
-            const GUID *want_clsid = decoder_for(&in->guidSubtype);
+            const GUID *want_clsid = cvar_ready ? decoder_for(&in->guidSubtype) : NULL;
+            if (!cvar_ready)
+                logf_("  a decoder could be handed back here, and is not: without "
+                      "the console variable Electra takes a path that dereferences "
+                      "null on the first frame, which is worse than the skip");
             if (want_clsid
                 && SUCCEEDED(real_MFTEnumEx(category, MFT_ENUM_FLAG_ALL, NULL,
                                             out, mfts, count))
