@@ -4,12 +4,72 @@ Unreal Engine 5. The startup video plays its sound and shows nothing.
 
 | | |
 | --- | --- |
-| Video | H.264, measured by FourCC rather than assumed |
+| Video | H.264, 1920x1080 at 60 fps, measured by FourCC and by frame timestamps |
 | Played by | Electra, through a Media Foundation decoder MFT |
 | Symptom | Sound plays, picture never appears. No crash |
-| Fix | NV12 put back on the menu, and Electra forced onto its software path |
-| CrossOver | 26.3 and `crossover-preview-arm64-20260821`, played through on both |
-| winevideo | Not required — every run was in a bottle it never touched |
+| Fix | One console variable, found by its own name in the binary |
+| CrossOver | 26.3 **with winevideo**. Plain 26.3 and Preview 27 stall after two frames |
+| winevideo | **Required**, since the game update of 2026-08-24 |
+
+## The game updated, and this became a winevideo title
+
+On 2026-08-24 the game shipped a new build, and the fix below stopped working.
+Everything on this page was still true of the old binary; none of it was enough
+for the new one.
+
+**Every address moved.** The two call sites this fix had written down landed
+mid-instruction in the new executable, so the fix verified them, declined and
+did nothing — which is the designed behaviour and is also useless. The sites
+were found again by what they are rather than where they were, and the console
+variable is now located from its own name: there is exactly one UTF-16
+`Electra.Win.H264UseOldOutputPath` in the image and exactly one RIP-relative
+reference to it in 128 MB of code, and the store that follows is the pointer.
+That is the only thing this fix now remembers between builds, and it is
+Electra's own API rather than a number read off a disassembly.
+
+**And then it still did not play**, on any stock engine. What the log finally
+said, once its counters were fixed:
+
+```
+ProcessInput      8      accepted 8
+ProcessOutput    26      frames out 2, needs more in 23, stream change 1
+END_OF_STREAM: drained the decoder and got 6 more frame(s)
+```
+
+Eight access units in — one GOP, 150 ms of a 60 fps video — two pictures out,
+six still inside, and Electra ending the video 95 ms later. Neither side is
+wrong: an H.264 decoder holds frames until it knows nothing earlier is coming,
+and a player waits for pictures before sending more. `MF_LOW_LATENCY` is the
+documented way to break that, and it returned S_OK and changed nothing.
+Measured identically on CrossOver 26.3, on Preview 27 and on the Procyon fork's
+engine, in three different bottles.
+
+**winevideo dissolves it.** In its bottle the same build plays the cutscene
+whole: 420 frames, one every 16.7 ms of wall clock, ending on its own. Its
+patches `0018-winegstreamer-remove-compressed-queue-time-bound` and
+`0019-lift-decodebin-demux-time-bound` are the plausible reason — the bound is
+on the transform's own queue, not on the source reader, which is why this looked
+at first like a path the title does not use.
+
+### What is left of the fix there, measured one switch at a time
+
+| | on winevideo |
+| --- | --- |
+| Console variable set to 1 | **required** — without it, one frame and a null dereference |
+| The two `IsSoftware` patches | inert: the engine no longer advertises `MF_SA_D3D_AWARE` |
+| NV12 put back on the menu | inert: the engine offers NV12 itself |
+| An `IMF2DBuffer2` over the caller's buffer | inert: the engine provides 2D-capable samples |
+
+So on winevideo this title needs one console variable and nothing else, and the
+three faults described below are all answered by the engine. They are kept in
+the DLL because they are what carries the title on a stock CrossOver — where,
+as of the new build, the video does not play at all.
+
+Each of those rows is a run with that half switched off, not a reading of the
+code. The DLL reads `C:\mgvf-electra.txt` from the bottle for the words
+`nocvar`, `noissw` and `no2d`; with no such file every half is armed, which is
+what ships. It exists because each of these answers cost a person walking to a
+cutscene, and a rebuild between every one of them wastes that.
 
 ## Three faults in a row
 
@@ -73,8 +133,9 @@ times it, and the renderer is handed a luma-only picture. Both go, or neither.
 
 winevideo reaches the same place by patching `winegstreamer` itself — its patch
 0005, whose stated effect is "UE ElectraPlayer takes its software decode path on
-macOS". This is that effect from inside the process: one game, reversible, and
-nothing outside the game folder touched.
+macOS". This was that effect from inside the process: one game, reversible, and
+nothing outside the game folder touched. On the build shipped on 2026-08-24 that
+is no longer enough on its own; see the section above.
 
 The console variable `Electra.Win.H264UseOldOutputPath` selects the same
 fallback, and the DLL sets it itself. **No `Engine.ini` is needed** — measured,

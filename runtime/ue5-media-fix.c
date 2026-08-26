@@ -77,7 +77,18 @@ static void logf_(const char *fmt, ...)
     va_list ap;
     int n, m;
 
-    n = snprintf(buf, sizeof(buf) - 2, "[%s] ", process_name());
+    /* Milliseconds since the first line. Without them this log records what
+     * happened and never when, and the question left standing -- is Electra
+     * being cut short, or is it waiting for something -- is entirely a
+     * question of when. Two frames thirty milliseconds apart and two frames
+     * five seconds apart are different failures with the same log. */
+    {
+        static DWORD t0;
+        DWORD now = GetTickCount();
+        if (!t0) t0 = now ? now : 1;
+        n = snprintf(buf, sizeof(buf) - 2, "[%6lu ms] [%s] ",
+                     (unsigned long)(now - t0), process_name());
+    }
     if (n < 0) n = 0;
     va_start(ap, fmt);
     m = vsnprintf(buf + n, sizeof(buf) - 2 - n, fmt, ap);
@@ -91,7 +102,7 @@ static void logf_(const char *fmt, ...)
      * so the rest is dropped rather than the call sites being edited -- this
      * code works, and rewriting it for tidiness is how working code stops
      * working. */
-    if (InterlockedIncrement(&log_lines) > 200) return;
+    if (InterlockedIncrement(&log_lines) > 400) return;
 
     h = CreateFileA(LOGFILE, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -329,6 +340,42 @@ static BOOL give_sample_a_2d_buffer(void *sample)
 static HRESULT (WINAPI *real_GetOutputAvailableType)(void *, DWORD, DWORD, void **);
 static HRESULT (WINAPI *real_GetOutputStreamInfo)(void *, DWORD, void *);
 static LONG frames_out, output_calls, input_calls;
+/* What ProcessOutput actually answered, tallied rather than sampled. The
+ * first twelve calls used to be the whole record, and twelve calls is a
+ * fraction of a second of a cutscene. */
+static LONG out_ok, out_need_more, out_stream_change, out_other;
+
+/* Which parts of this fix are armed, read from C:\mgvf-electra.txt.
+ *
+ * Each launch costs a person walking to a menu and watching a cutscene, and a
+ * rebuild between every one of them wastes that. The file holds keywords, one
+ * line or many: nocvar, noissw, no2d. Absent file, everything on --
+ * which is what ships, so this cannot change behaviour for anyone who does not
+ * create it. */
+static BOOL opt_cvar = TRUE, opt_issw = TRUE, opt_2d = TRUE;
+
+static void read_switches(void)
+{
+    char buf[257];
+    DWORD got = 0;
+    HANDLE f = CreateFileA("C:\\mgvf-electra.txt", GENERIC_READ, FILE_SHARE_READ,
+                           NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) return;
+    if (ReadFile(f, buf, sizeof(buf) - 1, &got, NULL) && got) buf[got] = 0;
+    else buf[0] = 0;
+    CloseHandle(f);
+    if (strstr(buf, "nocvar"))  opt_cvar  = FALSE;
+    if (strstr(buf, "noissw"))  opt_issw  = FALSE;
+    if (strstr(buf, "no2d"))    opt_2d    = FALSE;
+    logf_("switches from C:\\mgvf-electra.txt -- console variable %s, "
+          "IsSoftware %s, 2D buffer %s",
+          opt_cvar ? "on" : "OFF", opt_issw ? "on" : "OFF", opt_2d ? "on" : "OFF");
+}
+static HRESULT out_last_other;
+/* What ProcessInput answered, for the same reason as the output tallies: a
+ * failure sampled at call 1 and every 200th is a failure nobody sees. */
+static LONG in_ok, in_not_accepting, in_other;
+static HRESULT in_last_other;
 
 /* Put NV12 back on the menu.
  *
@@ -441,14 +488,19 @@ static HRESULT WINAPI my_GetOutputStreamInfo(void *self, DWORD stream, void *inf
     HRESULT hr = real_GetOutputStreamInfo(self, stream, info);
     if (SUCCEEDED(hr) && info)
     {
-        /* MFT_OUTPUT_STREAM_INFO: dwFlags at offset 4. Bit 0x100 =
-         * PROVIDES_SAMPLES, which decides who allocates the frame. */
-        DWORD flags = *(DWORD *)((BYTE *)info + 4);
+        /* MFT_OUTPUT_STREAM_INFO is { DWORD dwFlags; DWORD cbSize;
+         * DWORD cbAlignment; } -- dwFlags at offset ZERO. This read offset 4
+         * and called it flags, and the number it printed said so out loud for
+         * a whole afternoon without being read: 0x3fc000 is 1920*1088*2, a
+         * buffer size. Every sentence this log wrote about who allocates the
+         * frame was derived from cbSize. */
+        DWORD flags = *(DWORD *)info;
+        DWORD cbsize = *(DWORD *)((BYTE *)info + 4);
         if (provide_samples && !(flags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES))
         {
             static LONG said;
             flags |= MFT_OUTPUT_STREAM_PROVIDES_SAMPLES;
-            *(DWORD *)((BYTE *)info + 4) = flags;
+            *(DWORD *)info = flags;
             if (InterlockedIncrement(&said) == 1)
                 logf_("GetOutputStreamInfo: claiming PROVIDES_SAMPLES so the "
                       "caller stops allocating flat buffers");
@@ -459,10 +511,10 @@ static HRESULT WINAPI my_GetOutputStreamInfo(void *self, DWORD stream, void *inf
             static LONG once;
             if (InterlockedIncrement(&once) != 1) return hr;
         }
-        logf_("GetOutputStreamInfo: flags=0x%lx -- %s allocates the frame%s",
-              flags, (flags & 0x100) ? "the DECODER" : "the CALLER",
-              (flags & 0x100) ? "" : "   << a caller buffer is not IMF2DBuffer, "
-              "and Electra rejects every frame that is not");
+        logf_("GetOutputStreamInfo: dwFlags=0x%lx, cbSize=%lu -- %s allocates "
+              "the frame", flags, (unsigned long)cbsize,
+              (flags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES) ? "the DECODER"
+                                                           : "the CALLER");
     }
     return hr;
 }
@@ -560,6 +612,23 @@ static HRESULT WINAPI my_SetInputType(void *self, DWORD stream, void *type, DWOR
 
 static const GUID IID_IMF2DBuffer_ =
     { 0x7dc9d5f9, 0x9ed9, 0x44ec, { 0x9b, 0xbf, 0x06, 0x00, 0xbb, 0x58, 0x9f, 0xbb } };
+/* IMF2DBuffer2, which is what this build of the engine asks for.
+ *
+ * The comment above was read from VideoDecoderH264_DX.cpp and was right about
+ * the shape of the path and wrong about the interface, because the engine
+ * moved on: measured in the log, Electra queries IMFDXGIBuffer first (declined,
+ * which is what keeps it on the software path) and then IMF2DBuffer2 -- never
+ * IMF2DBuffer. Answering only the older IID meant this shim was replying to a
+ * question that was no longer being asked, silently, while every frame was
+ * dropped.
+ *
+ * IMF2DBuffer2 derives from IMF2DBuffer and adds two methods, so the vtable is
+ * the same ten followed by Lock2DSize and Copy2DTo. Handing the same object
+ * back for both IIDs is correct precisely because of that inheritance. */
+static const GUID IID_IMF2DBuffer2_ =
+    { 0x33ae5ea6, 0x4316, 0x436f, { 0x8d, 0xdd, 0xd7, 0x3d, 0x22, 0xf8, 0x29, 0xec } };
+static const GUID IID_IMFDXGIBuffer_ =
+    { 0xe7174cfa, 0x1c9e, 0x48b1, { 0x88, 0x66, 0x62, 0x62, 0x26, 0xbf, 0xc2, 0x58 } };
 static const GUID IID_IUnknown_ =
     { 0x00000000, 0x0000, 0x0000, { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
 
@@ -576,7 +645,8 @@ static HRESULT WINAPI td_QueryInterface(void *self, const GUID *iid, void **out)
 {
     struct two_d *td = (struct two_d *)self;
     if (!out) return E_POINTER;
-    if (IsEqualGUID(iid, &IID_IMF2DBuffer_) || IsEqualGUID(iid, &IID_IUnknown_))
+    if (IsEqualGUID(iid, &IID_IMF2DBuffer_) || IsEqualGUID(iid, &IID_IMF2DBuffer2_)
+        || IsEqualGUID(iid, &IID_IUnknown_))
     {
         InterlockedIncrement(&td->refs);
         *out = self;
@@ -680,12 +750,64 @@ static HRESULT WINAPI td_ContiguousCopyFrom(void *self, const BYTE *src, DWORD s
     return S_OK;
 }
 
-static void *two_d_vtbl[10] =
+/* Lock2DSize: Lock2D plus the extent of the whole allocation. The lock flags
+ * are read/write/readwrite and this buffer is the decoder's own memory, so
+ * there is nothing to honour differently between them. */
+static HRESULT WINAPI td_Lock2DSize(void *self, DWORD flags, BYTE **scanline0,
+                                    LONG *pitch, BYTE **start, DWORD *length)
+{
+    { static LONG once; if (InterlockedIncrement(&once) == 1) logf_("    Electra called td_Lock2DSize"); }
+    struct two_d *td = (struct two_d *)self;
+    HRESULT hr;
+    (void)flags;
+    hr = td_Lock2D(self, scanline0, pitch);
+    if (FAILED(hr)) return hr;
+    if (start) *start = td->locked;
+    if (length)
+    {
+        DWORD max = 0;
+        HRESULT (WINAPI *get_max)(void *, DWORD *) =
+            (HRESULT (WINAPI *)(void *, DWORD *))(*(void ***)td->inner)[7];
+        get_max(td->inner, &max);
+        *length = max ? max : frame_w * frame_h * 3 / 2;
+    }
+    return S_OK;
+}
+
+static HRESULT WINAPI td_Copy2DTo(void *self, void *dest)
+{
+    { static LONG once; if (InterlockedIncrement(&once) == 1) logf_("    Electra called td_Copy2DTo"); }
+    /* Copy through the destination's own Lock2D, which is the only thing that
+     * can be assumed about an interface implemented by somebody else. */
+    BYTE *src = NULL, *dst = NULL;
+    LONG spitch = 0, dpitch = 0;
+    HRESULT hr, (WINAPI *dlock)(void *, BYTE **, LONG *), (WINAPI *dunlock)(void *);
+    if (!dest) return E_POINTER;
+    dlock   = (HRESULT (WINAPI *)(void *, BYTE **, LONG *))(*(void ***)dest)[3];
+    dunlock = (HRESULT (WINAPI *)(void *))(*(void ***)dest)[4];
+    hr = td_Lock2D(self, &src, &spitch);
+    if (FAILED(hr)) return hr;
+    hr = dlock(dest, &dst, &dpitch);
+    if (SUCCEEDED(hr))
+    {
+        UINT rows = (display_h ? display_h : frame_h) * 3 / 2;
+        UINT row;
+        LONG copy = spitch < dpitch ? spitch : dpitch;
+        for (row = 0; row < rows; row++)
+            CopyMemory(dst + (LONG)row * dpitch, src + (LONG)row * spitch, (SIZE_T)copy);
+        dunlock(dest);
+    }
+    td_Unlock2D(self);
+    return hr;
+}
+
+static void *two_d_vtbl[12] =
 {
     (void *)td_QueryInterface, (void *)td_AddRef, (void *)td_Release,
     (void *)td_Lock2D, (void *)td_Unlock2D, (void *)td_GetScanline0AndPitch,
     (void *)td_IsContiguousFormat, (void *)td_GetContiguousLength,
-    (void *)td_ContiguousCopyTo, (void *)td_ContiguousCopyFrom
+    (void *)td_ContiguousCopyTo, (void *)td_ContiguousCopyFrom,
+    (void *)td_Lock2DSize, (void *)td_Copy2DTo
 };
 
 /* The buffer's own QueryInterface, patched once on its shared vtable. */
@@ -702,7 +824,33 @@ static HRESULT WINAPI my_buffer_QueryInterface(void *self, const GUID *iid, void
         if (out) *out = NULL;
         return E_NOINTERFACE;
     }
-    if (iid && IsEqualGUID(iid, &IID_IMF2DBuffer_))
+    {
+        /* Which interfaces does Electra actually want from a decoded frame?
+         * This shim was watching for exactly one and reporting nothing when it
+         * never came -- so "Electra never asked for IMF2DBuffer" was true, and
+         * said nothing about what it asked for INSTEAD. */
+        static LONG seen;
+        LONG k = InterlockedIncrement(&seen);
+        if (k <= 12 && iid)
+        {
+            const char *known =
+                IsEqualGUID(iid, &IID_IMF2DBuffer_)  ? "IMF2DBuffer"  :
+                IsEqualGUID(iid, &IID_IMF2DBuffer2_) ? "IMF2DBuffer2" :
+                IsEqualGUID(iid, &IID_IMFDXGIBuffer_)? "IMFDXGIBuffer -- declined, "
+                                                       "which is what keeps it on "
+                                                       "the software path" :
+                IsEqualGUID(iid, &IID_IUnknown_)     ? "IUnknown" : NULL;
+            if (known)
+                logf_("  buffer asked for %s", known);
+            else
+                logf_("  buffer asked for {%08lX-%04X-%04X-%02X%02X%02X%02X%02X%02X%02X%02X}",
+                      iid->Data1, iid->Data2, iid->Data3,
+                      iid->Data4[0], iid->Data4[1], iid->Data4[2], iid->Data4[3],
+                      iid->Data4[4], iid->Data4[5], iid->Data4[6], iid->Data4[7]);
+        }
+    }
+    if (opt_2d && iid && (IsEqualGUID(iid, &IID_IMF2DBuffer_)
+                          || IsEqualGUID(iid, &IID_IMF2DBuffer2_)))
     {
         HRESULT hr = real_buffer_QI(self, iid, out);
         if (SUCCEEDED(hr)) return hr;          /* already 2D: leave it alone */
@@ -892,6 +1040,99 @@ static BOOL text_range(BYTE *base, BYTE **start, SIZE_T *size)
     return FALSE;
 }
 
+/* Find the console variable without remembering where it is.
+ *
+ * Every address in this file moves with a game update, and today one did: the
+ * shipped build's call sites landed mid-instruction in the new binary, so the
+ * fix verified, declined and did nothing -- correct behaviour, and useless. An
+ * address that is DERIVED does not have that problem, and this one can be.
+ *
+ * The variable's name is in the image as a UTF-16 string and there is exactly
+ * one RIP-relative LEA in 128 MB of .text that points at it: the registration
+ * call. A few instructions later the returned IConsoleVariable pointer is
+ * stored to a fixed slot with `mov [rip+d32], rax`, and that slot is what the
+ * old code had written down. So: find the name, find the one reference, take
+ * the first store after it. Nothing here is remembered between builds except
+ * the name of the variable, which is Electra's own API and cannot move without
+ * the console command moving with it.
+ *
+ * Returns the slot holding the pointer, or NULL. */
+static const WCHAR CVAR_NAME[] = L"Electra.Win.H264UseOldOutputPath";
+
+static void **find_cvar_slot(BYTE *base)
+{
+    IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;
+    IMAGE_NT_HEADERS *nt;
+    IMAGE_SECTION_HEADER *sec;
+    BYTE *text = NULL, *name = NULL;
+    SIZE_T text_size = 0;
+    SIZE_T want = sizeof(CVAR_NAME);   /* includes the terminator */
+    WORD i;
+
+    if (!base || dos->e_magic != IMAGE_DOS_SIGNATURE) return NULL;
+    nt = (IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) return NULL;
+    if (!text_range(base, &text, &text_size)) return NULL;
+
+    /* The name lives in a read-only data section. Scan the initialised ones
+     * rather than assuming which, since their names differ between linkers. */
+    sec = IMAGE_FIRST_SECTION(nt);
+    for (i = 0; i < nt->FileHeader.NumberOfSections && !name; i++, sec++)
+    {
+        BYTE *p, *end;
+        if (memcmp(sec->Name, ".text", 5) == 0) continue;
+        if (!sec->Misc.VirtualSize) continue;
+        p = base + sec->VirtualAddress;
+        end = p + sec->Misc.VirtualSize - want;
+        for (; p <= end; p += 2)          /* UTF-16 is 2-aligned */
+            if (memcmp(p, CVAR_NAME, want) == 0) { name = p; break; }
+    }
+    if (!name)
+    {
+        logf_("  the console variable's name is not in this binary -- Electra "
+              "may have renamed it, and nothing else here can be trusted to "
+              "mean what it used to");
+        return NULL;
+    }
+
+    /* The single RIP-relative LEA that points at it. */
+    {
+        BYTE *p = text, *end = text + text_size - 8, *ref = NULL;
+        LONG found = 0;
+        for (; p <= end; p++)
+        {
+            LONG disp;
+            if (p[0] < 0x48 || p[0] > 0x4F) continue;   /* REX.W */
+            if (p[1] != 0x8D) continue;                 /* lea */
+            if ((p[2] & 0xC7) != 0x05) continue;        /* mod=00, rm=101 */
+            memcpy(&disp, p + 3, sizeof(disp));
+            if (p + 7 + disp != name) continue;
+            ref = p; found++;
+        }
+        if (found != 1)
+        {
+            logf_("  %ld references to the console variable's name, expected 1 "
+                  "-- not guessing which", (long)found);
+            return NULL;
+        }
+
+        /* The first `mov [rip+d32], rax` after it stores what registration
+         * returned. A window, not a fixed distance: a distance is not a name,
+         * which this file learned the expensive way. */
+        for (p = ref; p < ref + 128 && p <= end; p++)
+            if (p[0] == 0x48 && p[1] == 0x89 && p[2] == 0x05)
+            {
+                LONG disp;
+                memcpy(&disp, p + 3, sizeof(disp));
+                logf_("  console variable slot found from its name: base+0x%08lX",
+                      (unsigned long)((p + 7 + disp) - base));
+                return (void **)(p + 7 + disp);
+            }
+        logf_("  found the name and its one reference, but no store after it");
+    }
+    return NULL;
+}
+
 /* Both sites must call the same function, or this is not the pair. */
 static BOOL issw_site_ok(BYTE *base, DWORD rva)
 {
@@ -925,6 +1166,7 @@ static void force_electra_software(void)
     if (electra_sw_forced || !base) return;
     electra_sw_forced = TRUE;
 
+    read_switches();
     logf_("forcing Electra onto its software path");
     if (!issw_site_ok(base, RVA_ISSW_A) || !issw_site_ok(base, RVA_ISSW_B))
     {
@@ -935,8 +1177,12 @@ static void force_electra_software(void)
         return;
     }
 
-    if (poke5(base + RVA_ISSW_A, "IsSoftware (outer gate)")) done++;
-    if (poke5(base + RVA_ISSW_B, "IsSoftware (sw value)")) done++;
+    if (opt_issw)
+    {
+        if (poke5(base + RVA_ISSW_A, "IsSoftware (outer gate)")) done++;
+        if (poke5(base + RVA_ISSW_B, "IsSoftware (sw value)")) done++;
+    }
+    else logf_("  IsSoftware: left alone, by switch");
 
     /* The console variable is a pointer read from a fixed address and written
      * through -- a wild write on any build but the one it was read from, and
@@ -960,8 +1206,21 @@ static void force_electra_software(void)
      * Read before writing anyway: the default is 0, so anything else means
      * this is not what it is thought to be, and then nothing is touched. */
     {
-        BYTE *slot = base + RVA_CVAR_PTR_NEW;
-        void *obj = *(void **)slot;
+        void **slot = find_cvar_slot(base);
+        void *obj;
+        if (slot && (BYTE *)slot != base + RVA_CVAR_PTR_NEW)
+            logf_("  (the address written down for this build says base+0x%08lX; "
+                  "the search is what is being used)", (unsigned long)RVA_CVAR_PTR_NEW);
+        if (!slot)
+        {
+            /* Falling back to a remembered address is how a wild write happens.
+             * It is allowed only when the search failed AND this build is the
+             * one the address was read from, which the call sites already
+             * proved above by verifying byte for byte. */
+            logf_("  falling back to the address written down for this build");
+            slot = (void **)(base + RVA_CVAR_PTR_NEW);
+        }
+        obj = *slot;
         if (!obj)
         {
             logf_("  console variable not registered yet");
@@ -971,7 +1230,10 @@ static void force_electra_software(void)
             int *values = (int *)((BYTE *)obj + CVAR_VALUES_OFFSET);
             logf_("  console variable at %p, values at +0x%X currently [%d, %d]",
                   obj, (unsigned)CVAR_VALUES_OFFSET, values[0], values[1]);
-            if (values[0] == 0 && values[1] == 0)
+            if (!opt_cvar)
+                logf_("    left at [%d, %d], by switch -- Electra keeps whichever "
+                      "output path it chooses for itself", values[0], values[1]);
+            else if (values[0] == 0 && values[1] == 0)
             {
                 values[0] = 1;
                 values[1] = 1;
@@ -1069,23 +1331,63 @@ static HRESULT WINAPI my_ProcessOutput(void *self, DWORD flags, DWORD count,
     LONG n = InterlockedIncrement(&output_calls);
     if (SUCCEEDED(hr))
     {
+        /* This used to gate the message on f being 1, 10 or 100 and then print
+         * a SEPARATE counter of how often that gate had fired -- which reached
+         * three at most, and printed "1 frames decoded so far" for the first
+         * frame of every run. A decode of one frame and a decode of ten
+         * thousand left byte-identical logs, and an afternoon went into
+         * explaining a stall that the log had no way of showing. Print the
+         * frame count, and keep printing it. */
         LONG f = InterlockedIncrement(&frames_out);
-        if (f == 1 || f == 10 || f == 100)
-            {
-                static LONG n;
-                LONG k = InterlockedIncrement(&n);
-                /* Every frame used to be silent after the first, so a run that
-                 * decoded one frame and a run that decoded a thousand left the
-                 * same log. Progress is the thing being measured here. */
-                if (k == 1 || k % 60 == 0)
-                    logf_("ProcessOutput: %ld frames decoded so far", (long)k);
-            }
+        InterlockedIncrement(&out_ok);
+        if (f == 1 || (f % 60) == 0)
+            logf_("ProcessOutput: %ld frames decoded so far", (long)f);
+        /* Did anything actually come out?
+         *
+         * S_OK from ProcessOutput and a frame are not the same claim. The
+         * buffer Electra was handed reported a CURRENT LENGTH OF ZERO right
+         * after a successful call, and Electra sent END_OF_STREAM immediately
+         * after reading it -- which is what a player does when it is handed an
+         * empty picture. Ask the sample itself, and ask it without locking
+         * anything: reading a length cannot disturb a handover, and this file
+         * has already unlocked somebody else's buffer once.
+         *
+         * IMFSample: GetSampleTime 35, GetBufferCount 39, GetTotalLength 45. */
+        if (f <= 3 && out && count >= 1 && out[0].pSample)
+        {
+            void *sm = out[0].pSample;
+            void **vt = *(void ***)sm;
+            LONGLONG when = 0;
+            DWORD bufs = 0, total = 0;
+            ((HRESULT (WINAPI *)(void *, LONGLONG *))vt[35])(sm, &when);
+            ((HRESULT (WINAPI *)(void *, DWORD *))vt[39])(sm, &bufs);
+            ((HRESULT (WINAPI *)(void *, DWORD *))vt[45])(sm, &total);
+            logf_("  frame %ld: %lu buffer(s), %lu bytes in total, timestamp %lld"
+                  "  << %s", (long)f, (unsigned long)bufs, (unsigned long)total,
+                  (long long)when,
+                  total ? "there are pixels in it"
+                        : "EMPTY -- ProcessOutput said S_OK and produced nothing");
+        }
     }
-    else if (n == 1 || (n % 200) == 0)
+    else if (hr == 0xC00D6D72L) InterlockedIncrement(&out_need_more);
+    else if (hr == 0xC00D6D61L)
     {
-        logf_("ProcessOutput -> 0x%08lx after %ld calls, %ld frames so far",
-              hr, n, frames_out);
-        if (hr == 0xC00D6D72L) logf_("  (MF_E_TRANSFORM_NEED_MORE_INPUT -- normal)");
+        /* MF_E_TRANSFORM_STREAM_CHANGE: the decoder has read the sequence
+         * header and is telling the caller to renegotiate the output type.
+         * A decoder that says this is decoding. */
+        if (InterlockedIncrement(&out_stream_change) == 1)
+            logf_("  ProcessOutput -> MF_E_TRANSFORM_STREAM_CHANGE: the decoder "
+                  "knows the real format now and wants the output type set again");
+    }
+    else
+    {
+        InterlockedIncrement(&out_other);
+        out_last_other = hr;
+        /* Anything that is neither a frame, nor "feed me", nor a format
+         * change is worth a line the first time and rarely after. */
+        if (out_other == 1 || (n % 200) == 0)
+            logf_("ProcessOutput -> 0x%08lx after %ld calls, %ld frames so far",
+                  hr, n, frames_out);
     }
     { static LONG seen; LONG k = InterlockedIncrement(&seen);
       if (k <= 12) logf_("    ProcessOutput #%ld -> 0x%08lx%s", (long)k, hr,
@@ -1095,12 +1397,53 @@ static HRESULT WINAPI my_ProcessOutput(void *self, DWORD flags, DWORD count,
 
 static HRESULT WINAPI my_ProcessInput(void *self, DWORD stream, void *sample, DWORD flags)
 {
-    { static LONG fed; LONG k = InterlockedIncrement(&fed);
-      if (k <= 12) logf_("  ProcessInput #%ld -- Electra is still feeding it", (long)k); }
-    HRESULT hr = real_ProcessInput(self, stream, sample, flags);
+    /* What is Electra actually handing over?
+     *
+     * It stops after eight samples and the decoder accepted all eight, so the
+     * shortage is upstream of here. Eight access units of a 60 fps video is
+     * 133 ms, and their timestamps say whether that is what they are: a run of
+     * consecutive frame times means the demuxer simply stopped, while a gap or
+     * a repeat means something else is choosing what to send.
+     *
+     * Read before the call, because a decoder may take ownership of what it is
+     * given. IMFSample: GetSampleTime 35, GetSampleDuration 37,
+     * GetTotalLength 45. */
+    HRESULT hr;
+    if (sample)
+    {
+        static LONG fed;
+        LONG k = InterlockedIncrement(&fed);
+        if (k <= 16)
+        {
+            void **vt = *(void ***)sample;
+            LONGLONG when = 0, dur = 0;
+            DWORD total = 0;
+            ((HRESULT (WINAPI *)(void *, LONGLONG *))vt[35])(sample, &when);
+            ((HRESULT (WINAPI *)(void *, LONGLONG *))vt[37])(sample, &dur);
+            ((HRESULT (WINAPI *)(void *, DWORD *))vt[45])(sample, &total);
+            logf_("  fed #%ld: %lu bytes, timestamp %lld, duration %lld",
+                  (long)k, (unsigned long)total, (long long)when, (long long)dur);
+        }
+    }
+    hr = real_ProcessInput(self, stream, sample, flags);
     LONG n = InterlockedIncrement(&input_calls);
-    if (FAILED(hr) && (n == 1 || (n % 200) == 0))
-        logf_("ProcessInput -> 0x%08lx (call %ld)", hr, n);
+
+    if (SUCCEEDED(hr)) InterlockedIncrement(&in_ok);
+    else if (hr == 0xC00D36B5L) InterlockedIncrement(&in_not_accepting);
+    else { InterlockedIncrement(&in_other); in_last_other = hr; }
+
+    /* Every answer for the first sixteen, not just the successes. Electra
+     * stopping after eight samples is the whole question, and a client stops
+     * feeding when it is told to -- so what it was told has to be in the log
+     * whether or not it was good news. */
+    if (n <= 16)
+        logf_("  ProcessInput #%ld -> 0x%08lx%s", (long)n, hr,
+              SUCCEEDED(hr) ? "" :
+              (hr == 0xC00D36B5L) ? "  (MF_E_NOTACCEPTING -- drain the output first)"
+                                  : "  << REFUSED, and this is why it stops");
+    /* And the first refusal that is not the ordinary one, wherever it lands. */
+    if (FAILED(hr) && hr != 0xC00D36B5L && in_other == 1)
+        logf_("ProcessInput refused sample %ld with 0x%08lx", (long)n, hr);
     return hr;
 }
 
@@ -1144,8 +1487,21 @@ static HRESULT WINAPI my_ProcessMessage(void *self, DWORD message, ULONG_PTR par
         return S_OK;
     }
     hr = real_ProcessMessage(self, message, param);
-    if (message == 0x00000002)
-        logf_("ProcessMessage(SET_D3D_MANAGER, %p) -> 0x%08lx", (void *)param, hr);
+    {
+        const char *name =
+            message == 0x00000001 ? "COMMAND_DRAIN" :
+            message == 0x00000002 ? "SET_D3D_MANAGER" :
+            message == 0x00000000 ? "COMMAND_FLUSH" :
+            message == 0x00000003 ? "DROP_SAMPLES" :
+            message == 0x00000004 ? "COMMAND_TICK" :
+            message == 0x0000000E ? "COMMAND_MARKER" :
+            message == 0x10000000 ? "NOTIFY_BEGIN_STREAMING" :
+            message == 0x10000001 ? "NOTIFY_END_STREAMING" :
+            message == 0x10000002 ? "NOTIFY_END_OF_STREAM" :
+            message == 0x10000003 ? "NOTIFY_START_OF_STREAM" : "unknown";
+        logf_("ProcessMessage(%s = 0x%lx, %p) -> 0x%08lx",
+              name, message, (void *)param, hr);
+    }
     return hr;
 }
 
@@ -1230,6 +1586,7 @@ static HRESULT WINAPI my_ActivateObject(void *self, REFIID iid, void **out)
 }
 
 static HRESULT (WINAPI *real_MFStartup)(ULONG, DWORD);
+static HRESULT (WINAPI *real_MFShutdown)(void);
 /* MFTEnumEx filters by kind, not only by format. ALL is every kind at once. */
 #ifndef MFT_ENUM_FLAG_ALL
 #define MFT_ENUM_FLAG_ALL 0x0000003F
@@ -1284,6 +1641,35 @@ static HRESULT WINAPI my_MFStartup(ULONG version, DWORD flags)
     logf_("MFStartup(version=0x%lx, flags=0x%lx) -> 0x%08lx  "
           "<< Media Foundation IS in play", version, flags, hr);
     return hr;
+}
+
+/* Say what the run actually did, once, on the way out.
+ *
+ * Every number here was being sampled instead of counted -- the first twelve
+ * ProcessOutput calls, the first frame -- so a log could end with the decoder
+ * apparently stalled when it had in fact been feeding frames for a minute.
+ * Media Foundation is shut down exactly once, which makes this the one place
+ * a total can be stated rather than guessed at. */
+static HRESULT WINAPI my_MFShutdown(void)
+{
+    logf_("MFShutdown -- the run in numbers:");
+    logf_("    ProcessInput      %ld call(s)", (long)input_calls);
+    logf_("      accepted        %ld", (long)in_ok);
+    if (in_not_accepting)
+        logf_("      not accepting   %ld", (long)in_not_accepting);
+    if (in_other)
+        logf_("      refused         %ld, last 0x%08lx", (long)in_other, in_last_other);
+    logf_("    ProcessOutput     %ld call(s)", (long)output_calls);
+    logf_("      frames out      %ld", (long)out_ok);
+    logf_("      needs more in   %ld", (long)out_need_more);
+    logf_("      stream change   %ld", (long)out_stream_change);
+    if (out_other)
+        logf_("      other failure   %ld, last 0x%08lx", (long)out_other, out_last_other);
+    if (!out_ok)
+        logf_("    not one frame came out: the decoder never produced");
+    else if (out_ok == 1)
+        logf_("    exactly one frame came out, and this time that is measured");
+    return real_MFShutdown ? real_MFShutdown() : S_OK;
 }
 
 /* Hand back the decoder this engine really has for the format asked about.
@@ -1572,6 +1958,7 @@ static FARPROC WINAPI my_GetProcAddress(HMODULE module, LPCSTR name)
         return (FARPROC)my_##fn;                                          \
     }
     SWAP(MFStartup)
+    SWAP(MFShutdown)
     SWAP(MFTEnumEx)
     SWAP(MFCreateSourceReaderFromByteStream)
     SWAP(MFCreateSourceReaderFromURL)
