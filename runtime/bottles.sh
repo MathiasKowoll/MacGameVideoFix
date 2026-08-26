@@ -27,14 +27,37 @@
 # beside the game, Wine kept preferring its own, and nothing said so.
 #
 # MGVF_BOTTLES adds a root explicitly, for anything neither of those finds.
+# Roots are ASKED FOR, not listed.
+#
+# A launcher that patches a copy of CrossOver declares where it keeps bottles in
+# that copy's etc/CrossOver.conf, so every engine on the machine is asked and
+# whatever it says is a root. Writing product names here meant the list went
+# stale the moment one was renamed -- which happened: the fork became RaccoonBot,
+# its support folder moved with it, and a hardcoded "Procyon/CXPBottles" knew
+# about neither. The engines knew all along.
+engine_bottle_roots() {
+  local a conf r
+  for a in /Applications/*.app "$HOME"/Applications/*.app; do
+    conf="$a/Contents/SharedSupport/CrossOver/etc/CrossOver.conf"
+    [ -f "$conf" ] || continue
+    r="$(grep -a '"CX_BOTTLE_PATH"' "$conf" 2>/dev/null | head -1 | cut -d'"' -f4)"
+    [ -n "$r" ] || continue
+    case "$r" in "~"*) r="$HOME${r#\~}" ;; esac
+    printf '%s\n' "$r"
+  done
+}
+
 bottle_roots() {
   local r seen=""
-  for r in \
-    "${MGVF_BOTTLES:-}" \
-    "$(defaults read com.codeweavers.CrossOver BottleDir 2>/dev/null || true)" \
-    "$HOME/Library/Application Support/CrossOver/Bottles" \
-    "$HOME/Library/Application Support/Procyon/CXPBottles"
-  do
+  # Read as lines, never word-split: every one of these paths contains
+  # "Application Support", and an unquoted $(...) turns each into three
+  # fragments that match no directory at all.
+  {
+    printf '%s\n' "${MGVF_BOTTLES:-}"
+    defaults read com.codeweavers.CrossOver BottleDir 2>/dev/null || true
+    printf '%s\n' "$HOME/Library/Application Support/CrossOver/Bottles"
+    engine_bottle_roots
+  } | while IFS= read -r r; do
     [ -n "$r" ] || continue
     r="${r%/}"
     [ -d "$r" ] || continue

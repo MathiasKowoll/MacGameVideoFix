@@ -157,9 +157,9 @@ if [ -n "$gst_minor" ]; then
     if [ "$eng_minor" = "$gst_minor" ]; then
       echo "            same series as $(basename "$eng_app" .app): 1.${gst_minor}"
     else
-      echo "            note: $(basename "$eng_app" .app) runs GStreamer 1.${eng_minor}," >&2
-      echo "            this framework is 1.${gst_minor}. Usually fine, occasionally" >&2
-      echo "            not; a framework matching 1.${eng_minor} is the closer fit." >&2
+      echo "            REFUSED: $(basename "$eng_app" .app) runs GStreamer 1.${eng_minor}," >&2
+      echo "            this framework is 1.${gst_minor}. Install a GStreamer 1.${eng_minor}" >&2
+      echo "            runtime and run this again." >&2
     fi
   done
 fi
@@ -186,6 +186,28 @@ stage_one() {
   # -- and a directory shared between two engines is the two-cores crash again.
   SLUG="$(printf '%s' "$(basename "$APP" .app)" | tr -c 'A-Za-z0-9._-' '-')"
   CX="$APP/Contents/SharedSupport/CrossOver"
+  # A staging built from a different GStreamer series does not register, and a
+  # plugin that does not register is worse than no plugin at all: the directory
+  # exists, the bottle points at it, the app reports it staged, and the decoder
+  # is simply absent. Measured, not feared -- the shared plugin registry on this
+  # machine came back from a rebuild with zero avdec_* entries under a 1.28
+  # engine, which is why a title that had been playing stopped after it changed
+  # codec and nothing anywhere said why.
+  #
+  # This used to be a note that said "usually fine". It is not.
+  eng_core="$CX/lib/$ARCH/libgstreamer-1.0.0.dylib"
+  [ -f "$eng_core" ] || eng_core="$CX/lib64/libgstreamer-1.0.0.dylib"
+  if [ -n "${gst_minor:-}" ] && [ -f "$eng_core" ]; then
+    eng_compat="$(otool -L "$eng_core" 2>/dev/null \
+                  | sed -n 's/.*compatibility version \([0-9]*\)\..*/\1/p' | head -1)"
+    if [ -n "$eng_compat" ] && [ "$((eng_compat / 100))" != "$gst_minor" ]; then
+      echo "  skipped   : $ENGINE ($VER) runs GStreamer 1.$((eng_compat / 100)), this framework is 1.${gst_minor}" >&2
+      echo "              A plugin from another series does not register. Install a" >&2
+      echo "              GStreamer 1.$((eng_compat / 100)) runtime and run this again." >&2
+      return 0
+    fi
+  fi
+
   SRC="$CX/lib/$ARCH"
   # lib64 is the old single-architecture layout, and it holds x86_64. Falling
   # back to it for aarch64 would fill an ARM directory with x86_64 libraries

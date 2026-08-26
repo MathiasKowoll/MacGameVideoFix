@@ -1023,17 +1023,40 @@ static HRESULT WINAPI my_MFTEnumEx(GUID category, UINT32 flags,
      * engine said on its own is still visible without one. This file reads no
      * environment at all, and a flag nobody sets is the dead lever this tree
      * spent today removing three of. */
-    if (count && *count == 0 && SUCCEEDED(hr)
-        && (flags & MFT_ENUM_FLAG_ALL) != MFT_ENUM_FLAG_ALL)
+    if (count && *count == 0 && SUCCEEDED(hr))
     {
+        /* Two filters, and the first attempt dropped the wrong one.
+         *
+         * MFTEnumEx narrows by KIND (flags: sync, async, hardware) and by
+         * FORMAT (the input type). Dropping the kind filter changed nothing
+         * here -- measured, 0x1 and 0x3f both answered zero -- because the
+         * format is what excludes everything: winegstreamer exposes no MFT
+         * claiming H.264 as input, even though the engine's own applemedia
+         * decodes it and NINJA GAIDEN 4 played video on this same engine
+         * through the source reader.
+         *
+         * So the format filter goes too, which is what NINJA GAIDEN 4 needed
+         * and what returned three decoders there. What comes back is real and
+         * activatable; whether it decodes THIS format is the open question, and
+         * the ActivateObject line below is what answers it. */
         UINT32 narrow = flags;
-        hr = real_MFTEnumEx(category, MFT_ENUM_FLAG_ALL, in, out, mfts, count);
-        logf_("  asked again without the kind filter (0x%lx -> 0x%lx): "
-              "%u decoder(s). %s", narrow, (unsigned long)MFT_ENUM_FLAG_ALL,
-              count ? *count : 0,
-              (count && *count > 0)
-                ? "The decoder was there; the question excluded it."
-                : "Still none, so the format really is not decodable here.");
+        if ((flags & MFT_ENUM_FLAG_ALL) != MFT_ENUM_FLAG_ALL)
+        {
+            hr = real_MFTEnumEx(category, MFT_ENUM_FLAG_ALL, in, out, mfts, count);
+            logf_("  asked again without the kind filter (0x%lx -> 0x%lx): %u",
+                  narrow, (unsigned long)MFT_ENUM_FLAG_ALL, count ? *count : 0);
+        }
+        if (*count == 0)
+        {
+            hr = real_MFTEnumEx(category, MFT_ENUM_FLAG_ALL, NULL, out, mfts, count);
+            logf_("  asked again without the format filter either: %u decoder(s). %s",
+                  count ? *count : 0,
+                  (count && *count > 0)
+                    ? "Watch for an ActivateObject line: if one follows, the game "
+                      "takes what it is handed and this is either the fix or a "
+                      "worse failure than the honest zero."
+                    : "This engine registers no video decoder MFT at all.");
+        }
     }
     /* Watch the promised decoder actually be created. */
     if (SUCCEEDED(hr) && mfts && *mfts && count && *count > 0)
