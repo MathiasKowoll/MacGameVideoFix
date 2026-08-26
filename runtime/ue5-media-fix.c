@@ -933,6 +933,11 @@ static HRESULT WINAPI my_ActivateObject(void *self, REFIID iid, void **out)
 }
 
 static HRESULT (WINAPI *real_MFStartup)(ULONG, DWORD);
+/* MFTEnumEx filters by kind, not only by format. ALL is every kind at once. */
+#ifndef MFT_ENUM_FLAG_ALL
+#define MFT_ENUM_FLAG_ALL 0x0000003F
+#endif
+
 static HRESULT (WINAPI *real_MFTEnumEx)(GUID, UINT32, const REG_TYPE_INFO *,
                                         const REG_TYPE_INFO *, void ***, UINT32 *);
 static HRESULT (WINAPI *real_MFCreateSourceReaderFromByteStream)(void *, void *, void **);
@@ -993,6 +998,43 @@ static HRESULT WINAPI my_MFTEnumEx(GUID category, UINT32 flags,
     logf_("MFTEnumEx flags=0x%lx -> 0x%08lx, %u decoder(s) offered",
           flags, hr, count ? *count : 0);
     if (in)  describe_subtype("wants to decode", &in->guidSubtype);
+
+    /* Asked narrowly, answered nothing -- so ask again without the narrowing.
+     *
+     * MFTEnumEx filters by KIND as well as by format: 0x1 is synchronous MFTs
+     * alone. A decoder registered as asynchronous, local or hardware-backed is
+     * simply not in that answer, and a game that asks for one kind and gets
+     * zero concludes the format cannot be decoded at all.
+     *
+     * Beast of Reincarnation is where this was measured. It moved from VP9 to
+     * H.264 in an update and started asking with flags=0x1, receiving zero --
+     * on an engine whose registry holds CMSH264DecoderMFT and whose GStreamer
+     * carries both applemedia and the staged libav. The decoder was there the
+     * whole time; the question excluded it.
+     *
+     * This differs from the answer NINJA GAIDEN 4 needs, and in the way that
+     * matters: what comes back here is the RIGHT decoder for the format asked
+     * about, so the game can go on to activate it and actually decode. Nothing
+     * is fabricated -- the retry is the same call with the kind filter dropped.
+     *
+     * No lever. It only widens, never narrows, and only when the narrow answer
+     * was already empty -- a state in which the title is broken anyway -- so
+     * there is nothing to turn off. The log prints both counts, so what the
+     * engine said on its own is still visible without one. This file reads no
+     * environment at all, and a flag nobody sets is the dead lever this tree
+     * spent today removing three of. */
+    if (count && *count == 0 && SUCCEEDED(hr)
+        && (flags & MFT_ENUM_FLAG_ALL) != MFT_ENUM_FLAG_ALL)
+    {
+        UINT32 narrow = flags;
+        hr = real_MFTEnumEx(category, MFT_ENUM_FLAG_ALL, in, out, mfts, count);
+        logf_("  asked again without the kind filter (0x%lx -> 0x%lx): "
+              "%u decoder(s). %s", narrow, (unsigned long)MFT_ENUM_FLAG_ALL,
+              count ? *count : 0,
+              (count && *count > 0)
+                ? "The decoder was there; the question excluded it."
+                : "Still none, so the format really is not decodable here.");
+    }
     /* Watch the promised decoder actually be created. */
     if (SUCCEEDED(hr) && mfts && *mfts && count && *count > 0)
     {
