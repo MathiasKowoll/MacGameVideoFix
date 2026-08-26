@@ -239,6 +239,13 @@ typedef struct
 static HRESULT (WINAPI *pMFCreateSample)(void **);
 static HRESULT (WINAPI *pMFCreate2DMediaBuffer)(DWORD, DWORD, DWORD, BOOL, void **);
 static UINT32 frame_w, frame_h;
+/* The height the picture actually is, as opposed to the height H.264 codes it
+ * at. SetOutputType is called twice here: first with 1920x1080, the real frame,
+ * then with 1920x1088, which is 1080 rounded up to the multiple of 16 the codec
+ * works in. The buffer is laid out for the coded height, and telling a consumer
+ * that a contiguous copy is 1088 rows long when its destination holds 1080 is
+ * 23040 bytes past the end. The first height seen is the honest one. */
+static UINT32 display_h;
 /* The swap is off.
  *
  * Removing Electra's buffer from its own sample crashed the game outright:
@@ -544,6 +551,7 @@ static ULONG WINAPI td_Release(void *self)
 
 static HRESULT WINAPI td_Lock2D(void *self, BYTE **scanline0, LONG *pitch)
 {
+    { static LONG once; if (InterlockedIncrement(&once) == 1) logf_("    Electra called td_Lock2D"); }
     struct two_d *td = (struct two_d *)self;
     HRESULT (WINAPI *lock)(void *, BYTE **, DWORD *, DWORD *) =
         (HRESULT (WINAPI *)(void *, BYTE **, DWORD *, DWORD *))(*(void ***)td->inner)[3];
@@ -559,6 +567,7 @@ static HRESULT WINAPI td_Lock2D(void *self, BYTE **scanline0, LONG *pitch)
 
 static HRESULT WINAPI td_Unlock2D(void *self)
 {
+    { static LONG once; if (InterlockedIncrement(&once) == 1) logf_("    Electra called td_Unlock2D"); }
     struct two_d *td = (struct two_d *)self;
     HRESULT (WINAPI *unlock)(void *) =
         (HRESULT (WINAPI *)(void *))(*(void ***)td->inner)[4];
@@ -568,6 +577,7 @@ static HRESULT WINAPI td_Unlock2D(void *self)
 
 static HRESULT WINAPI td_GetScanline0AndPitch(void *self, BYTE **scanline0, LONG *pitch)
 {
+    { static LONG once; if (InterlockedIncrement(&once) == 1) logf_("    Electra called td_GetScanline0AndPitch"); }
     struct two_d *td = (struct two_d *)self;
     if (!td->locked) return 0xC00D36B2L;  /* MF_E_INVALIDREQUEST */
     if (scanline0) *scanline0 = td->locked;
@@ -577,6 +587,7 @@ static HRESULT WINAPI td_GetScanline0AndPitch(void *self, BYTE **scanline0, LONG
 
 static HRESULT WINAPI td_IsContiguousFormat(void *self, BOOL *contiguous)
 {
+    { static LONG once; if (InterlockedIncrement(&once) == 1) logf_("    Electra called td_IsContiguousFormat"); }
     (void)self;
     if (contiguous) *contiguous = TRUE;
     return S_OK;
@@ -584,13 +595,16 @@ static HRESULT WINAPI td_IsContiguousFormat(void *self, BOOL *contiguous)
 
 static HRESULT WINAPI td_GetContiguousLength(void *self, DWORD *len)
 {
+    { static LONG once; if (InterlockedIncrement(&once) == 1) logf_("    Electra called td_GetContiguousLength"); }
     (void)self;
-    if (len) *len = frame_w * frame_h * 3 / 2;
+    /* Reported against the DISPLAY height, not the coded one. See display_h. */
+    if (len) *len = frame_w * (display_h ? display_h : frame_h) * 3 / 2;
     return S_OK;
 }
 
 static HRESULT WINAPI td_ContiguousCopyTo(void *self, BYTE *dest, DWORD size)
 {
+    { static LONG once; if (InterlockedIncrement(&once) == 1) logf_("    Electra called td_ContiguousCopyTo"); }
     BYTE *src = NULL;
     LONG pitch = 0;
     HRESULT hr = td_Lock2D(self, &src, &pitch);
@@ -602,6 +616,7 @@ static HRESULT WINAPI td_ContiguousCopyTo(void *self, BYTE *dest, DWORD size)
 
 static HRESULT WINAPI td_ContiguousCopyFrom(void *self, const BYTE *src, DWORD size)
 {
+    { static LONG once; if (InterlockedIncrement(&once) == 1) logf_("    Electra called td_ContiguousCopyFrom"); }
     BYTE *dst = NULL;
     LONG pitch = 0;
     HRESULT hr = td_Lock2D(self, &dst, &pitch);
@@ -647,9 +662,39 @@ static HRESULT WINAPI my_buffer_QueryInterface(void *self, const GUID *iid, void
             ((ULONG (WINAPI *)(void *))(*(void ***)self)[1])(self);   /* AddRef inner */
             *out = td;
             if (InterlockedIncrement(&said) == 1)
+            {
+                /* How big is the buffer REALLY?
+                 *
+                 * GetOutputStreamInfo said the caller allocates, so this memory
+                 * is Electra's and sized to Electra's idea of the frame. The
+                 * decoder negotiated 1920x1088 -- H.264 rounds height up to a
+                 * multiple of 16 -- while the video is 1080. If Electra
+                 * allocated for 1080 and the decoder fills 1088 rows, it writes
+                 * eight rows past the end, which is a crash rather than a bad
+                 * picture. IMFMediaBuffer::GetMaxLength is slot 4. */
+                /* IMFMediaBuffer: Lock 3, Unlock 4, GetCurrentLength 5,
+                 * SetCurrentLength 6, GetMaxLength 7. An earlier version of
+                 * this read slot 4 as GetMaxLength, which is Unlock -- so it
+                 * reported zero and, far worse, unlocked somebody else's buffer
+                 * in the middle of the handover. Measuring must not disturb. */
+                DWORD maxlen = 0, curlen = 0;
+                HRESULT (WINAPI *get_cur)(void *, DWORD *) =
+                    (HRESULT (WINAPI *)(void *, DWORD *))(*(void ***)self)[5];
+                HRESULT (WINAPI *get_max)(void *, DWORD *) =
+                    (HRESULT (WINAPI *)(void *, DWORD *))(*(void ***)self)[7];
+                get_cur(self, &curlen); get_max(self, &maxlen);
                 logf_("gave Electra an IMF2DBuffer over its own buffer "
                       "(%ux%u, pitch %u) -- nothing taken away this time",
                       frame_w, frame_h, frame_w);
+                logf_("  its buffer holds %lu bytes (current %lu); NV12 at "
+                      "%ux%u needs %lu, at %ux%u needs %lu  << %s",
+                      (unsigned long)maxlen, (unsigned long)curlen,
+                      frame_w, frame_h, (unsigned long)(frame_w * frame_h * 3 / 2),
+                      frame_w, 1080u, (unsigned long)(frame_w * 1080u * 3 / 2),
+                      (maxlen && maxlen < frame_w * frame_h * 3 / 2)
+                        ? "TOO SMALL for the height the decoder negotiated"
+                        : "big enough");
+            }
             return S_OK;
         }
     }
@@ -731,9 +776,31 @@ static BOOL poke(BYTE *at, const BYTE *expect, const BYTE *with, const char *wha
  *
  * The original RVAs stay as a comment, because they are what the distance was
  * measured from. */
-#define RVA_ISSW_GATE_ORIG   0x0634D8D7
-#define RVA_ISSW_EXTRA_ORIG  0x0634DAAA
-#define ISSW_SPAN            (RVA_ISSW_EXTRA_ORIG - RVA_ISSW_GATE_ORIG)  /* 0x1D3 */
+/* The two IsSoftware call sites, per build.
+ *
+ * HOW THESE WERE FOUND, because they move with every game update and the method
+ * matters more than the numbers:
+ *
+ *   1. Let it crash and read the game's own report in Saved/Crashes. The
+ *      PCallStack named +636cb43 among others.
+ *   2. Disassemble there. The instruction before it is `callq 0x14636b8b0` and
+ *      the one at it is `testb %al, %al` -- a function returning a bool, and a
+ *      caller branching on it.
+ *   3. Find every direct call to that same function followed by `testb %al,%al`.
+ *      There are exactly two, which is the number this fix has always needed.
+ *
+ * The old build called it indirectly through a vtable (`call [rax+0x28]`, three
+ * bytes); this one calls it directly (`e8 rel32`, five). Searching for the old
+ * byte pattern therefore found nothing that was it -- and a search by the
+ * DISTANCE between the old pair found a different pair entirely, which is what
+ * a distance gets you: it is not a name.
+ *
+ * Verification below is on the call target, not on the bytes: both sites must
+ * call the same address. That is what makes them the pair rather than two calls
+ * that happen to look alike. */
+#define RVA_ISSW_A     0x0636CB3E   /* callq IsSoftware ; testb al,al */
+#define RVA_ISSW_B     0x06370B44   /* the second site, which is not optional */
+#define RVA_ISSW_FUNC  0x0636B8B0   /* what both of them call */
 
 static BOOL text_range(BYTE *base, BYTE **start, SIZE_T *size)
 {
@@ -756,72 +823,60 @@ static BOOL text_range(BYTE *base, BYTE **start, SIZE_T *size)
     return FALSE;
 }
 
-static BOOL find_issw_pair(BYTE *base, BYTE **gate, BYTE **extra)
+/* Both sites must call the same function, or this is not the pair. */
+static BOOL issw_site_ok(BYTE *base, DWORD rva)
 {
-    BYTE *t; SIZE_T n, i;
-    int found = 0;
+    BYTE *at = base + rva;
+    LONG rel;
+    if (at[0] != 0xE8) return FALSE;
+    memcpy(&rel, at + 1, sizeof(rel));
+    if ((DWORD)((at + 5 + rel) - base) != RVA_ISSW_FUNC) return FALSE;
+    return at[5] == 0x84 && at[6] == 0xC0;      /* testb %al,%al */
+}
 
-    if (!text_range(base, &t, &n)) return FALSE;
-    if (n <= ISSW_SPAN + 3) return FALSE;
+/* call rel32 -> mov al,1 ; nop ; nop ; nop.  Same length, same meaning as the
+ * three-byte form the old build needed. */
+static const BYTE make_true5[5] = { 0xB0, 0x01, 0x90, 0x90, 0x90 };
 
-    for (i = 0; i + ISSW_SPAN + 3 <= n; i++)
-    {
-        if (memcmp(t + i, want_call, 3) != 0) continue;
-        if (memcmp(t + i + ISSW_SPAN, want_call, 3) != 0) continue;
-        if (++found > 1) { logf_("  the call pair is not unique in this build "
-                                 "(%d found) -- leaving it alone", found); return FALSE; }
-        *gate  = t + i;
-        *extra = t + i + ISSW_SPAN;
-    }
-    if (found == 1)
-        logf_("  found the call pair at RVA 0x%08lX / 0x%08lX%s",
-              (unsigned long)(*gate - base), (unsigned long)(*extra - base),
-              ((unsigned long)(*gate - base) == RVA_ISSW_GATE_ORIG)
-                ? " (the build these offsets were taken from)" : " (moved by an update)");
-    else
-        logf_("  the call pair is not in this build at all");
-    return found == 1;
+static BOOL poke5(BYTE *at, const char *what)
+{
+    DWORD old;
+    if (!VirtualProtect(at, 5, PAGE_EXECUTE_READWRITE, &old)) return FALSE;
+    memcpy(at, make_true5, 5);
+    VirtualProtect(at, 5, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), at, 5);
+    logf_("  %s: patched", what);
+    return TRUE;
 }
 
 static void force_electra_software(void)
 {
     BYTE *base = (BYTE *)GetModuleHandleA(NULL);
-    BYTE *gate = NULL, *extra = NULL;
     int done = 0;
     if (electra_sw_forced || !base) return;
     electra_sw_forced = TRUE;
 
     logf_("forcing Electra onto its software path");
-    if (!find_issw_pair(base, &gate, &extra)) return;
-
-    if (poke(extra, want_call, make_true, "IsSoftware (sw value)")) done++;
-    if (poke(gate,  want_call, make_true, "IsSoftware (outer gate)")) done++;
-
-    /* The console variable is a POINTER read from a fixed address and then
-     * written through. On the build those offsets came from that is safe; on
-     * any other it is a wild read followed by a wild write, which is a far
-     * worse thing to be wrong about than a missing video. So it happens only
-     * when the pair was found exactly where it used to be -- proof that this is
-     * that build. */
-    if ((unsigned long)(gate - base) == RVA_ISSW_GATE_ORIG)
+    if (!issw_site_ok(base, RVA_ISSW_A) || !issw_site_ok(base, RVA_ISSW_B))
     {
-        int *cvar = *(int **)(base + RVA_CVAR_PTR);
-        if (cvar)
-        {
-            cvar[0] = 1;
-            cvar[1] = 1;
-            logf_("  UseOldOutputPath console variable: set to 1");
-            done++;
-        }
-        else
-            logf_("  console variable not resolved yet");
+        logf_("  the two call sites are not what this build has -- doing nothing. "
+              "To find them again: crash it, read Saved/Crashes for the call "
+              "stack, disassemble there for a bool-returning call followed by "
+              "testb al,al, then find every direct call to that same function.");
+        return;
     }
-    else
-        logf_("  console variable skipped: its address is from another build, "
-              "and dereferencing it there would be a wild write");
 
-    if (!done)
-        logf_("nothing was patched");
+    if (poke5(base + RVA_ISSW_A, "IsSoftware (outer gate)")) done++;
+    if (poke5(base + RVA_ISSW_B, "IsSoftware (sw value)")) done++;
+
+    /* The console variable is a pointer read from a fixed address and written
+     * through -- a wild write on any build but the one it was read from, and
+     * that build is gone. Left alone until it is found the same way the calls
+     * were. */
+    logf_("  console variable left alone: its address is from a build that no "
+          "longer exists, and dereferencing it would be a wild write");
+
+    if (!done) logf_("nothing was patched");
 }
 
 static HRESULT WINAPI my_ProcessOutput(void *self, DWORD flags, DWORD count,
@@ -904,7 +959,15 @@ static HRESULT WINAPI my_ProcessOutput(void *self, DWORD flags, DWORD count,
     {
         LONG f = InterlockedIncrement(&frames_out);
         if (f == 1 || f == 10 || f == 100)
-            logf_("ProcessOutput: frame %ld decoded OK", f);
+            {
+                static LONG n;
+                LONG k = InterlockedIncrement(&n);
+                /* Every frame used to be silent after the first, so a run that
+                 * decoded one frame and a run that decoded a thousand left the
+                 * same log. Progress is the thing being measured here. */
+                if (k == 1 || k % 60 == 0)
+                    logf_("ProcessOutput: %ld frames decoded so far", (long)k);
+            }
     }
     else if (n == 1 || (n % 200) == 0)
     {
@@ -937,6 +1000,9 @@ static void capture_frame_size(void *type)
     {
         frame_w = (UINT32)(packed >> 32);
         frame_h = (UINT32)packed;
+        /* The first height offered is the picture; anything later is the codec
+         * rounding it up. Keep the smaller of the two. */
+        if (!display_h || frame_h < display_h) display_h = frame_h;
         logf_("  frame size %ux%u", frame_w, frame_h);
     }
 }
