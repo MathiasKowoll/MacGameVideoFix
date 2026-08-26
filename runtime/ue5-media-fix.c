@@ -1023,47 +1023,38 @@ static HRESULT WINAPI my_MFTEnumEx(GUID category, UINT32 flags,
      * engine said on its own is still visible without one. This file reads no
      * environment at all, and a flag nobody sets is the dead lever this tree
      * spent today removing three of. */
-    if (count && *count == 0 && SUCCEEDED(hr))
+    if (count && *count == 0 && SUCCEEDED(hr)
+        && (flags & MFT_ENUM_FLAG_ALL) != MFT_ENUM_FLAG_ALL)
     {
-        /* Two filters, and the first attempt dropped the wrong one.
+        /* Widen the KIND filter only, and never the format one.
          *
-         * MFTEnumEx narrows by KIND (flags: sync, async, hardware) and by
-         * FORMAT (the input type). Dropping the kind filter changed nothing
-         * here -- measured, 0x1 and 0x3f both answered zero -- because the
-         * format is what excludes everything: winegstreamer exposes no MFT
-         * claiming H.264 as input, even though the engine's own applemedia
-         * decodes it and NINJA GAIDEN 4 played video on this same engine
-         * through the source reader.
+         * MFTEnumEx narrows by kind (sync, async, hardware) and by format. This
+         * drops the kind filter, which is free: whatever comes back still
+         * claims the format the caller asked about.
          *
-         * So the format filter goes too, which is what NINJA GAIDEN 4 needed
-         * and what returned three decoders there. What comes back is real and
-         * activatable; whether it decodes THIS format is the open question, and
-         * the ActivateObject line below is what answers it. */
+         * Dropping the FORMAT filter as well was tried here and must not be:
+         * NINJA GAIDEN 4 gets away with it because that title only counts what
+         * it is handed and never activates it. Beast of Reincarnation does
+         * activate -- measured, IMFActivate::ActivateObject -> 0x00000000
+         * followed by our own output-type hooks arming -- and then dies inside
+         * a decoder that was never claiming to decode H.264. A crash reporter
+         * is a worse answer than a missing video, and both are worse than the
+         * engine's honest zero.
+         *
+         * So the zero stands, and it is a true statement about this engine:
+         * winegstreamer exposes no MFT claiming H.264 as input, even though its
+         * own applemedia decodes H.264 perfectly well through the source
+         * reader. What this title needs is that path, not this one. */
         UINT32 narrow = flags;
-        if ((flags & MFT_ENUM_FLAG_ALL) != MFT_ENUM_FLAG_ALL)
-        {
-            hr = real_MFTEnumEx(category, MFT_ENUM_FLAG_ALL, in, out, mfts, count);
-            logf_("  asked again without the kind filter (0x%lx -> 0x%lx): %u",
-                  narrow, (unsigned long)MFT_ENUM_FLAG_ALL, count ? *count : 0);
-        }
-        if (*count == 0)
-        {
-            hr = real_MFTEnumEx(category, MFT_ENUM_FLAG_ALL, NULL, out, mfts, count);
-            logf_("  asked again without the format filter either: %u decoder(s). %s",
-                  count ? *count : 0,
-                  (count && *count > 0)
-                    ? "Watch for an ActivateObject line: if one follows, the game "
-                      "takes what it is handed and this is either the fix or a "
-                      "worse failure than the honest zero."
-                    : "This engine registers no video decoder MFT at all.");
-        }
-    }
-    /* Watch the promised decoder actually be created. */
-    if (SUCCEEDED(hr) && mfts && *mfts && count && *count > 0)
-    {
-        static void *ao;
-        if (patch_slot("ActivateObject", (*mfts)[0], SLOT_ACTIVATE_OBJECT, (void *)my_ActivateObject, &ao))
-            real_ActivateObject = (HRESULT (WINAPI *)(void *, REFIID, void **))ao;
+        hr = real_MFTEnumEx(category, MFT_ENUM_FLAG_ALL, in, out, mfts, count);
+        logf_("  asked again without the kind filter (0x%lx -> 0x%lx): %u "
+              "decoder(s)%s", narrow, (unsigned long)MFT_ENUM_FLAG_ALL,
+              count ? *count : 0,
+              (count && *count == 0)
+                ? ". The format filter is what excludes everything, and dropping "
+                  "it hands this title a decoder for another format, which it "
+                  "activates and crashes on. Left alone deliberately."
+                : ".");
     }
     if (out) describe_subtype("wants out as  ", &out->guidSubtype);
     if (count && *count == 0)
