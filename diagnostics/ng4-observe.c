@@ -1077,6 +1077,11 @@ static HRESULT WINAPI my_MFTEnumEx(GUID category, UINT32 flags,
 {
     HRESULT hr = real_MFTEnumEx(category, flags, in, out, mfts, count);
 
+    /* The engine's own answer, captured before the substitution below can
+     * overwrite it. */
+    BOOL engine_answered_vp9 = SUCCEEDED(hr) && in && count && *count > 0
+                               && IsEqualGUID(&in->guidSubtype, &guid_VP90);
+
     if (answer_mft_gate && in && count && *count == 0
         && IsEqualGUID(&in->guidSubtype, &guid_VP90))
     {
@@ -1120,28 +1125,34 @@ static HRESULT WINAPI my_MFTEnumEx(GUID category, UINT32 flags,
     }
     logf_("MFTEnumEx flags=0x%lx -> 0x%08lx, %u decoder(s) offered",
           flags, hr, count ? *count : 0);
-    /* Whether this engine can decode without help.
+    /* Whether this engine can decode what the game actually asked for.
      *
      * This fix pushes decoding to software by refusing the game a D3D device
-     * manager, which was right while the engine registered no VP9 decoder at
-     * all -- the failure it was written for was "the VP9 codec is missing,
+     * manager, which is right while the engine registers no VP9 decoder at
+     * all -- the failure it was written for is "the VP9 codec is missing,
      * then it exits". An engine carrying winevideo's winegstreamer and its
      * VP9 registration answers that gate itself, and then the push is a
      * detour around a problem that is no longer there.
      *
-     * So the workaround stands down when the engine offers a decoder, and the
-     * old path stays for the engines that do not. Recorded rather than
-     * assumed: the log says which way it went, so a run on either engine
-     * explains itself.
+     * Read from the FIRST call, before the substitution above. That block is
+     * our own workaround: when the VP9 ask comes back empty we hand the game
+     * an H264 -- or any -- decoder list so its gate passes. Reading *count
+     * after that is reading our own answer back as if the engine had given
+     * it. It said "this engine offers a decoder" on engines that offer no
+     * VP9 decoder at all, stood the refusal down, and the game took the
+     * hardware path and died on its first video.
      *
-     * This reads a flag set here and used when the device manager is asked
-     * for, which is an ordering assumption. It holds for this title -- the
-     * enumeration is measured happening first, before MFCreateDXGIDeviceManager
-     * is even resolved -- and if it ever stopped holding the flag would still
-     * be FALSE and the old behaviour is what happens. Failing back to what
-     * shipped is the safe direction for an assumption to break in.
+     * Measured, not supposed: on stock 26.3 and on the fork the log printed
+     * "VP90 had no decoder; asked again for H264 and got 1" and then
+     * "ALLOWED after all" two lines later, and NINJA GAIDEN 4 died the same
+     * way on both. The fix shipped working on 25 Aug; this broke it on
+     * 26 Aug. The engine was never the variable -- the DLL was.
+     *
+     * So the gate stands down only when the game's own typed ask returned
+     * something. Anything else leaves the flag FALSE and what shipped is
+     * what happens.
      */
-    if (count && *count > 0)
+    if (engine_answered_vp9)
         engine_offers_decoder = TRUE;
     if (in)  describe_subtype("wants to decode", &in->guidSubtype);
     /* Watch the promised decoder actually be created. */
