@@ -328,7 +328,35 @@ size twice before drawing anything from it.
 
 ## Open, and not explained yet
 
-- **Devil May Cry 5 stopped working after the engine change, 2026-08-26.** It had
+- **Devil May Cry 5 and Beast of Reincarnation want different winegstreamers.**
+  Bisected the same night, one variable at a time, with winevideo's plugins
+  inside the engine for both runs:
+
+  | winegstreamer | Beast of Reincarnation | Devil May Cry 5 |
+  | --- | --- | --- |
+  | winevideo's | plays, 421 frames | crashes on the video |
+  | stock CrossOver 26.3 | stalls after a GOP | plays |
+
+  So the codecs are exonerated -- they were present either way -- and the
+  conflict is the binary. winevideo's `winegstreamer` carries some thirty-five
+  patches; Beast needs two of them (`0018`, `0019`, the queue time bounds) and
+  one of the others is enough to take DMC5 down.
+
+  That is an argument for porting the two patches rather than transplanting the
+  whole file, which was the shortcut taken because the Wine builds matched. It
+  also means an engine cannot currently serve both titles, and choosing per
+  title is the only thing that works today.
+
+  Two hypotheses were spent getting here and both were wrong, which is the part
+  worth keeping. The first was that the four things changed at once could not be
+  separated; they could, with one launch each. The second was the plugin
+  scanner: no CrossOver ships one -- the path compiled into the core is
+  `/opt/cxoffice/libexec/...`, which exists on no Mac, so every engine scans
+  plugins in-process and a plugin that faults on load takes the game with it.
+  True, measured, and not this: the scan completed and wrote a full registry,
+  and DMC5 crashed afterwards, on the video.
+
+- **What the engine change looked like before it was bisected, 2026-08-26.** It had
   played twice that evening: once on the 27-based engine with the codecs staged
   per bottle, and again with the same plugins placed inside that engine and the
   staging directory moved aside, which was the measurement that validated
