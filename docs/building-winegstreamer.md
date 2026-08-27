@@ -174,7 +174,8 @@ proved which one does the work. `0008` remains the candidate.
 | Devil May Cry 5 | codec only, no DLL of ours in the process | **plays** |
 | Persona 5 Strikers | source reader, libav, and our D3D9 bridge | **plays**, `has picture` to frame 180 |
 | NINJA GAIDEN 4 | VP9 -- `0002`, `0003` | **video plays**, then crashes; see below |
-| Nioh, Nioh 2 | same bridge and codec as Persona | not run |
+| Nioh 2 | same bridge and codec as Persona | **plays**, `has picture` to frame 360 |
+| Nioh | same again | not run -- it crashes on this engine before any video, older than this work |
 | Mortal Shell 2 | Electra with VPx cutscenes | not run |
 | NieR Replicant | WMV through the source reader | not run |
 | Both Life is Strange | node guard, not the media path | not run |
