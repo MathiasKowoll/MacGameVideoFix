@@ -2218,16 +2218,151 @@ static HRESULT WINAPI my_Direct3DCreate9Ex(UINT sdk, void **out)
     return hr;
 }
 
+/* Where the title actually dies, when it dies past our instrumentation.
+ *
+ * Nioh reaches the six D3D9 patches and then goes, without calling one of
+ * them -- so the bridge, which is the fix, never runs and the log ends at a
+ * patch line. Measured 27 Aug: the same last line whether the two levers are
+ * on or off, because neither fires this early.
+ *
+ * A log that stops is not a log that says nothing happened. This is the
+ * instrument that broke the same deadlock on NINJA GAIDEN 4 after three
+ * probes found nothing: catch the exception inside the process we are already
+ * in, rather than hunting for a crash report the launcher never writes.
+ *
+ * First-chance and non-intrusive -- it always continues the search, so it
+ * changes no behaviour and only writes what would have happened anyway. */
+static LONG CALLBACK note_exception(EXCEPTION_POINTERS *info)
+{
+    static LONG said;
+    DWORD code = info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionCode : 0;
+    void *at = info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionAddress : NULL;
+
+    /* 0xe06d7363 is a C++ throw, 0x406d1388 a thread-name notification, and
+     * both are ordinary traffic in a running game. */
+    if (code == 0xE06D7363 || code == 0x406D1388 || code == EXCEPTION_BREAKPOINT)
+        return EXCEPTION_CONTINUE_SEARCH;
+
+    /* OutputDebugString, which is the title talking.
+     *
+     * 0x40010006 and 0x4001000a are how OutputDebugStringA and W reach a
+     * debugger: not faults, but the message itself, carried in the exception
+     * record. The first version of this handler logged that an exception had
+     * happened and threw the text away -- which is how six of these sat in the
+     * log looking like noise while the game was saying, in words, what was
+     * wrong with it. Nioh's documented symptom is a message box reading
+     * "Failure to play movie. (RTM_ID_EV0001)"; if it says that, it says it
+     * here.
+     *
+     * Counted apart from the fault budget below: these are the interesting
+     * ones, and eight faults' worth of room is not enough for a title that
+     * narrates. */
+    if ((code == 0x40010006 || code == 0x4001000A)
+        && info->ExceptionRecord->NumberParameters >= 2
+        && info->ExceptionRecord->ExceptionInformation[1])
+    {
+        static LONG printed;
+        if (InterlockedIncrement(&printed) <= 120)
+        {
+            const void *p = (const void *)info->ExceptionRecord->ExceptionInformation[1];
+            char msg[512];
+            msg[0] = 0;
+            if (code == 0x40010006)
+            {
+                size_t n = 0;
+                const char *a = (const char *)p;
+                while (n < sizeof(msg) - 1 && a[n]) { msg[n] = a[n]; n++; }
+                msg[n] = 0;
+            }
+            else
+            {
+                const WCHAR *w = (const WCHAR *)p;
+                WideCharToMultiByte(CP_UTF8, 0, w, -1, msg, sizeof(msg) - 1, NULL, NULL);
+            }
+            /* Trim the trailing newline these usually carry. */
+            {
+                size_t n = strlen(msg);
+                while (n && (msg[n - 1] == '\n' || msg[n - 1] == '\r')) msg[--n] = 0;
+            }
+            if (msg[0]) logf_("game says: %s", msg);
+        }
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    if (InterlockedIncrement(&said) <= 8)
+    {
+        char mod[MAX_PATH] = "";
+        HMODULE h = NULL;
+        if (at && GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                                     | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                     (LPCSTR)at, &h) && h)
+        {
+            GetModuleFileNameA(h, mod, sizeof(mod) - 1);
+            logf_("EXCEPTION 0x%08lx at %p  in %s  (+0x%lx)", code, at,
+                  mod, (unsigned long)((BYTE *)at - (BYTE *)h));
+        }
+        else
+            logf_("EXCEPTION 0x%08lx at %p  in no known module", code, at);
+
+        if (code == EXCEPTION_ACCESS_VIOLATION && info->ExceptionRecord->NumberParameters >= 2)
+            logf_("    access violation %s address %p",
+                  info->ExceptionRecord->ExceptionInformation[0] ? "writing" : "reading",
+                  (void *)info->ExceptionRecord->ExceptionInformation[1]);
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 static DWORD WINAPI worker(LPVOID unused)
 {
     (void)unused;
+    AddVectoredExceptionHandler(1, note_exception);
+    /* The two levers, from the environment or from a file beside the bottle.
+     *
+     * Nioh, Nioh 2 and Persona 5 Strikers all need these on, and they used to
+     * arrive only as environment variables -- which works when a person exports
+     * them in a terminal and quietly does not when a launcher owns the
+     * environment. Measured 27 Aug on RaccoonBot: set in its per-game "Env
+     * variables" field, the process still started with both off, and the only
+     * way to see that was this function's own "armed:" line.
+     *
+     * So the file is the reliable half and the variables stay for the terminal
+     * case. C:\\mgvf-p5s.txt holds keywords, one line or many: nv12, refuse.
+     * Absent file and unset variables, both stay off -- which is what ships, so
+     * this cannot change behaviour for anyone who does not ask for it. */
     {
         char v[8] = {0};
+        char buf[257];
+        DWORD got = 0;
+        HANDLE f;
+
         if (GetEnvironmentVariableA("BEAST_REFUSE_D3D_MANAGER", v, sizeof(v)) && v[0] == '1')
             refuse_d3d_manager = TRUE;
         v[0] = 0;
         if (GetEnvironmentVariableA("BEAST_FORCE_NV12", v, sizeof(v)) && v[0] == '1')
             restore_nv12 = TRUE;
+
+        f = CreateFileA("C:\\mgvf-p5s.txt", GENERIC_READ, FILE_SHARE_READ,
+                        NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (f != INVALID_HANDLE_VALUE)
+        {
+            if (ReadFile(f, buf, sizeof(buf) - 1, &got, NULL) && got) buf[got] = 0;
+            else buf[0] = 0;
+            CloseHandle(f);
+            if (strstr(buf, "refuse")) refuse_d3d_manager = TRUE;
+            if (strstr(buf, "nv12"))   restore_nv12 = TRUE;
+            /* The off switches, which have to be able to beat the environment.
+             *
+             * A launcher can set these variables and be unable to unset them --
+             * measured on RaccoonBot, where clearing its per-game "Env
+             * variables" field left both still arriving, three launches
+             * running. Without a way to say no, the only configuration that
+             * ever reached this title's cutscene was unreachable. Checked
+             * after the on switches so "norefuse" wins over both the variable
+             * and a stray "refuse" in the same file. */
+            if (strstr(buf, "norefuse")) refuse_d3d_manager = FALSE;
+            if (strstr(buf, "nonv12"))   restore_nv12 = FALSE;
+            logf_("switches from C:\\mgvf-p5s.txt read");
+        }
     }
     /* Hook the import table as well as GetProcAddress.
      *
