@@ -478,28 +478,39 @@ size twice before drawing anything from it.
   idea, and the variable's presence in the binary makes it look like it should
   work.
 
-## Where NINJA GAIDEN 4 stands, for whoever picks it up next
+## Where NINJA GAIDEN 4 stands, and it is two concrete gaps
 
-Reported at the end of the night and not yet investigated: **the title works on
-the complete winevideo engine.** It does not work on the fork's engine with only
-`winegstreamer` replaced -- neither with winevideo's transplanted binary nor
-with the four-patch build, and not with our own DLL removed either.
+The title works on the complete winevideo engine and not on the fork's with only
+`winegstreamer` replaced -- not with winevideo's transplanted binary, not with
+the four-patch build, and not with our own DLL removed. Reading winevideo's own
+page for the title turned that from a mystery into a list.
 
-That narrows it usefully. What the complete winevideo has and a
-winegstreamer-only engine does not:
+**Its documented fix is patches 0002 through 0004.** We built with 0002 and 0003
+and left out **`0004-mfplat-fall-back-to-BGRA-when-D3D11-device-can-t-cre`**,
+which their page describes as falling back to BGRA when the D3D11 device cannot
+allocate the requested video texture format. Their root-cause note names exactly
+that as a second failure mode beside the missing decoder: *"A negotiated video
+texture can also fail when the D3D11 device cannot create the requested format."*
 
-    lib/wine/x86_64-windows/   d3d9.dll  mfplat.dll  ntdll.dll
-                               qasf.dll  quartz.dll  winevideo_compat.dll
-    its own bottle, prepared by its patcher
+**And the bottle is missing its byte-stream registration.** Their page says the
+prepared bottle receives the VP9 MFT *and* `.webm`, `.mkv` and `.msd`
+byte-stream registration. Ours has the MFT -- four mentions in system.reg -- and
+**zero** of the three extensions. The file this title opens is
+`Assets/Movies/88f75716-....msd`.
 
-`0004-mfplat-fall-back-to-BGRA-when-D3D11-device-can-t-cre`
-and `0005-quartz-don-t-autoplug-a-fallback-video-renderer-past` are the two whose
-titles point at a video path rather than at another game, so they are where to
-look first. The way to test one is the way everything else here was tested:
-build with it added, run the title, and run Devil May Cry 5 afterwards to see
-what it cost.
+That fits what was measured and could not be explained: the reader is created,
+returns success, and is then never read from. A byte-stream handler is what lets
+Media Foundation open a container by extension at all.
 
-Established already and not worth re-deriving: our DLL is not involved -- the
-crash happens with the game back to its own dstorage.dll and nothing of ours
-loaded -- and the reader the title opens is never read from while the picture
-still appears, so whatever draws it does not pass through any hook that DLL sets.
+Both gaps are cheap to close, and the second needs nothing new:
+`diagnostics/registry/webm-bytestream-handler.reg` in this repository already
+maps an extension to the GStreamer byte-stream handler, and
+`apply-webm-handler.sh` applies it. It was written months ago to answer a
+different question about DYNASTY WARRIORS.
+
+Order for tomorrow, one change at a time as everything else tonight was done:
+
+1. Apply the byte-stream mapping for `.msd` to the bottle, and run the title.
+2. If that is not enough, rebuild with `0004` added and run it again.
+3. Then run Devil May Cry 5, because that is the title that says what a new
+   patch cost.
