@@ -36,10 +36,27 @@ both were already on the machine and the second was never needed.
 | llvm-mingw (PE i386 and x86_64) | present |
 | macOS SDK | 26.5 |
 
-So there is no need for `crossover-sources-26.2.0.tar.gz` and no need for the
-GStreamer development framework. Headers and libraries can both come from things
-already here, at one version, which is better than the mixture the first draft
-assumed.
+`crossover-sources-26.2.0.tar.gz` is genuinely not needed: the tree here is the
+right Wine and the patches land on it.
+
+**The GStreamer development framework is needed after all**, and this note said
+otherwise for a while. Headers being present in the source tree is not the same
+as being able to build against it: `gstconfig.h` and `glibconfig.h` are
+*generated* at configure time and do not exist here, and there are no `.pc`
+files, which is what Wine's `WINE_PACKAGE_FLAGS(GSTREAMER, ...)` looks for.
+
+Two ways out, and the first is better:
+
+- **Download the GStreamer 1.24.x development framework.** Headers and `.pc`
+  files, ready. It is what winevideo's own documented build uses, which removes
+  a class of doubt about whether ours was generated the same way.
+- Configure glib and gstreamer with meson in the source tree to generate them.
+  meson 1.12 and ninja 1.13 are installed, so it is possible -- but it means
+  building two projects to obtain headers, and what comes out may not match what
+  the engine ships.
+
+Either way the libraries to link against should be the engine's own `lib64`, at
+1.24.4, rather than the 1.24.13 framework.
 
 ### Do the patches apply to this tree?
 
