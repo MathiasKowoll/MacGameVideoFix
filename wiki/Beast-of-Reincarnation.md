@@ -54,6 +54,22 @@ The same DLL, the same game build, four engines:
 The three that fail differ in the exact counts and not in the shape: a GOP goes
 in, one or two pictures come out, the rest stay inside, and the video ends.
 
+Which engine you have can be answered without launching anything, because the
+difference is four strings in one binary:
+
+```
+diagnostics/check-engine-media.py
+
+  engine                        queue bounds  demux bound   Electra
+  CrossOver.app                 ABSENT        ABSENT        stalls after a GOP
+  CrossOver Preview.app         ABSENT        ABSENT        stalls after a GOP
+  Crossover_patched.app         ABSENT        ABSENT        stalls after a GOP
+  CrossOver-winevideo-0.5.app   set           set           plays
+```
+
+That is also how to check a port rather than trust it: whoever carries 0018 and
+0019 into another engine can ask the built binary whether they arrived.
+
 **winevideo dissolves it.** In its bottle the same build plays the cutscene
 whole: 475 frames, one every 16.7 ms of wall clock, ending on its own. Its
 patches `0018-winegstreamer-remove-compressed-queue-time-bound` and
