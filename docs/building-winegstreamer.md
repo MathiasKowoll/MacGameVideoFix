@@ -166,19 +166,30 @@ And `--patches` order is the `series` order, not ours to choose: these four were
 taken because they touch the paths an Electra title uses, not because anyone
 proved which one does the work. `0008` remains the candidate.
 
-## Still to test
+## The regression pass
 
-Two titles of nineteen are verified. The engine change touches every title that
-decodes through it, so the rest is a regression pass, in this order:
+| title | path it exercises | result |
+| --- | --- | --- |
+| Beast of Reincarnation | Electra through the MFT -- `0006`, `0008` | **plays**, 240+ frames at 60 fps |
+| Devil May Cry 5 | codec only, no DLL of ours in the process | **plays** |
+| Persona 5 Strikers | source reader, libav, and our D3D9 bridge | **plays**, `has picture` to frame 180 |
+| NINJA GAIDEN 4 | VP9 -- `0002`, `0003` | **video plays**, then crashes; see below |
+| Nioh, Nioh 2 | same bridge and codec as Persona | not run |
+| Mortal Shell 2 | Electra with VPx cutscenes | not run |
+| NieR Replicant | WMV through the source reader | not run |
+| Both Life is Strange | node guard, not the media path | not run |
 
-1. **NINJA GAIDEN 4** -- VP9, which `0002` and `0003` directly change.
-2. **Persona 5 Strikers**, **Nioh**, **Nioh 2** -- source reader and libav, plus
-   the D3D9 bridge our own DLLs provide.
-3. **Mortal Shell 2** -- Electra with VPx cutscenes, the path `0006` and `0008`
-   change.
-4. **NieR Replicant** -- WMV through the source reader.
-5. **Both Life is Strange** -- least likely affected; their fix is the node
-   guard, not the media path.
+**NINJA GAIDEN 4 is not a regression.** It opens its `.msd` container, is offered
+a VP9 decoder, binds a device and plays the video -- which validates `0002` and
+`0003`, the two patches no other title here exercises -- and then the process
+dies with no crash report and no further log. It behaved identically two hours
+earlier, with winevideo's transplanted binary and before anything was compiled
+here, and identically again with the stock one. Of the three runs recorded in its
+log, this is the only one that reached the video at all.
 
-A title that regresses names the patch to drop: the script takes patch numbers,
-so isolating one is a rebuild and a launch.
+So it is an open defect of that title on that engine, older than this work, and
+it is the one place where these four patches made a title get *further* without
+making it finish.
+
+A title that does regress names the patch to drop: the script takes patch
+numbers, so isolating one is a rebuild and a launch.
