@@ -353,6 +353,9 @@ static LONG out_ok, out_need_more, out_stream_change, out_other;
  * which is what ships, so this cannot change behaviour for anyone who does not
  * create it. */
 static BOOL opt_cvar = TRUE, opt_issw = TRUE, opt_2d = TRUE;
+/* Diagnostic, off unless asked for by name: paint the frame a colour
+ * nothing in this game is, and see whether it reaches the screen. */
+static BOOL opt_magenta = FALSE;
 
 static void read_switches(void)
 {
@@ -367,9 +370,13 @@ static void read_switches(void)
     if (strstr(buf, "nocvar"))  opt_cvar  = FALSE;
     if (strstr(buf, "noissw"))  opt_issw  = FALSE;
     if (strstr(buf, "no2d"))    opt_2d    = FALSE;
+    if (strstr(buf, "magenta")) opt_magenta = TRUE;
     logf_("switches from C:\\mgvf-electra.txt -- console variable %s, "
           "IsSoftware %s, 2D buffer %s",
           opt_cvar ? "on" : "OFF", opt_issw ? "on" : "OFF", opt_2d ? "on" : "OFF");
+    if (opt_magenta)
+        logf_("  MAGENTA IS ON: every frame is painted over. This is a test of "
+              "whether anything we write reaches the screen, not a fix.");
 }
 static HRESULT out_last_other;
 /* What ProcessInput answered, for the same reason as the output tallies: a
@@ -673,6 +680,91 @@ static ULONG WINAPI td_Release(void *self)
     return n;
 }
 
+/* Is the chroma interleaved, or in two planes?
+ *
+ * This fix relabels the YV12 the engine offers as NV12, on the reading that
+ * the censorship is only in the getter and the decoder really can produce
+ * NV12. If that reading is wrong -- if what arrives is YV12 bytes under an
+ * NV12 label -- then every picture is wrong and no amount of pacing would
+ * help. The two formats are the same size and differ only in the layout of
+ * the chroma half, so the bytes themselves can be asked.
+ *
+ * NV12 interleaves U and V, so a byte and its neighbour are DIFFERENT
+ * components and tend to differ, while a byte and the one two along are the
+ * same component and adjacent in space, so they tend to match. YV12 keeps the
+ * components in separate planes, so neighbours are the same component and
+ * closer than two-apart. The comparison is d1 against d2 and it needs no
+ * reference picture.
+ *
+ * It says nothing about a flat frame -- black chroma is 128 everywhere in both
+ * layouts -- so flatness is reported rather than papered over.
+ *
+ * Measured on the caller's own pointer, inside the lock Electra asked for.
+ * Taking a lock of our own here to look at somebody else's buffer is how this
+ * file once unlocked a buffer mid-handover. */
+static void chroma_layout(const BYTE *base, DWORD len)
+{
+    SIZE_T luma = (SIZE_T)frame_w * frame_h;
+    const BYTE *c = base + luma;
+    SIZE_T rows = 8, r, i, n = 0;
+    double d1 = 0, d2 = 0;
+    BYTE lo = 255, hi = 0;
+
+    if (!frame_w || !frame_h || len < luma + (SIZE_T)frame_w * 4) return;
+
+    /* Eight rows from the middle of the chroma half, away from the edges. */
+    for (r = 0; r < rows; r++)
+    {
+        SIZE_T off = (SIZE_T)frame_w * ((frame_h / 4) + r);
+        if (luma + off + frame_w + 2 > len) break;
+        for (i = 0; i + 2 < frame_w; i++)
+        {
+            BYTE a = c[off + i], b = c[off + i + 1], e = c[off + i + 2];
+            d1 += (a > b) ? (a - b) : (b - a);
+            d2 += (a > e) ? (a - e) : (e - a);
+            if (a < lo) lo = a;
+            if (a > hi) hi = a;
+            n++;
+        }
+    }
+    if (!n) return;
+    d1 /= (double)n;
+    d2 /= (double)n;
+
+    /* Chroma at zero is not a dark picture. Neutral chroma is 128; zero is
+     * saturated green, and a whole plane of it means nobody wrote there. So
+     * before reading anything into the layout, say what is actually in the
+     * buffer: how far the written part reaches, and what each half holds. */
+    {
+        SIZE_T last = 0, k;
+        BYTE ylo = 255, yhi = 0;
+        for (k = 0; k < luma && k < len; k += 97)      /* a coarse sweep is enough */
+        {
+            if (base[k] < ylo) ylo = base[k];
+            if (base[k] > yhi) yhi = base[k];
+        }
+        for (k = (len < luma + (SIZE_T)frame_w * frame_h / 2
+                  ? len : luma + (SIZE_T)frame_w * frame_h / 2); k > 0; k--)
+            if (base[k - 1]) { last = k; break; }
+        logf_("  buffer: %lu bytes, luma %u..%u, chroma %u..%u, last non-zero "
+              "byte at %lu (luma ends at %lu)",
+              (unsigned long)len, ylo, yhi, lo, hi,
+              (unsigned long)last, (unsigned long)luma);
+    }
+
+    if (hi - lo < 4)
+        logf_("  chroma is flat (%u..%u): %s", lo, hi,
+              (hi == 0) ? "ZERO, not neutral 128 -- nothing wrote the chroma"
+                        : "a black or near-black frame says nothing about its layout");
+    else
+        logf_("  chroma layout: neighbour diff %.2f, two-apart diff %.2f "
+              "(range %u..%u)  << %s", d1, d2, lo, hi,
+              (d1 > d2 * 1.2) ? "INTERLEAVED -- this really is NV12"
+                              : (d2 > d1 * 1.2)
+                                ? "PLANAR -- these are YV12 bytes under an NV12 label"
+                                : "inconclusive, the two are too close");
+}
+
 static HRESULT WINAPI td_Lock2D(void *self, BYTE **scanline0, LONG *pitch)
 {
     { static LONG once; if (InterlockedIncrement(&once) == 1) logf_("    Electra called td_Lock2D"); }
@@ -686,6 +778,39 @@ static HRESULT WINAPI td_Lock2D(void *self, BYTE **scanline0, LONG *pitch)
     td->locked = data;
     if (scanline0) *scanline0 = data;
     if (pitch) *pitch = (LONG)frame_w;
+    {
+        static LONG looked;
+        if (InterlockedIncrement(&looked) <= 3) chroma_layout(data, max ? max : cur);
+    }
+
+    /* Paint it magenta, if asked.
+     *
+     * The buffer handed back reads as 4 MB of zeroes while the sample claims
+     * three million bytes of picture, and those two cannot both be true of the
+     * same memory. Either the decoder is not filling what we are looking at,
+     * or what we are looking at is not what gets displayed. Writing a colour
+     * nothing in this game is separates them in one launch: magenta on screen
+     * means this memory is the picture and the decoder left it empty; no
+     * magenta means we have been reading the wrong buffer all along.
+     *
+     * NV12: luma 105, chroma alternating U=212, V=234. */
+    if (opt_magenta && data && frame_w && frame_h)
+    {
+        SIZE_T luma = (SIZE_T)frame_w * frame_h;
+        SIZE_T have = max ? max : cur, i;
+        if (have >= luma + luma / 2)
+        {
+            FillMemory(data, luma, 105);
+            for (i = 0; i < luma / 2; i += 2)
+            {
+                data[luma + i]     = 212;
+                data[luma + i + 1] = 234;
+            }
+            { static LONG said; if (InterlockedIncrement(&said) == 1)
+                logf_("  painted %ux%u magenta over whatever was there",
+                      frame_w, frame_h); }
+        }
+    }
     return S_OK;
 }
 
