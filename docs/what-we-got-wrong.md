@@ -423,3 +423,21 @@ size twice before drawing anything from it.
   the title and stock does not, on five engines -- and check-engine-media.py,
   which still separates them correctly because those strings do distinguish the
   builds. Only the explanation of *why* was invented.
+
+- **WINEDLLPATH does not redirect a builtin, tried 2026-08-26.** The idea was
+  good and would have solved the conflict cleanly: leave the engine stock, keep
+  winevideo's `winegstreamer` pair in a directory outside it, and let each game
+  raise the one it needs through the per-launch environment the launcher already
+  sets. The variable is honoured by that engine's `wine` and `ntdll.so` -- seven
+  and two occurrences -- so it looked reachable.
+
+  It is not. Beast loaded the stock builtin anyway: its log shows `YV12` offered
+  and our relabel engaging, which is the stock signature. WINEDLLPATH is from
+  when builtins were loose `.so` files; a modern builtin is a PE paired with a
+  unixlib, both resolved from the engine's own directory.
+
+  So per-title selection is possible at the granularity of the **engine**, not
+  the DLL -- two engine copies, chosen at launch, which is something the
+  launcher already does. Recorded because the next person will have the same
+  idea, and the variable's presence in the binary makes it look like it should
+  work.
