@@ -176,7 +176,7 @@ proved which one does the work. `0008` remains the candidate.
 | NINJA GAIDEN 4 | VP9 -- `0002`, `0003` | **video plays**, then crashes; see below |
 | Nioh 2 | same bridge and codec as Persona | **plays**, `has picture` to frame 360 |
 | Nioh | same again | not run -- it crashes on this engine before any video, older than this work |
-| Mortal Shell 2 | Electra with VPx cutscenes | not run |
+| Mortal Shell 2 | **not** the MFT path, as expected -- it takes the VPx route our own DLL patches | **plays**; `VPx version checks: 4 found, 4 patched` |
 | NieR Replicant | WMV through the source reader | not run |
 | Both Life is Strange | node guard, not the media path | not run |
 
