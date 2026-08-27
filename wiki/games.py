@@ -443,6 +443,19 @@ def gptk(cx, title=None):
     version of this function counted fifteen such rows as tested on both.
 
     Titles where both toolkits were tried deliberately are in GPTK_OVERRIDE.
+
+    **The toolkit is not the engine, and this column reads as if it were.**
+    That inference holds only for a stock CrossOver, where the two arrive
+    together: 26.3 ships D3DMetal 3.0 and Preview 27 ships 4.0b2. A launcher
+    that carries both toolkits and injects one at launch -- RaccoonBot ships
+    d3dMetal3 and d3dMetal4 side by side -- breaks it, and then reading "needs
+    4.0b2" as "needs Preview" is simply wrong. It was read that way once, to
+    conclude that dropping Preview would cost the two Life is Strange titles.
+    It would not: they need the toolkit, which the launcher can supply on 26.3.
+
+    process-features.json keeps them apart, which is what a launcher able to
+    choose actually needs: `gptk` says which generation a title was measured
+    on, `needs_engine` says when an engine itself is required.
     """
     if title in GPTK_BY_TITLE:
         return GPTK_BY_TITLE[title]
