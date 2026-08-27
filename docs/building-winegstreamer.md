@@ -177,8 +177,8 @@ proved which one does the work. `0008` remains the candidate.
 | Nioh 2 | same bridge and codec as Persona | **plays**, `has picture` to frame 360 |
 | Nioh | same again | not run -- it crashes on this engine before any video, older than this work |
 | Mortal Shell 2 | **not** the MFT path, as expected -- it takes the VPx route our own DLL patches | **plays**; `VPx version checks: 4 found, 4 patched` |
-| NieR Replicant | WMV through the source reader | not run |
-| Both Life is Strange | node guard, not the media path | not run |
+| NieR Replicant | WMV through the source reader | **plays**, 300 samples, 200 frames blitted, luma 14..238 |
+| Both Life is Strange | node guard, not the media path | not run -- least exposed of the nineteen |
 
 **NINJA GAIDEN 4 is not a regression.** It opens its `.msd` container, is offered
 a VP9 decoder, binds a device and plays the video -- which validates `0002` and
