@@ -1,16 +1,23 @@
 REGEDIT4
 
-; Tell Media Foundation that a .webm can be opened, by mapping it to the
-; GStreamer byte-stream handler that CrossOver already registers as a COM
+; Tell Media Foundation that these containers can be opened, by mapping them to
+; the GStreamer byte-stream handler that CrossOver already registers as a COM
 ; server ("Generic Decodebin Byte Stream Handler").
 ;
-; This is the whole of what winevideo contributes to DYNASTY WARRIORS: ORIGINS
-; on CrossOver Preview. Preview already ships the pieces that do the work --
-; libgstmatroska for the container and libgstapplemedia, whose VideoToolbox
-; path decodes VP9 in hardware -- but without this mapping Media Foundation
-; refuses to open the file at all, so the decoder never gets a chance.
+; Without a mapping, Media Foundation will not open the file by extension at
+; all -- and the failure is quiet: a source reader is created, returns success,
+; and is then never read from. That is exactly what NINJA GAIDEN 4 was measured
+; doing on 2026-08-27 while its .msd went unmapped.
 ;
-; .mkv and .msd are the other two winevideo adds; only .webm matters here.
+; .webm was the original entry, for DYNASTY WARRIORS: ORIGINS on Preview.
+; .mkv and .msd were added after reading winevideo's own page for NINJA GAIDEN 4,
+; which says its prepared bottle receives all three.
 
 [HKEY_LOCAL_MACHINE\Software\Microsoft\Windows Media Foundation\ByteStreamHandlers\.webm]
+"{317df618-5e5a-468a-9f15-d827a9a08162}"="GStreamer Byte Stream Handler"
+
+[HKEY_LOCAL_MACHINE\Software\Microsoft\Windows Media Foundation\ByteStreamHandlers\.mkv]
+"{317df618-5e5a-468a-9f15-d827a9a08162}"="GStreamer Byte Stream Handler"
+
+[HKEY_LOCAL_MACHINE\Software\Microsoft\Windows Media Foundation\ByteStreamHandlers\.msd]
 "{317df618-5e5a-468a-9f15-d827a9a08162}"="GStreamer Byte Stream Handler"

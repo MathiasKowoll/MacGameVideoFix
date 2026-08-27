@@ -508,9 +508,24 @@ maps an extension to the GStreamer byte-stream handler, and
 `apply-webm-handler.sh` applies it. It was written months ago to answer a
 different question about DYNASTY WARRIORS.
 
+**The mapping was tried and was not enough.** `.webm`, `.mkv` and `.msd` added to
+the bottle, the title run with no DLL of ours in it, and it crashed the same way.
+Recorded as done rather than pending. One caveat on that run: with our fix
+uninstalled nothing logged, so it says the crash survives the mapping and does
+not say whether the mapping was used.
+
+**And `0004` is not a winegstreamer patch.** It touches `dlls/mfplat/sample.c`,
+one hunk. So testing it means building and replacing **mfplat.dll** as well --
+the second of the five binaries deliberately left alone, and a new binary in the
+engine rather than another patch in one already verified. `scripts/build-winegstreamer.sh`
+builds `dlls/winegstreamer/all` only; it would need a second target.
+
 Order for tomorrow, one change at a time as everything else tonight was done:
 
-1. Apply the byte-stream mapping for `.msd` to the bottle, and run the title.
-2. If that is not enough, rebuild with `0004` added and run it again.
-3. Then run Devil May Cry 5, because that is the title that says what a new
-   patch cost.
+1. Build `dlls/mfplat/all` with `0004` applied, install it beside the
+   winegstreamer pair, and run the title.
+2. Run Devil May Cry 5 straight after, because it is the title that says what a
+   new binary cost -- and mfplat sits on far more paths than winegstreamer does.
+3. If NG4 still crashes, the remaining difference is d3d9, qasf, quartz, ntdll,
+   winevideo_compat, or the bottle their patcher prepares. At that point
+   measuring which is worth more than adding them all.
