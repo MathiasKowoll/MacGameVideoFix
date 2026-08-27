@@ -180,7 +180,7 @@ proved which one does the work. `0008` remains the candidate.
 | NieR Replicant | WMV through the source reader | **plays**, 300 samples, 200 frames blitted, luma 14..238 |
 | DYNASTY WARRIORS: ORIGINS | matroska plus the D3D11-to-D3D12 bridge | **plays**, NV12 at 2560x1440, 300 samples |
 | Wo Long: Fallen Dynasty | the D3D bridge -- its samples are asked for `IMFDXGIBuffer` | **plays**, luma 15..171 to frame 120 |
-| Both Life is Strange | node guard, not the media path | not run -- least exposed of the nineteen |
+| Both Life is Strange | node guard, not the media path | both **start** on the rebuilt engine, but neither has our fix installed, so this tests the engine and not our work. Their fix answers a freeze that appears after a while of play, which a short launch does not exercise either way |
 
 **NINJA GAIDEN 4 is not a regression.** It opens its `.msd` container, is offered
 a VP9 decoder, binds a device and plays the video -- which validates `0002` and
