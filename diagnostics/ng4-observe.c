@@ -989,19 +989,13 @@ static HRESULT WINAPI my_TestDevice(void *self, HANDLE h)
     return hr;
 }
 
+/* Whether this engine registers a VP9 decoder of its own. Recorded, and
+ * deliberately not acted on -- see the note where it is set. */
 static BOOL engine_offers_decoder = FALSE;
 
 static HRESULT WINAPI my_MFCreateDXGIDeviceManager(UINT *token, void **manager)
 {
-    if (refuse_d3d_manager && engine_offers_decoder)
-    {
-        static LONG said;
-        if (InterlockedIncrement(&said) == 1)
-            logf_("MFCreateDXGIDeviceManager -- ALLOWED after all: this engine "
-                  "offered a decoder, so there is nothing to push around and "
-                  "the refusal would be the detour");
-    }
-    else if (refuse_d3d_manager)
+    if (refuse_d3d_manager)
     {
         logf_("MFCreateDXGIDeviceManager -- REFUSED, so decoding has to go to "
               "software; the frame then arrives in system memory");
@@ -1125,35 +1119,34 @@ static HRESULT WINAPI my_MFTEnumEx(GUID category, UINT32 flags,
     }
     logf_("MFTEnumEx flags=0x%lx -> 0x%08lx, %u decoder(s) offered",
           flags, hr, count ? *count : 0);
-    /* Whether this engine can decode what the game actually asked for.
+    /* Whether this engine registers a VP9 decoder -- measured, not obeyed.
      *
      * This fix pushes decoding to software by refusing the game a D3D device
-     * manager, which is right while the engine registers no VP9 decoder at
-     * all -- the failure it was written for is "the VP9 codec is missing,
-     * then it exits". An engine carrying winevideo's winegstreamer and its
-     * VP9 registration answers that gate itself, and then the push is a
-     * detour around a problem that is no longer there.
+     * manager. 5f781eb stood that down when the engine offers a decoder of its
+     * own, reasoning that an engine which can decode VP9 needs no push. Both
+     * halves of that were wrong, and each was wrong in its own way:
      *
-     * Read from the FIRST call, before the substitution above. That block is
-     * our own workaround: when the VP9 ask comes back empty we hand the game
-     * an H264 -- or any -- decoder list so its gate passes. Reading *count
-     * after that is reading our own answer back as if the engine had given
-     * it. It said "this engine offers a decoder" on engines that offer no
-     * VP9 decoder at all, stood the refusal down, and the game took the
-     * hardware path and died on its first video.
+     *   - It read *count after the substitution block below had run. That
+     *     block is the workaround -- when the VP9 ask comes back empty we hand
+     *     the game an H264 list so its gate passes -- so the count was ours.
+     *     Fixed by capturing the game's typed ask first.
+     *   - The idea itself does not hold. Measured 27 Aug on an engine that
+     *     does register VP9 (winevideo's vpx plugin under our winegstreamer):
+     *     the enumeration answers 1 on the first ask, the stand-down fires
+     *     exactly as designed, and the title dies on its first video anyway --
+     *     six access violations, the same ones it dies with everywhere else.
+     *     On stock 26.3, where the ask returns 0 and the refusal stands, the
+     *     videos play through to the menu.
      *
-     * Measured, not supposed: on stock 26.3 and on the fork the log printed
-     * "VP90 had no decoder; asked again for H264 and got 1" and then
-     * "ALLOWED after all" two lines later, and NINJA GAIDEN 4 died the same
-     * way on both. The fix shipped working on 25 Aug; this broke it on
-     * 26 Aug. The engine was never the variable -- the DLL was.
-     *
-     * So the gate stands down only when the game's own typed ask returned
-     * something. Anything else leaves the flag FALSE and what shipped is
-     * what happens.
+     * So a decoder existing does not make the hardware path work here. What
+     * the title needs is the software path, on every engine, which is what
+     * shipped on 25 Aug. The flag stays because the log is more legible for
+     * having it -- it says which kind of engine this is -- and nothing reads
+     * it.
      */
     if (engine_answered_vp9)
         engine_offers_decoder = TRUE;
+    (void)engine_offers_decoder;
     if (in)  describe_subtype("wants to decode", &in->guidSubtype);
     /* Watch the promised decoder actually be created. */
     if (SUCCEEDED(hr) && mfts && *mfts && count && *count > 0)
