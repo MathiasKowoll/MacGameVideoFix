@@ -1286,6 +1286,28 @@ static HRESULT WINAPI my_MFCreateSourceReaderFromURL(LPCWSTR url, void *attrs, v
     HRESULT hr = real_MFCreateSourceReaderFromURL(url, attrs, reader);
     logf_("MFCreateSourceReaderFromURL(%ls) -> 0x%08lx", url ? url : L"(null)", hr);
 
+    /* Watch this reader too.
+     *
+     * The three slots below were patched only on the byte-stream path, and this
+     * title takes the URL one: its reader was created, succeeded, and then
+     * nothing was ever logged again. That read as the game dying immediately
+     * after -- it is where our own view ended. The reader is the same interface
+     * either way, so the same three slots apply. */
+    if (SUCCEEDED(hr) && reader && *reader && !real_ReadSample)
+    {
+        static void *gn, *sc, *rs;
+        patch_slot("GetNativeMediaType",  *reader, SLOT_GET_NATIVE_TYPE,
+                   (void *)my_GetNativeMediaType,  &gn);
+        patch_slot("SetCurrentMediaType", *reader, SLOT_SET_CURRENT_TYPE,
+                   (void *)my_SetCurrentMediaType, &sc);
+        patch_slot("ReadSample",          *reader, SLOT_READ_SAMPLE,
+                   (void *)my_ReadSample,          &rs);
+        real_GetNativeMediaType  = (HRESULT (WINAPI *)(void *, DWORD, DWORD, void **))gn;
+        real_SetCurrentMediaType = (HRESULT (WINAPI *)(void *, DWORD, DWORD *, void *))sc;
+        real_ReadSample = (HRESULT (WINAPI *)(void *, DWORD, DWORD, DWORD *, DWORD *,
+                                              LONGLONG *, void **))rs;
+    }
+
     if (FAILED(hr) && url && reader
         && real_MFCreateFile && real_MFCreateSourceReaderFromByteStream)
     {

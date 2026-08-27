@@ -378,6 +378,28 @@ size twice before drawing anything from it.
   back separates the transplant from the engine change, at the cost of Beast
   stalling again while the test runs.
 
+- **NINJA GAIDEN 4: the trail ended where our own view did.** Its log stopped
+  immediately after `MFCreateSourceReaderFromURL` returned, and that was read
+  as the game dying there. It was not. The three reader hooks --
+  `GetNativeMediaType`, `SetCurrentMediaType`, `ReadSample` -- were patched
+  only in `MFCreateSourceReaderFromByteStream`, and this title creates its
+  reader from a URL. Nothing after that point was ever going to be logged.
+
+  Hooked on both paths since. What the runs then showed is worth keeping: the
+  reader is created, all three slots are patched, and **not one of them is ever
+  called** -- no native type asked for, none set, no sample read. The process
+  dies between creating the reader and using it, with 33 lines written against
+  a cap of 300, so nothing was truncated.
+
+  And it is not deterministic. One run reached the video and played it; the next
+  died before touching it. A media fault behaves the same way every time. This
+  looks more like a race or a resource that is sometimes there.
+
+  Third time tonight that an absence in a log was read as evidence, after the
+  frame counter that could only reach three and the ProcessInput failures logged
+  on call 1 and every 200th. The rule keeps earning its place: an absence is
+  only evidence if the thing that writes it was running.
+
 - **NINJA GAIDEN 4 on the same engine.** Its enumeration reported a VP9 decoder
   for the first time -- the gate its fix exists to answer -- so the fix now
   stands its workaround down when the engine offers one. Run since, and the
