@@ -178,6 +178,7 @@ proved which one does the work. `0008` remains the candidate.
 | Nioh | same again | not run -- it crashes on this engine before any video, older than this work |
 | Mortal Shell 2 | **not** the MFT path, as expected -- it takes the VPx route our own DLL patches | **plays**; `VPx version checks: 4 found, 4 patched` |
 | NieR Replicant | WMV through the source reader | **plays**, 300 samples, 200 frames blitted, luma 14..238 |
+| DYNASTY WARRIORS: ORIGINS | matroska plus the D3D11-to-D3D12 bridge | **plays**, NV12 at 2560x1440, 300 samples |
 | Wo Long: Fallen Dynasty | the D3D bridge -- its samples are asked for `IMFDXGIBuffer` | **plays**, luma 15..171 to frame 120 |
 | Both Life is Strange | node guard, not the media path | not run -- least exposed of the nineteen |
 
@@ -192,6 +193,11 @@ log, this is the only one that reached the video at all.
 So it is an open defect of that title on that engine, older than this work, and
 it is the one place where these four patches made a title get *further* without
 making it finish.
+
+Three of those titles -- DYNASTY WARRIORS, NieR and Wo Long -- write into one
+log, because their carriers are built from one source. Read the process tag, not
+the filename: a count taken while the file was still growing credited all of
+NieR's frames to DYNASTY WARRIORS.
 
 A title that does regress names the patch to drop: the script takes patch
 numbers, so isolating one is a rebuild and a launch.
