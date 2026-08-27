@@ -359,6 +359,10 @@ size twice before drawing anything from it.
       MFCreateDXGIDeviceManager -> 0x00000000
       IMFDXGIDeviceManager::ResetDevice(device=...) -> 0x00000000   << a device is bound
 
-  and the intro video played, which it had not on that engine before. The title
-  still ends in a crash afterwards; that is being left alone for now and is not
-  what this entry is about.
+  and the intro video played, which it had not on that engine before.
+
+  The run then ended in a crash dialog, and that crash was **not the title's**:
+  another session killed the launcher while the game was running. It was minutes
+  from being investigated as a defect of NINJA GAIDEN 4. Two people driving one
+  machine is a measurement hazard of its own, and the cost is not the killed run
+  -- it is the hours that would have gone into explaining it.
