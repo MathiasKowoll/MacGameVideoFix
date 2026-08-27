@@ -1059,9 +1059,6 @@ static HRESULT WINAPI my_buffer_QueryInterface(void *self, const GUID *iid, void
  * A game update moves them, and then this must do nothing rather than corrupt
  * something. */
 
-#define RVA_CVAR_PTR      0x0AA29110   /* TConsoleVariableData<int32> ** */
-#define RVA_ISSW_EXTRA    0x0634DAAA   /* call *0x28 feeding the "sw" value */
-#define RVA_ISSW_GATE     0x0634D8D7   /* call *0x28 feeding the outer gate  */
 
 static BOOL electra_sw_forced;
 

@@ -667,60 +667,9 @@ static HRESULT WINAPI my_buffer_QueryInterface(void *self, const GUID *iid, void
  * A game update moves them, and then this must do nothing rather than corrupt
  * something. */
 
-#define RVA_CVAR_PTR      0x0AA29110   /* TConsoleVariableData<int32> ** */
-#define RVA_ISSW_EXTRA    0x0634DAAA   /* call *0x28 feeding the "sw" value */
-#define RVA_ISSW_GATE     0x0634D8D7   /* call *0x28 feeding the outer gate  */
 
 static BOOL electra_sw_forced;
 
-/* mov al,1 ; nop  -- returns true and leaves the following code untouched. */
-static const BYTE want_call[3] = { 0xFF, 0x50, 0x28 };
-static const BYTE make_true[3] = { 0xB0, 0x01, 0x90 };
-
-static BOOL poke(BYTE *at, const BYTE *expect, const BYTE *with, const char *what)
-{
-    DWORD old;
-    if (memcmp(at, expect, 3) != 0)
-    {
-        logf_("  %s: bytes are %02X %02X %02X, expected %02X %02X %02X -- this is "
-              "a different build, leaving it alone", what,
-              at[0], at[1], at[2], expect[0], expect[1], expect[2]);
-        return FALSE;
-    }
-    if (!VirtualProtect(at, 3, PAGE_EXECUTE_READWRITE, &old)) return FALSE;
-    memcpy(at, with, 3);
-    VirtualProtect(at, 3, old, &old);
-    FlushInstructionCache(GetCurrentProcess(), at, 3);
-    logf_("  %s: patched", what);
-    return TRUE;
-}
-
-static void force_electra_software(void)
-{
-    BYTE *base = (BYTE *)GetModuleHandleA(NULL);
-    int done = 0;
-    if (electra_sw_forced || !base) return;
-    electra_sw_forced = TRUE;
-
-    logf_("forcing Electra onto its software path");
-    if (poke(base + RVA_ISSW_EXTRA, want_call, make_true, "IsSoftware (sw value)")) done++;
-    if (poke(base + RVA_ISSW_GATE,  want_call, make_true, "IsSoftware (outer gate)")) done++;
-
-    {
-        int *cvar = *(int **)(base + RVA_CVAR_PTR);
-        if (cvar)
-        {
-            cvar[0] = 1;
-            cvar[1] = 1;
-            logf_("  UseOldOutputPath console variable: set to 1");
-            done++;
-        }
-        else
-            logf_("  console variable not resolved yet");
-    }
-    if (!done)
-        logf_("nothing was patched -- this build does not match the offsets");
-}
 
 static HRESULT WINAPI my_ProcessOutput(void *self, DWORD flags, DWORD count,
                                        void *samples, DWORD *status)
