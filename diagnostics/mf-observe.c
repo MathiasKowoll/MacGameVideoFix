@@ -1107,6 +1107,20 @@ static FARPROC WINAPI my_GetProcAddress(HMODULE module, LPCSTR name)
     SWAP(MFCreateDXGIDeviceManager)
 #undef SWAP
 
+    /* Name every Media Foundation entry the title resolves, hooked or not.
+     *
+     * RESONANCE opens its LOGO.mp4 itself and calls MFStartup, and then the log
+     * went quiet: no enumeration, no reader, no sample. Five swapped entries is
+     * a guess about which door a game uses, and this one uses a different one.
+     * Listing what it asks for costs one line each and turns "we saw nothing"
+     * into "it asked for these six things", which is a different sentence. */
+    if ((name[0] == 'M' || name[0] == 'm') && (name[1] == 'F' || name[1] == 'f'))
+    {
+        static LONG named;
+        if (InterlockedIncrement(&named) <= 40)
+            logf_("  asks for: %s (not hooked)", name);
+    }
+
     /* Name every media entry point the game asks for, resolved or not. The
      * list of what it looks for is itself evidence about which player it uses. */
     if (name[0] == 'M' && name[1] == 'F')
@@ -2344,9 +2358,25 @@ static HANDLE WINAPI my_CreateFileW(LPCWSTR name, DWORD access, DWORD share, voi
      * else, and it answers the one question the file counter cannot: whether
      * the title got as far as its first cutscene before it stopped. */
     {
-        size_t n = lstrlenA(last_file);
-        if (n > 4 && !lstrcmpiA(last_file + n - 4, ".bk2"))
-            logf_("  opens video: %s", last_file);
+        /* Any container a title might hand to a player, not just the one the
+         * last game used. Written for .bk2 while chasing METAL GEAR SOLID 4 and
+         * then carried, unchanged, to a title whose videos are .mp4 -- so the
+         * log said no video was ever opened while two of them sat in
+         * VIDEOS/NTSC waiting to be read. A list that only covers the last
+         * game is a blind spot with a good alibi. */
+        static const char *const exts[] =
+            { ".bk2", ".bik", ".mp4", ".m4v", ".mov", ".webm", ".mkv", ".usm",
+              ".wmv", ".avi", ".asf", ".msd", ".ogv" };
+        size_t n = lstrlenA(last_file), i;
+        for (i = 0; i < sizeof(exts) / sizeof(exts[0]); i++)
+        {
+            size_t e = lstrlenA(exts[i]);
+            if (n > e && !lstrcmpiA(last_file + n - e, exts[i]))
+            {
+                logf_("  opens video: %s", last_file);
+                break;
+            }
+        }
     }
     {
         HANDLE h;
@@ -2544,6 +2574,31 @@ static DWORD WINAPI watchdog(LPVOID unused)
             seen_files = files_opened;
             lstrcpynA(seen_file, last_file, MAX_PATH);
             lstrcpynA(seen_lib, last_lib, MAX_PATH);
+        }
+        /* Which media libraries are actually in the process.
+         *
+         * Hooking LoadLibrary only sees what the executable itself asks for.
+         * COM loads its in-proc servers through LoadLibraryExW called from
+         * ole32's own import table, not ours, and RESONANCE's log therefore
+         * said no media library was ever loaded while it was reading two MP4s.
+         * Asking whether a module is present answers that without caring how
+         * it got there. */
+        {
+            static const char *const media[] = {
+                "mfplat.dll", "mfreadwrite.dll", "mf.dll", "mfmediaengine.dll",
+                "winegstreamer.dll", "quartz.dll", "msdmo.dll", "dxva2.dll",
+                "evr.dll", "mfsrcsnk.dll", "mfmp4srcsnk.dll", "d3d11.dll", "d3d12.dll"
+            };
+            static LONG modules_present;
+            unsigned m;
+            for (m = 0; m < sizeof(media) / sizeof(media[0]); m++)
+            {
+                if (!(modules_present & (1 << m)) && GetModuleHandleA(media[m]))
+                {
+                    modules_present |= (1 << m);
+                    logf_("  now loaded: %s", media[m]);
+                }
+            }
         }
         if (ticks > 240) return 0;
     }
