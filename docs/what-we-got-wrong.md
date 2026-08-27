@@ -556,40 +556,38 @@ What survives untouched is every measurement: winevideo's binary plays the title
 and stock does not, and ours plays it and keeps Devil May Cry 5 alive. Only the
 shortcut for predicting that was invented.
 
-## NINJA GAIDEN 4 dies in ntdll, and we can name the instruction
+## NINJA GAIDEN 4 dies in ntdll -- withdrawn, 2026-08-27
 
-Found by giving up on other people's logging. The launcher sets
-`WINEDEBUG=-all`, which silences Wine's own crash output, so the fix DLL was
-given a vectored exception handler instead -- it is already inside the process,
-and it sees every exception before anything else does.
+The section that stood here named `RtlVirtualUnwind2` at `ntdll+0x38d55` as where
+NINJA GAIDEN 4 died, and shipped as commit f84b5da. It was wrong twice over, and it
+had already written down the thing that would have refuted it.
 
-    EXCEPTION 0xc0000005 at 00006FFFFFF78D55  in C:\windows\system32\ntdll.dll (+0x38d55)
-        access violation writing address 0x0000000000000000
+It ended: *"It does not yet fit the report that it works on a stock CrossOver: 26.3
+carries the same ntdll as the fork. Either that run was on Preview, or something else
+keeps the path from being reached. That is the one question left before this is a
+finding rather than a strong lead."*
 
-Disassembled at that offset, inside **`RtlVirtualUnwind2`**:
+The question was worth asking and the answer was neither branch. **The title did not
+work on stock 26.3 either.** Run there the next morning with the same DLL and the
+same game files, it died at the same address with the same six access violations. The
+report we were reasoning from had never been measured in this session, and the whole
+frame it supported -- that the fork broke something 26.3 does not -- was resting on it.
 
-    170038d4d:  movq 0xe0(%rsp), %rax     ; an optional out-pointer from the stack
-    170038d55:  movq $0x0, (%rax)         ; written through, unchecked
+The exceptions were a symptom, not the cause. With the real defect fixed the count
+went from six per launch to **zero**, on the same ntdll, same engine, same
+instruction. It was still there; nothing reached it. The instruction was named
+correctly and blamed wrongly.
 
-So a caller passes NULL for an optional output parameter during exception
-unwinding -- ordinary in a running game -- and Wine's implementation writes to
-it. The title does not die in its own code, nor in ours, nor in winegstreamer.
+Two habits this cost, both of which are written elsewhere in this file:
 
-The same byte pattern across the engines here:
+- **An unverified premise inherited across a context boundary is not a measurement.**
+  "It works on stock" arrived as background and was never once run. It steered a
+  night of engine bisection -- gptk3 against gptk4, d3d12, MoltenVK, two bottles --
+  and every one of those came back negative, which should itself have been the tell.
+- **When a symptom is identical in every configuration, suspect the component that
+  is in every configuration.** Ours was. The cause travelled inside our own DLL, so
+  it followed us to each engine we moved it to and looked like a property of all of
+  them.
 
-| engine | ntdll | that instruction |
-| --- | --- | --- |
-| CrossOver 26.3 | `9ca9870f039f` | present |
-| the fork's | `9ca9870f039f` -- byte-identical | present |
-| CrossOver Preview 27 | `89b839533701` | absent |
-| winevideo 0.5 | `938c5fc80bf7` | absent |
-
-Which fits the title working on winevideo and failing on the fork. It does not
-yet fit the report that it works on a stock CrossOver: 26.3 carries the same
-ntdll as the fork. Either that run was on Preview, or something else keeps the
-path from being reached. That is the one question left before this is a
-finding rather than a strong lead.
-
-Worth noting what it cost to see: three probes that showed nothing, two of which
-were blind spots of our own making, and the answer came from stopping the search
-for a log and catching the exception in the process we were already inside.
+What actually broke it is in f5f7cf2: the fix stood its own workaround down after
+reading the workaround's output back as the engine's answer.
