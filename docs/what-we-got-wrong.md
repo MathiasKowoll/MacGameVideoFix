@@ -477,3 +477,29 @@ size twice before drawing anything from it.
   launcher already does. Recorded because the next person will have the same
   idea, and the variable's presence in the binary makes it look like it should
   work.
+
+## Where NINJA GAIDEN 4 stands, for whoever picks it up next
+
+Reported at the end of the night and not yet investigated: **the title works on
+the complete winevideo engine.** It does not work on the fork's engine with only
+`winegstreamer` replaced -- neither with winevideo's transplanted binary nor
+with the four-patch build, and not with our own DLL removed either.
+
+That narrows it usefully. What the complete winevideo has and a
+winegstreamer-only engine does not:
+
+    lib/wine/x86_64-windows/   d3d9.dll  mfplat.dll  ntdll.dll
+                               qasf.dll  quartz.dll  winevideo_compat.dll
+    its own bottle, prepared by its patcher
+
+`0004-mfplat-fall-back-to-BGRA-when-D3D11-device-can-t-cre`
+and `0005-quartz-don-t-autoplug-a-fallback-video-renderer-past` are the two whose
+titles point at a video path rather than at another game, so they are where to
+look first. The way to test one is the way everything else here was tested:
+build with it added, run the title, and run Devil May Cry 5 afterwards to see
+what it cost.
+
+Established already and not worth re-deriving: our DLL is not involved -- the
+crash happens with the game back to its own dstorage.dll and nothing of ours
+loaded -- and the reader the title opens is never read from while the picture
+still appears, so whatever draws it does not pass through any hook that DLL sets.
