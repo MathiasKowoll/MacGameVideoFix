@@ -988,9 +988,19 @@ static HRESULT WINAPI my_TestDevice(void *self, HANDLE h)
     return hr;
 }
 
+static BOOL engine_offers_decoder = FALSE;
+
 static HRESULT WINAPI my_MFCreateDXGIDeviceManager(UINT *token, void **manager)
 {
-    if (refuse_d3d_manager)
+    if (refuse_d3d_manager && engine_offers_decoder)
+    {
+        static LONG said;
+        if (InterlockedIncrement(&said) == 1)
+            logf_("MFCreateDXGIDeviceManager -- ALLOWED after all: this engine "
+                  "offered a decoder, so there is nothing to push around and "
+                  "the refusal would be the detour");
+    }
+    else if (refuse_d3d_manager)
     {
         logf_("MFCreateDXGIDeviceManager -- REFUSED, so decoding has to go to "
               "software; the frame then arrives in system memory");
@@ -1109,6 +1119,29 @@ static HRESULT WINAPI my_MFTEnumEx(GUID category, UINT32 flags,
     }
     logf_("MFTEnumEx flags=0x%lx -> 0x%08lx, %u decoder(s) offered",
           flags, hr, count ? *count : 0);
+    /* Whether this engine can decode without help.
+     *
+     * This fix pushes decoding to software by refusing the game a D3D device
+     * manager, which was right while the engine registered no VP9 decoder at
+     * all -- the failure it was written for was "the VP9 codec is missing,
+     * then it exits". An engine carrying winevideo's winegstreamer and its
+     * VP9 registration answers that gate itself, and then the push is a
+     * detour around a problem that is no longer there.
+     *
+     * So the workaround stands down when the engine offers a decoder, and the
+     * old path stays for the engines that do not. Recorded rather than
+     * assumed: the log says which way it went, so a run on either engine
+     * explains itself.
+     *
+     * This reads a flag set here and used when the device manager is asked
+     * for, which is an ordering assumption. It holds for this title -- the
+     * enumeration is measured happening first, before MFCreateDXGIDeviceManager
+     * is even resolved -- and if it ever stopped holding the flag would still
+     * be FALSE and the old behaviour is what happens. Failing back to what
+     * shipped is the safe direction for an assumption to break in.
+     */
+    if (count && *count > 0)
+        engine_offers_decoder = TRUE;
     if (in)  describe_subtype("wants to decode", &in->guidSubtype);
     /* Watch the promised decoder actually be created. */
     if (SUCCEEDED(hr) && mfts && *mfts && count && *count > 0)

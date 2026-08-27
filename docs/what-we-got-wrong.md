@@ -325,3 +325,32 @@ size twice before drawing anything from it.
 - **Editing a generated page instead of its generator.** `wiki/games.py` writes
   the games table into several pages; editing the pages means the next run puts
   the withdrawn claim back.
+
+## Open, and not explained yet
+
+- **Devil May Cry 5 stopped working after the engine change, 2026-08-26.** It had
+  played twice that evening: once on the 27-based engine with the codecs staged
+  per bottle, and again with the same plugins placed inside that engine and the
+  staging directory moved aside, which was the measurement that validated
+  placement at all. After the engine was rebased on CrossOver 26.3 and
+  winevideo's `winegstreamer` pair was transplanted into it, it stopped.
+
+  Four things changed between the run that worked and the run that did not: the
+  engine's base, the transplanted `winegstreamer`, the plugin set (winevideo's
+  builds rather than ours), and the removal of `GST_PLUGIN_PATH` from the bottle.
+  Nothing here separates them, so nothing here says which.
+
+  The title leaves no trace to read: it carries no DLL of ours, so there is no
+  log, and it writes no crash report of the kind Unreal titles do. What is known
+  is only what the plugin cache says, which is that the engine's own plugins are
+  the ones registered and `avdec_vc1` and `avdec_wmv3` are among them.
+
+  The cheap bisect, when someone picks this up: the stock `winegstreamer.so` and
+  `.dll` were kept beside the transplanted ones as `.stock`. Putting those two
+  back separates the transplant from the engine change, at the cost of Beast
+  stalling again while the test runs.
+
+- **NINJA GAIDEN 4 crashed on the same engine**, after the enumeration reported a
+  VP9 decoder for the first time -- which is the gate its fix exists to answer.
+  The fix now stands its workaround down when the engine offers a decoder; that
+  change is written and installed and has not been run yet.
