@@ -23,30 +23,37 @@ stand.
 
 ## What is here, measured
 
+Everything, as it turns out. The plan first said two downloads were missing;
+both were already on the machine and the second was never needed.
+
 | | |
 | --- | --- |
+| CrossOver sources | present, `/Users/mathias/Development/sources` — **Wine 11.0**, which is what the engine reports (`wine-11.0-8726-g2e2f5fca349`) |
+| `dlls/winegstreamer` | present, with `wg_transform.c`, `video_decoder.c`, `mfplat.c` |
+| GStreamer sources | present in the same tree, **1.24.4** — the engine's own core version, measured |
+| GStreamer headers | present there: `gst.h`, `video.h`, `audio.h`, `tag.h`, `pbutils.h` |
+| GStreamer libraries to link against | in the engine's `lib64`, also 1.24.4 — an exact match rather than the 1.24.13 framework |
 | llvm-mingw (PE i386 and x86_64) | present |
 | macOS SDK | 26.5 |
-| FFmpeg libraries | libavcodec 62.28.101 |
-| GStreamer 1.24.13 runtime framework | present, in `/Library/Frameworks` |
-| GStreamer **development** headers | **missing** -- the runtime package does not carry them |
-| `crossover-sources-26.2.0.tar.gz` | **missing** |
-| winevideo's 35 patches and their `series` | present, in the patcher app |
-| winevideo's own build scripts | **not shipped** -- its README names them; the app does not carry them |
 
-So two downloads and the rest is here.
+So there is no need for `crossover-sources-26.2.0.tar.gz` and no need for the
+GStreamer development framework. Headers and libraries can both come from things
+already here, at one version, which is better than the mixture the first draft
+assumed.
 
-## The two missing inputs
+### Do the patches apply to this tree?
 
-- **CrossOver sources.** CodeWeavers publishes them; Wine is LGPL and they have
-  to. winevideo pins `crossover-sources-26.2.0.tar.gz`, SHA-256
-  `3846ae094dd49c073467bb2b5e6e17d5bacaebcfab4b6dd2af3f132c64cad6cf`, and builds
-  26.2 as the primary target while accepting 26.3 when the inventory matches.
-  Building against the same version they did removes one variable from an
-  already long list.
-- **The GStreamer development framework**, 1.24.13 to match the runtime already
-  installed. From gstreamer.freedesktop.org, the devel package rather than the
-  runtime one.
+winevideo builds against 26.2 and this is 26.3, so they were expected not to.
+Measured, they mostly do:
+
+    0002   3 hunks   applies cleanly
+    0006   4 hunks   applies cleanly
+    0003   5 hunks   fails strict, applies with fuzz, no hunk lost
+    0008   4 hunks   fails strict, applies with fuzz, no hunk lost
+
+All four land. The two that need fuzz have shifted context and their hunks
+should be read after applying rather than trusted -- fuzz means the patch found
+somewhere plausible, not somewhere correct.
 
 ## The patch subset, which is the point of doing this
 
