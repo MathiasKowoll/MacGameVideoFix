@@ -42,6 +42,7 @@ static const char *process_name(void)
 }
 
 static LONG log_lines;
+static LONG CALLBACK note_exception(EXCEPTION_POINTERS *info);
 static HRESULT (WINAPI *real_D3D12CreateDevice)(void *, UINT, const GUID *, void **);
 static HRESULT WINAPI my_D3D12CreateDevice(void *, UINT, const GUID *, void **);
 
@@ -3265,8 +3266,81 @@ static void watch_directstorage(void)
         if ((was = hook_import("dstorage.dll", "DStorageCreateCompressionCodec",
                                (void *)my_DStorageCreateCompressionCodec))) n++;
         (void)was;
-        logf_("DirectStorage: %d of 4 entry points watched", n);
+        /* Catch the crash ourselves.
+     *
+     * Wine writes a backtrace when a process dies, and this launcher sets
+     * WINEDEBUG=-all, which silences it. Rather than argue with that, note the
+     * exception here: this DLL is already inside the process, and a vectored
+     * handler sees every exception before anything else does.
+     *
+     * Logged: the code, the address, and which module that address belongs to.
+     * The module is the part that matters -- it says whether the title dies in
+     * its own code, in the engine's, or in ours.
+     *
+     * First-chance exceptions are normal and common, so this reports only the
+     * ones that are not: a C++ throw or a breakpoint says nothing. */
+    AddVectoredExceptionHandler(1, note_exception);
+
+    /* What the launcher actually handed this process.
+     *
+     * Reproducing a crash outside the launcher needs the same environment, and
+     * macOS will not let one process read another's. This one is inside the
+     * game, so it can simply ask. Named variables only: dumping everything
+     * would put a user's paths and tokens in a log that gets shared. */
+    {
+        static const char *want[] = {
+            "CX_GRAPHICS_BACKEND", "CX_BOTTLE", "D3DM_ENABLE_METALFX",
+            "D3DM_MTL4", "DXMT_ENABLE_NVEXT", "DXMT_CONFIG", "WINEMSYNC",
+            "WINEESYNC", "WINEDEBUG", "GST_PLUGIN_PATH", "GST_PLUGIN_SYSTEM_PATH",
+            "GST_PLUGIN_SCANNER", "GST_REGISTRY", "MVK_CONFIG_LOG_LEVEL",
+            "MTL_HUD_ENABLED", "WINEDLLOVERRIDES", "WINEDLLPATH",
+        };
+        char buf[512];
+        size_t i;
+        logf_("environment this process was given:");
+        for (i = 0; i < sizeof(want) / sizeof(want[0]); i++)
+        {
+            DWORD n = GetEnvironmentVariableA(want[i], buf, sizeof(buf) - 1);
+            if (n && n < sizeof(buf))
+                logf_("    %s=%s", want[i], buf);
+        }
     }
+    logf_("DirectStorage: %d of 4 entry points watched", n);
+    }
+}
+
+static LONG CALLBACK note_exception(EXCEPTION_POINTERS *info)
+{
+    static LONG said;
+    DWORD code = info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionCode : 0;
+    void *at = info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionAddress : NULL;
+
+    /* 0xe06d7363 is a C++ throw, 0x406d1388 a thread-name notification, and
+     * both are ordinary traffic in a running game. */
+    if (code == 0xE06D7363 || code == 0x406D1388 || code == EXCEPTION_BREAKPOINT)
+        return EXCEPTION_CONTINUE_SEARCH;
+
+    if (InterlockedIncrement(&said) <= 8)
+    {
+        char mod[MAX_PATH] = "";
+        HMODULE h = NULL;
+        if (at && GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                                     | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                     (LPCSTR)at, &h) && h)
+        {
+            GetModuleFileNameA(h, mod, sizeof(mod) - 1);
+            logf_("EXCEPTION 0x%08lx at %p  in %s  (+0x%lx)", code, at,
+                  mod, (unsigned long)((BYTE *)at - (BYTE *)h));
+        }
+        else
+            logf_("EXCEPTION 0x%08lx at %p  in no known module", code, at);
+
+        if (code == EXCEPTION_ACCESS_VIOLATION && info->ExceptionRecord->NumberParameters >= 2)
+            logf_("    access violation %s address %p",
+                  info->ExceptionRecord->ExceptionInformation[0] ? "writing" : "reading",
+                  (void *)info->ExceptionRecord->ExceptionInformation[1]);
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
 }
 
 static DWORD WINAPI worker(LPVOID unused)

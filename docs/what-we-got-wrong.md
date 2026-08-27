@@ -555,3 +555,41 @@ gone with it; whether a rebuild carries a fix is answered by running the games.
 What survives untouched is every measurement: winevideo's binary plays the title
 and stock does not, and ours plays it and keeps Devil May Cry 5 alive. Only the
 shortcut for predicting that was invented.
+
+## NINJA GAIDEN 4 dies in ntdll, and we can name the instruction
+
+Found by giving up on other people's logging. The launcher sets
+`WINEDEBUG=-all`, which silences Wine's own crash output, so the fix DLL was
+given a vectored exception handler instead -- it is already inside the process,
+and it sees every exception before anything else does.
+
+    EXCEPTION 0xc0000005 at 00006FFFFFF78D55  in C:\windows\system32\ntdll.dll (+0x38d55)
+        access violation writing address 0x0000000000000000
+
+Disassembled at that offset, inside **`RtlVirtualUnwind2`**:
+
+    170038d4d:  movq 0xe0(%rsp), %rax     ; an optional out-pointer from the stack
+    170038d55:  movq $0x0, (%rax)         ; written through, unchecked
+
+So a caller passes NULL for an optional output parameter during exception
+unwinding -- ordinary in a running game -- and Wine's implementation writes to
+it. The title does not die in its own code, nor in ours, nor in winegstreamer.
+
+The same byte pattern across the engines here:
+
+| engine | ntdll | that instruction |
+| --- | --- | --- |
+| CrossOver 26.3 | `9ca9870f039f` | present |
+| the fork's | `9ca9870f039f` -- byte-identical | present |
+| CrossOver Preview 27 | `89b839533701` | absent |
+| winevideo 0.5 | `938c5fc80bf7` | absent |
+
+Which fits the title working on winevideo and failing on the fork. It does not
+yet fit the report that it works on a stock CrossOver: 26.3 carries the same
+ntdll as the fork. Either that run was on Preview, or something else keeps the
+path from being reached. That is the one question left before this is a
+finding rather than a strong lead.
+
+Worth noting what it cost to see: three probes that showed nothing, two of which
+were blind spots of our own making, and the answer came from stopping the search
+for a log and catching the exception in the process we were already inside.
