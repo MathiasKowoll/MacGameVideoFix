@@ -77,6 +77,42 @@ patches `0018-winegstreamer-remove-compressed-queue-time-bound` and
 on the transform's own queue, not on the source reader, which is why this looked
 at first like a path the title does not use.
 
+### The patches can be carried, when the Wine build matches
+
+Measured the same night. An engine does not have to *be* winevideo to play this
+title -- it has to carry winevideo's `winegstreamer`, and that pair of files
+transplants cleanly **into an engine built from the same Wine**:
+
+    winegstreamer.so   and   winegstreamer.dll
+
+Both engines here report `wine-11.0-8726-g2e2f5fca349`, which is what CrossOver
+26.3 carries. While the target was based on Preview 27
+(`wine-11.15-8895-g32f409fef6a`) the transplant was not possible and was not
+attempted: the unix-side `.so` binds to the internals of the Wine it was built
+with. Moving the target to a 26.3 base is what made it possible, not any change
+to the files.
+
+Checked before copying, so this is not luck: the PE side imports only `ole32`,
+`msdmo` and `ntdll` -- nothing of winevideo's own, so it does not drag in that
+project's compat module -- and the unix side links only against GStreamer
+libraries the target already had. The dependency graph closes inside the bundle.
+
+Result, in the launcher's own bottle rather than winevideo's:
+
+```
+offers type 0: 'NV12'          <- the engine offers it now; the relabel is inert
+ProcessInput   427   accepted 427
+frames out     421
+```
+
+One frame every 16.7 ms of wall clock to the end. The three faults below are
+answered by the engine, and what remains of this fix is one console variable.
+
+Codecs travel in the same lot: `libgstlibav`, `libgstmatroska` and `libgstvpx`
+with their libraries, into `lib64/gstreamer-1.0` and `lib64`. Note that VP9 also
+needs winevideo's `vp9-mft.reg` in the bottle -- the transplanted binary names
+VP9 but does not register the MFT by itself.
+
 ### What is left of the fix there, measured one switch at a time
 
 | | on winevideo |
