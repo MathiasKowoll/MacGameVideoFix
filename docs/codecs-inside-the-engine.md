@@ -77,3 +77,41 @@ Nioh crashes on that engine before reaching any video, with the codec placed and
 with it removed, so this is not the cause. Nioh 2 — same bridge, same codec,
 same engine — plays. The difference is the title, not the arrangement, and Nioh
 has never been measured on that engine: its catalogue row says 26.3 and Preview.
+
+## The other half, and why it does not travel
+
+Placing plugins is one of the two things winevideo does. The other is replacing
+part of the engine's own Wine, and that half is not portable.
+
+Its payload carries eight binaries:
+
+    wine-pe/    d3d9.dll  mfplat.dll  ntdll.dll  qasf.dll
+                quartz.dll  winegstreamer.dll  winevideo_compat.dll
+    wine-unix/  winegstreamer.so
+
+`ntdll` among them, which is as deep as an engine patch goes. And they are built
+against a specific Wine:
+
+    CrossOver 26.3, and winevideo   wine-11.0-8726-g2e2f5fca349
+    CrossOver Preview 27, the fork  wine-11.15-8895-g32f409fef6a
+
+Two different builds. The unix-side `.so` binds to the internals of the Wine it
+was compiled with, so carrying winevideo's into a 27-based engine is not
+homologation, it is mixing two ABIs. That is also why the patcher pins itself:
+its payload ships `stock-inventory-26.3.0.39832.json` and refuses a build it does
+not recognise, which is the discipline to copy whatever else is done here.
+
+So the split is:
+
+| | travels | how |
+| --- | --- | --- |
+| GStreamer plugins | **yes** | eight files, measured on a 27-based engine |
+| The replaced Wine DLLs | **no** | rebuild from the source patches against that engine's Wine |
+
+The patches themselves are readable and are the handover: winevideo ships them
+under `review/build/source-patches/0.5.0/`, and the two that matter for an
+Electra title are `0018-winegstreamer-remove-compressed-queue-time-bound` and
+`0019-winegstreamer-lift-decodebin-demux-time-bound`.
+
+Whether a rebuild carried them is not a matter of trust:
+`diagnostics/check-engine-media.py` reads the built binary and says so.
