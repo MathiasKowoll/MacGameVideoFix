@@ -15,6 +15,8 @@
 
 #define LOGFILE "C:\\mf-observe.log"
 
+static LONG CALLBACK note_exception(EXCEPTION_POINTERS *info);
+
 static const char *process_name(void)
 {
     static char who[64];
@@ -33,6 +35,15 @@ static const char *process_name(void)
 
 static LONG log_lines;
 
+/* Milliseconds since the probe loaded, in front of every line.
+ *
+ * Added late, and it cost: this file's log could not tell a title that died in
+ * two seconds from one that sat for ninety, and both happen here from launch
+ * to launch. A log without time is a list of things that happened in an order
+ * -- useful, but it cannot answer "how long did that take", which was the
+ * question. */
+static DWORD logf_t0;
+
 static void logf_(const char *fmt, ...)
 {
     char buf[1024];
@@ -41,7 +52,9 @@ static void logf_(const char *fmt, ...)
     va_list ap;
     int n, m;
 
-    n = snprintf(buf, sizeof(buf) - 2, "[%s] ", process_name());
+    if (!logf_t0) logf_t0 = GetTickCount();
+    n = snprintf(buf, sizeof(buf) - 2, "[%6lu ms] [%s] ",
+                 (unsigned long)(GetTickCount() - logf_t0), process_name());
     if (n < 0) n = 0;
     va_start(ap, fmt);
     m = vsnprintf(buf + n, sizeof(buf) - 2 - n, fmt, ap);
@@ -2123,9 +2136,524 @@ static HRESULT WINAPI my_Direct3DCreate9Ex(UINT sdk, void **out)
     return hr;
 }
 
+/* Ported from the Nioh/P5S bridge, 27 Aug, for METAL GEAR SOLID 4.
+ *
+ * That title fails to a black screen with an audio click and writes nothing:
+ * it imports no Media Foundation and no D3D at all, so every hook this probe
+ * installs watches a road it never drives on. What it does import is
+ * bink2w64 -- Bink carries both picture and sound here, through XAudio2 --
+ * and dbghelp, so it has a crash handler of its own that runs before anything
+ * we could see.
+ *
+ * These two together are what a silent death leaves us: where it faulted, and
+ * whatever the title said on its way out. */
+/* Where the title actually dies, when it dies past our instrumentation.
+ *
+ * Nioh reaches the six D3D9 patches and then goes, without calling one of
+ * them -- so the bridge, which is the fix, never runs and the log ends at a
+ * patch line. Measured 27 Aug: the same last line whether the two levers are
+ * on or off, because neither fires this early.
+ *
+ * A log that stops is not a log that says nothing happened. This is the
+ * instrument that broke the same deadlock on NINJA GAIDEN 4 after three
+ * probes found nothing: catch the exception inside the process we are already
+ * in, rather than hunting for a crash report the launcher never writes.
+ *
+ * First-chance and non-intrusive -- it always continues the search, so it
+ * changes no behaviour and only writes what would have happened anyway. */
+static LONG CALLBACK note_exception(EXCEPTION_POINTERS *info)
+{
+    static LONG said;
+    DWORD code = info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionCode : 0;
+    void *at = info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionAddress : NULL;
+
+    /* 0xe06d7363 is a C++ throw, 0x406d1388 a thread-name notification, and
+     * both are ordinary traffic in a running game. */
+    if (code == 0xE06D7363 || code == 0x406D1388 || code == EXCEPTION_BREAKPOINT)
+        return EXCEPTION_CONTINUE_SEARCH;
+
+    /* OutputDebugString, which is the title talking.
+     *
+     * 0x40010006 and 0x4001000a are how OutputDebugStringA and W reach a
+     * debugger: not faults, but the message itself, carried in the exception
+     * record. The first version of this handler logged that an exception had
+     * happened and threw the text away -- which is how six of these sat in the
+     * log looking like noise while the game was saying, in words, what was
+     * wrong with it. Nioh's documented symptom is a message box reading
+     * "Failure to play movie. (RTM_ID_EV0001)"; if it says that, it says it
+     * here.
+     *
+     * Counted apart from the fault budget below: these are the interesting
+     * ones, and eight faults' worth of room is not enough for a title that
+     * narrates. */
+    if ((code == 0x40010006 || code == 0x4001000A)
+        && info->ExceptionRecord->NumberParameters >= 2
+        && info->ExceptionRecord->ExceptionInformation[1])
+    {
+        static LONG printed;
+        if (InterlockedIncrement(&printed) <= 120)
+        {
+            const void *p = (const void *)info->ExceptionRecord->ExceptionInformation[1];
+            char msg[512];
+            msg[0] = 0;
+            if (code == 0x40010006)
+            {
+                size_t n = 0;
+                const char *a = (const char *)p;
+                while (n < sizeof(msg) - 1 && a[n]) { msg[n] = a[n]; n++; }
+                msg[n] = 0;
+            }
+            else
+            {
+                const WCHAR *w = (const WCHAR *)p;
+                WideCharToMultiByte(CP_UTF8, 0, w, -1, msg, sizeof(msg) - 1, NULL, NULL);
+            }
+            /* Trim the trailing newline these usually carry. */
+            {
+                size_t n = strlen(msg);
+                while (n && (msg[n - 1] == '\n' || msg[n - 1] == '\r')) msg[--n] = 0;
+            }
+            if (msg[0]) logf_("game says: %s", msg);
+        }
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    if (InterlockedIncrement(&said) <= 8)
+    {
+        char mod[MAX_PATH] = "";
+        HMODULE h = NULL;
+        if (at && GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                                     | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                     (LPCSTR)at, &h) && h)
+        {
+            GetModuleFileNameA(h, mod, sizeof(mod) - 1);
+            logf_("EXCEPTION 0x%08lx at %p  in %s  (+0x%lx)", code, at,
+                  mod, (unsigned long)((BYTE *)at - (BYTE *)h));
+        }
+        else
+            logf_("EXCEPTION 0x%08lx at %p  in no known module", code, at);
+
+        if (code == EXCEPTION_ACCESS_VIOLATION && info->ExceptionRecord->NumberParameters >= 2)
+            logf_("    access violation %s address %p",
+                  info->ExceptionRecord->ExceptionInformation[0] ? "writing" : "reading",
+                  (void *)info->ExceptionRecord->ExceptionInformation[1]);
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+
+/* Startup trace, for a title that hangs before it reaches any media API.
+ *
+ * METAL GEAR SOLID 4 stops on a black screen after its launcher hands over,
+ * with every thread parked, 3% of a core, and no .bk2 open -- so it never gets
+ * near Bink, and every hook above watches a road it does not drive on. A hang
+ * leaves no exception and no last log line to read backwards from: what it
+ * leaves is whatever it touched last before it stopped touching anything.
+ *
+ * Off unless C:\mgvf-trace.txt exists, because this is noise in any title that
+ * is not being chased, and this probe is shared.
+ */
+static BOOL trace_startup;
+/* Refuse the vendor library this machine does not have.
+ *
+ * METAL GEAR SOLID 4 asks for amd_ags_x64, GFSDK_Aftermath and dxgidebug and
+ * is told no -- correctly, none of them is here. Then it asks for nvapi64 and
+ * the engine says yes, because it ships one to translate DLSS. So the title
+ * learns it is running on an NVIDIA card that is not there, and what it does
+ * with that is its own business until something in that path has no answer.
+ *
+ * Refusing the load is what a machine without the card would have done, and
+ * it is one line rather than a bottle-wide DLL override -- which would tell
+ * every other title the same thing, and several of them want DLSS. Asked for
+ * by name: put 'nonvapi' in C:\mgvf-trace.txt. */
+static BOOL refuse_nvapi;
+/* Give this engine its own GStreamer registry cache.
+ *
+ * Two engines on this machine share one cache file, and the cache stores
+ * absolute plugin paths. Stable carries 18 plugins and the fork 21, so every
+ * alternation between them invalidates it and forces a full rescan -- which
+ * happens inside winegstreamer's initialisation, reached here through
+ * xaudio2_9 -> mfplat, and which is exactly where METAL GEAR SOLID 4 stops.
+ *
+ * Set from in here because the launcher overrides its own per-game field:
+ * asked for GST_REGISTRY in RaccoonBot's Env variables and the process still
+ * received RaccoonBot's value. We load before mfplat does, so we can win.
+ *
+ * Asked for by name: put 'ownreg' in C:\mgvf-trace.txt. */
+static BOOL own_registry;
+static CHAR last_file[MAX_PATH];
+static CHAR last_lib[MAX_PATH];
+static LONG waits_in, waits_out, files_opened, libs_loaded;
+/* Entered-and-returned pairs, so a call that never comes back is visible.
+ * A counter that only counts entries cannot tell 'the last thing it did'
+ * from 'the thing it is still doing', and those are different bugs. */
+static LONG opens_in, opens_out, reads_in, reads_out;
+/* The other ways a thread can stop.
+ *
+ * Measured 27 Aug on METAL GEAR SOLID 4: all file I/O complete, and the count
+ * of outstanding infinite WaitForSingleObject calls identical whether the
+ * title hangs early or late -- so those twenty are its idle worker pool and
+ * the stuck thread is blocked on something else entirely. These are what is
+ * left: the Ex variants, condition variables, and WaitOnAddress. Critical
+ * sections are deliberately not hooked -- they are far too hot to wrap, and a
+ * probe that halves the frame rate changes the race it is trying to watch. */
+static LONG waitex_in, waitex_out, cond_in, cond_out, addr_in, addr_out;
+/* Waits with a deadline, and sleeps, counted separately from the infinite ones.
+ *
+ * A thread parked forever and a thread polling forever look the same from
+ * outside -- both are "stopped" and both burn almost no CPU -- and only one of
+ * them is a deadlock. Measured on METAL GEAR SOLID 4: no infinite wait, no
+ * condition variable, no WaitOnAddress, no I/O in flight, and still nothing
+ * moves. If these climb while the file counters do not, it is spinning on a
+ * condition that never becomes true, which is a different bug with a different
+ * fix. */
+static LONG polls_wait, polls_sleep;
+static void (WINAPI *real_Sleep)(DWORD);
+static DWORD (WINAPI *real_WaitForSingleObjectEx)(HANDLE, DWORD, BOOL);
+static BOOL (WINAPI *real_SleepConditionVariableSRW)(void *, void *, DWORD, ULONG);
+static BOOL (WINAPI *real_SleepConditionVariableCS)(void *, void *, DWORD);
+static BOOL (WINAPI *real_WaitOnAddress)(volatile void *, void *, SIZE_T, DWORD);
+static LONG last_read_bytes;
+static BOOL (WINAPI *real_ReadFile)(HANDLE, LPVOID, DWORD, LPDWORD, LPVOID);
+
+static HANDLE (WINAPI *real_CreateFileW)(LPCWSTR, DWORD, DWORD, void *, DWORD, DWORD, HANDLE);
+static HMODULE (WINAPI *real_LoadLibraryW)(LPCWSTR);
+static HMODULE (WINAPI *real_LoadLibraryA)(LPCSTR);
+static HMODULE (WINAPI *real_LoadLibraryExA)(LPCSTR, HANDLE, DWORD);
+static HMODULE (WINAPI *real_LoadLibraryExW)(LPCWSTR, HANDLE, DWORD);
+static DWORD (WINAPI *real_WaitForSingleObject)(HANDLE, DWORD);
+static DWORD (WINAPI *real_WaitForMultipleObjects)(DWORD, const HANDLE *, BOOL, DWORD);
+
+static void note_name(CHAR *slot, LPCWSTR w)
+{
+    CHAR tmp[MAX_PATH];
+    if (!w) return;
+    if (!WideCharToMultiByte(CP_UTF8, 0, w, -1, tmp, sizeof(tmp) - 1, NULL, NULL)) return;
+    tmp[MAX_PATH - 1] = 0;
+    lstrcpynA(slot, tmp, MAX_PATH);
+}
+
+static HANDLE WINAPI my_CreateFileW(LPCWSTR name, DWORD access, DWORD share, void *sa,
+                                    DWORD disp, DWORD flags, HANDLE tmpl)
+{
+    note_name(last_file, name);
+    InterlockedIncrement(&files_opened);
+    /* Name the video files as they are opened.
+     *
+     * Cheap because there are eighteen of them and hundreds of everything
+     * else, and it answers the one question the file counter cannot: whether
+     * the title got as far as its first cutscene before it stopped. */
+    {
+        size_t n = lstrlenA(last_file);
+        if (n > 4 && !lstrcmpiA(last_file + n - 4, ".bk2"))
+            logf_("  opens video: %s", last_file);
+    }
+    {
+        HANDLE h;
+        InterlockedIncrement(&opens_in);
+        h = real_CreateFileW(name, access, share, sa, disp, flags, tmpl);
+        InterlockedIncrement(&opens_out);
+        return h;
+    }
+}
+
+/* The ANSI half, which is not a formality.
+ *
+ * Measured on METAL GEAR SOLID 4: with only the wide entries hooked the log
+ * reported no library loaded at all, in a process that was rendering at 56
+ * frames a second -- so it loads its graphics stack through the ANSI names,
+ * and the blind spot read as "it never loads anything". Every library is
+ * named as it arrives now: which one comes last before a hang is worth more
+ * than a count. */
+/* Case-insensitive "does this name contain nvapi", without shlwapi.
+ *
+ * The first version compared p[0] through p[4] while only checking p[0] for
+ * the terminator, so any name shorter than five characters was read past its
+ * end -- and the title stopped launching at all. Written by me, found by it
+ * refusing to start. Bounded properly now: the length is measured once and
+ * the scan stops five characters before the end. */
+static BOOL name_has_nvapi(LPCSTR s)
+{
+    int n = lstrlenA(s), i;
+    for (i = 0; i + 5 <= n; i++)
+    {
+        if ((s[i] | 32) == 'n' && (s[i+1] | 32) == 'v' && (s[i+2] | 32) == 'a'
+            && (s[i+3] | 32) == 'p' && (s[i+4] | 32) == 'i')
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static HMODULE WINAPI my_LoadLibraryA(LPCSTR name)
+{
+    HMODULE h;
+    if (name) { lstrcpynA(last_lib, name, MAX_PATH); InterlockedIncrement(&libs_loaded); }
+    if (refuse_nvapi && name && name_has_nvapi(name))
+    {
+        logf_("  REFUSED (asked for): %s -- as a machine with no NVIDIA card would", name);
+        SetLastError(ERROR_MOD_NOT_FOUND);
+        return NULL;
+    }
+    if (trace_startup && name) logf_("  loads: %s", name);
+    h = real_LoadLibraryA(name);
+    if (!h) logf_("  LoadLibraryA FAILED: %s (err %lu)", name ? name : "(null)", GetLastError());
+    return h;
+}
+
+static HMODULE WINAPI my_LoadLibraryExA(LPCSTR name, HANDLE f, DWORD flags)
+{
+    HMODULE h;
+    if (name) { lstrcpynA(last_lib, name, MAX_PATH); InterlockedIncrement(&libs_loaded); }
+    if (trace_startup && name) logf_("  loads: %s", name);
+    h = real_LoadLibraryExA(name, f, flags);
+    if (!h) logf_("  LoadLibraryExA FAILED: %s (err %lu)", name ? name : "(null)", GetLastError());
+    return h;
+}
+
+static HMODULE WINAPI my_LoadLibraryW(LPCWSTR name)
+{
+    HMODULE h;
+    note_name(last_lib, name);
+    InterlockedIncrement(&libs_loaded);
+    if (trace_startup) logf_("  loads: %s", last_lib);
+    h = real_LoadLibraryW(name);
+    if (!h) logf_("  LoadLibrary FAILED: %s (err %lu)", last_lib, GetLastError());
+    return h;
+}
+
+static HMODULE WINAPI my_LoadLibraryExW(LPCWSTR name, HANDLE f, DWORD flags)
+{
+    HMODULE h;
+    note_name(last_lib, name);
+    InterlockedIncrement(&libs_loaded);
+    h = real_LoadLibraryExW(name, f, flags);
+    if (!h) logf_("  LoadLibraryEx FAILED: %s (err %lu)", last_lib, GetLastError());
+    return h;
+}
+
+static DWORD WINAPI my_WaitForSingleObject(HANDLE h, DWORD ms)
+{
+    DWORD r;
+    if (ms == INFINITE) InterlockedIncrement(&waits_in);
+    else InterlockedIncrement(&polls_wait);
+    r = real_WaitForSingleObject(h, ms);
+    if (ms == INFINITE) InterlockedIncrement(&waits_out);
+    return r;
+}
+
+static DWORD WINAPI my_WaitForMultipleObjects(DWORD n, const HANDLE *h, BOOL all, DWORD ms)
+{
+    DWORD r;
+    if (ms == INFINITE) InterlockedIncrement(&waits_in);
+    else InterlockedIncrement(&polls_wait);
+    r = real_WaitForMultipleObjects(n, h, all, ms);
+    if (ms == INFINITE) InterlockedIncrement(&waits_out);
+    return r;
+}
+
+static void WINAPI my_Sleep(DWORD ms)
+{
+    InterlockedIncrement(&polls_sleep);
+    real_Sleep(ms);
+}
+
+static DWORD WINAPI my_WaitForSingleObjectEx(HANDLE h, DWORD ms, BOOL alert)
+{
+    DWORD r;
+    if (ms == INFINITE) InterlockedIncrement(&waitex_in);
+    r = real_WaitForSingleObjectEx(h, ms, alert);
+    if (ms == INFINITE) InterlockedIncrement(&waitex_out);
+    return r;
+}
+
+static BOOL WINAPI my_SleepConditionVariableSRW(void *cv, void *lock, DWORD ms, ULONG flags)
+{
+    BOOL r;
+    if (ms == INFINITE) InterlockedIncrement(&cond_in);
+    r = real_SleepConditionVariableSRW(cv, lock, ms, flags);
+    if (ms == INFINITE) InterlockedIncrement(&cond_out);
+    return r;
+}
+
+static BOOL WINAPI my_SleepConditionVariableCS(void *cv, void *cs, DWORD ms)
+{
+    BOOL r;
+    if (ms == INFINITE) InterlockedIncrement(&cond_in);
+    r = real_SleepConditionVariableCS(cv, cs, ms);
+    if (ms == INFINITE) InterlockedIncrement(&cond_out);
+    return r;
+}
+
+static BOOL WINAPI my_WaitOnAddress(volatile void *a, void *cmp, SIZE_T sz, DWORD ms)
+{
+    BOOL r;
+    if (ms == INFINITE) InterlockedIncrement(&addr_in);
+    r = real_WaitOnAddress(a, cmp, sz, ms);
+    if (ms == INFINITE) InterlockedIncrement(&addr_out);
+    return r;
+}
+
+static BOOL WINAPI my_ReadFile(HANDLE h, LPVOID buf, DWORD n, LPDWORD got, LPVOID ov)
+{
+    BOOL r;
+    InterlockedExchange(&last_read_bytes, (LONG)n);
+    InterlockedIncrement(&reads_in);
+    r = real_ReadFile(h, buf, n, got, ov);
+    InterlockedIncrement(&reads_out);
+    return r;
+}
+
+/* Says what the process last touched, every five seconds.
+ *
+ * A hang is legible from the outside only as "nothing changed since": the
+ * counters stop moving and the last name stays put, and that name is the lead. */
+static DWORD WINAPI watchdog(LPVOID unused)
+{
+    CHAR seen_file[MAX_PATH] = "", seen_lib[MAX_PATH] = "";
+    LONG seen_files = -1, ticks = 0, quiet = 0;
+    (void)unused;
+    for (;;)
+    {
+        Sleep(5000);
+        ticks++;
+        if (files_opened == seen_files
+            && !lstrcmpA(seen_file, last_file) && !lstrcmpA(seen_lib, last_lib))
+        {
+            quiet++;
+            if (quiet == 2 || quiet == 6 || quiet == 18)
+                logf_("STILL: nothing new in %ld s. last file '%s'", (long)quiet * 5, last_file);
+                logf_("      opens %ld in / %ld out (%ld in flight), reads %ld in / %ld out "
+                      "(%ld in flight, last asked %ld bytes), infinite waits %ld/%ld",
+                      (long)opens_in, (long)opens_out, (long)(opens_in - opens_out),
+                      (long)reads_in, (long)reads_out, (long)(reads_in - reads_out),
+                      (long)last_read_bytes, (long)waits_in, (long)waits_out);
+                logf_("      other blocks -- WaitEx %ld/%ld (%ld), condvar %ld/%ld (%ld), "
+                      "WaitOnAddress %ld/%ld (%ld)",
+                      (long)waitex_in, (long)waitex_out, (long)(waitex_in - waitex_out),
+                      (long)cond_in, (long)cond_out, (long)(cond_in - cond_out),
+                      (long)addr_in, (long)addr_out, (long)(addr_in - addr_out));
+                logf_("      polling -- timed waits %ld, Sleep %ld  "
+                      "(if these climb between reports it is spinning, not deadlocked)",
+                      (long)polls_wait, (long)polls_sleep);
+        }
+        else
+        {
+            if (quiet >= 2)
+                logf_("moving again after %ld s", (long)quiet * 5);
+            quiet = 0;
+            seen_files = files_opened;
+            lstrcpynA(seen_file, last_file, MAX_PATH);
+            lstrcpynA(seen_lib, last_lib, MAX_PATH);
+        }
+        if (ticks > 240) return 0;
+    }
+}
+
+static void arm_startup_trace(void)
+{
+    void *was;
+    HANDLE f = CreateFileA("C:\\mgvf-trace.txt", GENERIC_READ, FILE_SHARE_READ,
+                           NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) return;
+    {
+        char buf[257];
+        DWORD got = 0;
+        if (ReadFile(f, buf, sizeof(buf) - 1, &got, NULL) && got) buf[got] = 0; else buf[0] = 0;
+        if (strstr(buf, "nonvapi")) refuse_nvapi = TRUE;
+        if (strstr(buf, "ownreg")) own_registry = TRUE;
+    }
+    CloseHandle(f);
+    trace_startup = TRUE;
+
+    if (own_registry)
+    {
+        /* Space-free on purpose: a path with spaces did not survive the
+         * launcher's own field, and there is no reason to find out whether it
+         * survives everything else. */
+        static const char *own = "C:\\mgvf-gst-registry.bin";
+        char had[512] = "";
+        GetEnvironmentVariableA("GST_REGISTRY", had, sizeof(had) - 1);
+        if (SetEnvironmentVariableA("GST_REGISTRY", own))
+            logf_("GST_REGISTRY set to %s by us (was %s)", own, had[0] ? had : "unset");
+        else
+            logf_("could not set GST_REGISTRY (err %lu)", GetLastError());
+    }
+
+    if ((was = hook_import("kernel32.dll", "CreateFileW", (void *)my_CreateFileW)))
+        *(void **)&real_CreateFileW = was;
+    if ((was = hook_import("kernel32.dll", "LoadLibraryW", (void *)my_LoadLibraryW)))
+        *(void **)&real_LoadLibraryW = was;
+    if ((was = hook_import("kernel32.dll", "LoadLibraryExW", (void *)my_LoadLibraryExW)))
+        *(void **)&real_LoadLibraryExW = was;
+    if ((was = hook_import("kernel32.dll", "LoadLibraryA", (void *)my_LoadLibraryA)))
+        *(void **)&real_LoadLibraryA = was;
+    if ((was = hook_import("kernel32.dll", "LoadLibraryExA", (void *)my_LoadLibraryExA)))
+        *(void **)&real_LoadLibraryExA = was;
+    if ((was = hook_import("kernel32.dll", "ReadFile", (void *)my_ReadFile)))
+        *(void **)&real_ReadFile = was;
+    if ((was = hook_import("kernel32.dll", "WaitForSingleObjectEx", (void *)my_WaitForSingleObjectEx)))
+        *(void **)&real_WaitForSingleObjectEx = was;
+    if ((was = hook_import("kernel32.dll", "SleepConditionVariableSRW", (void *)my_SleepConditionVariableSRW)))
+        *(void **)&real_SleepConditionVariableSRW = was;
+    if ((was = hook_import("kernel32.dll", "SleepConditionVariableCS", (void *)my_SleepConditionVariableCS)))
+        *(void **)&real_SleepConditionVariableCS = was;
+    if ((was = hook_import("kernel32.dll", "WaitOnAddress", (void *)my_WaitOnAddress)))
+        *(void **)&real_WaitOnAddress = was;
+    if ((was = hook_import("kernel32.dll", "Sleep", (void *)my_Sleep)))
+        *(void **)&real_Sleep = was;
+    if ((was = hook_import("kernel32.dll", "WaitForSingleObject", (void *)my_WaitForSingleObject)))
+        *(void **)&real_WaitForSingleObject = was;
+    if ((was = hook_import("kernel32.dll", "WaitForMultipleObjects", (void *)my_WaitForMultipleObjects)))
+        *(void **)&real_WaitForMultipleObjects = was;
+
+    logf_("startup trace ON: CreateFileW %s, LoadLibraryW %s, LoadLibraryExW %s, "
+          "WaitForSingleObject %s, WaitForMultipleObjects %s",
+          real_CreateFileW ? "hooked" : "NOT IMPORTED",
+          real_LoadLibraryW ? "hooked" : "NOT IMPORTED",
+          real_LoadLibraryExW ? "hooked" : "NOT IMPORTED",
+          real_WaitForSingleObject ? "hooked" : "NOT IMPORTED",
+          real_WaitForMultipleObjects ? "hooked" : "NOT IMPORTED");
+    CreateThread(NULL, 0, watchdog, NULL, 0, NULL);
+}
+
+
+/* The environment this process was actually given.
+ *
+ * Read from inside, because a launcher's settings screen says what it means to
+ * pass and the process is what receives it, and those are different claims.
+ * Learned the hard way on 27 Aug: a D3DM_MTL4=0 measured inside NINJA GAIDEN 4
+ * was carried over to METAL GEAR SOLID 4 as though the two ran with the same
+ * environment. They do not -- RaccoonBot sets these per game -- and reasoning
+ * from one title's variables to another's is guessing with extra steps.
+ *
+ * Named variables only: dumping the whole block would print the user's paths
+ * and tokens into a log that gets pasted into bug reports. */
+static void dump_environment(void)
+{
+    static const char *names[] = {
+        "CX_GRAPHICS_BACKEND", "CX_BOTTLE", "CX_GRAPHICS_BACKEND_VERSION",
+        "D3DM_ENABLE_METALFX", "D3DM_MTL4", "D3DM_SUPPORT_DXR", "D3DM_ENABLE_ASYNC_COMMIT",
+        "DXMT_ENABLE_NVEXT", "DXMT_CONFIG",
+        "WINEMSYNC", "WINEESYNC", "WINEFSYNC", "WINEDEBUG", "WINEDLLOVERRIDES",
+        "MTL_HUD_ENABLED", "MVK_CONFIG_LOG_LEVEL",
+        "GST_PLUGIN_PATH", "GST_PLUGIN_SYSTEM_PATH", "GST_PLUGIN_SCANNER", "GST_REGISTRY",
+    };
+    char v[512];
+    size_t i;
+    logf_("environment this process was given:");
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+    {
+        DWORD n = GetEnvironmentVariableA(names[i], v, sizeof(v) - 1);
+        if (n && n < sizeof(v)) logf_("    %s=%s", names[i], v);
+    }
+}
+
 static DWORD WINAPI worker(LPVOID unused)
 {
     (void)unused;
+    dump_environment();
+    arm_startup_trace();
+    AddVectoredExceptionHandler(1, note_exception);
     {
         char v[8] = {0};
         if (GetEnvironmentVariableA("BEAST_REFUSE_D3D_MANAGER", v, sizeof(v)) && v[0] == '1')
