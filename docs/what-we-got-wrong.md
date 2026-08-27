@@ -395,10 +395,24 @@ size twice before drawing anything from it.
   died before touching it. A media fault behaves the same way every time. This
   looks more like a race or a resource that is sometimes there.
 
+  Then a second guess, also wrong: that the hook fired only for the first reader
+  and the game opened one per movie. Hooked unconditionally, and the run is
+  identical -- one reader, three slots patched, no calls.
+
+  So the standing fact is stranger than either guess. The player reports the
+  first video **starting and cutting off**, while the reader is created and never
+  read from, and the decoder the title enumerated is never fed either: no
+  ProcessInput, no ProcessOutput. Whatever draws those frames does not pass
+  through any hook this DLL sets. That is where the instrumentation ends and
+  where a later session would start -- probably by finding what the title calls
+  between `MFCreateMediaType` and the picture appearing.
+
   Third time tonight that an absence in a log was read as evidence, after the
   frame counter that could only reach three and the ProcessInput failures logged
   on call 1 and every 200th. The rule keeps earning its place: an absence is
-  only evidence if the thing that writes it was running.
+  only evidence if the thing that writes it was running. Twice tonight it was
+  not, and the third time it genuinely was -- which is the only reason the last
+  paragraph can be written at all.
 
 - **NINJA GAIDEN 4 on the same engine.** Its enumeration reported a VP9 decoder
   for the first time -- the gate its fix exists to answer -- so the fix now

@@ -1293,7 +1293,13 @@ static HRESULT WINAPI my_MFCreateSourceReaderFromURL(LPCWSTR url, void *attrs, v
      * nothing was ever logged again. That read as the game dying immediately
      * after -- it is where our own view ended. The reader is the same interface
      * either way, so the same three slots apply. */
-    if (SUCCEEDED(hr) && reader && *reader && !real_ReadSample)
+    /* Every reader, not the first.
+     *
+     * The first version of this guarded on real_ReadSample being unset, so only
+     * one reader was ever watched. A title that opens a reader per movie would
+     * then show its first and nothing else -- and the log said exactly that:
+     * the reader created, the slots patched, and not one call arriving. */
+    if (SUCCEEDED(hr) && reader && *reader)
     {
         static void *gn, *sc, *rs;
         patch_slot("GetNativeMediaType",  *reader, SLOT_GET_NATIVE_TYPE,
