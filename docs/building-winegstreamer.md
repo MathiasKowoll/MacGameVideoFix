@@ -157,10 +157,11 @@ half a filename.
 
 ### Two things the tooling gets wrong here, deliberately recorded
 
-`check-engine-media.py` reports this build as `ABSENT / stalls`. It is looking
-for strings that come from patch `0030`, which we did not apply. It still
-separates winevideo's build from stock, which is what it was written for, but it
-cannot see our subset. The verdict came from the games.
+`check-engine-media.py` reported this build as `ABSENT / stalls` while the title
+played. That was noted at the time as "do not believe it here", which was not
+good enough: it has since been withdrawn. It read four strings and predicted a
+behaviour, and the prediction was a correlation across four engines rather than a
+mechanism. Our own build carries none of the four and plays.
 
 And `--patches` order is the `series` order, not ours to choose: these four were
 taken because they touch the paths an Electra title uses, not because anyone

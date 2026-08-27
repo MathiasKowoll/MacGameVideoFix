@@ -529,3 +529,29 @@ Order for tomorrow, one change at a time as everything else tonight was done:
 3. If NG4 still crashes, the remaining difference is d3d9, qasf, quartz, ntdll,
    winevideo_compat, or the bottle their patcher prepares. At that point
    measuring which is worth more than adding them all.
+
+## The engine check was wrong, and it was mine
+
+`diagnostics/check-engine-media.py` read four strings out of `winegstreamer` --
+`max-size-time`, `max-size-buffers`, `max-size-bytes`, `decodebin_parser_init_gst`
+-- and reported whether an engine could play an Electra title. It agreed with
+every measurement it was tested against: five engines, the four that lacked them
+stalled and the one that had them played.
+
+Then this project built its own `winegstreamer` with four different patches. It
+carries **none** of those strings, and Beast of Reincarnation plays with it.
+
+So the check was four points of correlation dressed as a mechanism. Worse, it had
+already been caught: when the four-patch build was installed it reported
+`ABSENT / stalls` and that was written off in a message as "do not believe it
+here". Believing a tool selectively is not a fix. It is withdrawn.
+
+Two things it dragged with it. The claim that `0018` and `0019` were what
+unblocked the title was corrected once already -- `0019` reverts `0018` -- and
+this closes it for good: four patches that touch none of the queue bounds
+unblock it. And the idea that a port could be verified by reading strings is
+gone with it; whether a rebuild carries a fix is answered by running the games.
+
+What survives untouched is every measurement: winevideo's binary plays the title
+and stock does not, and ours plays it and keeps Devil May Cry 5 alive. Only the
+shortcut for predicting that was invented.

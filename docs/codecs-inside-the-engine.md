@@ -125,5 +125,8 @@ under `review/build/source-patches/0.5.0/`, and the two that matter for an
 Electra title are `0018-winegstreamer-remove-compressed-queue-time-bound` and
 `0019-winegstreamer-lift-decodebin-demux-time-bound`.
 
-Whether a rebuild carried them is not a matter of trust:
-`diagnostics/check-engine-media.py` reads the built binary and says so.
+Whether a rebuild carried them is not answerable by reading strings out of the
+binary. That was tried -- a check that separated winevideo's build from stock
+across five engines -- and this project's own four-patch build carries none of
+those strings and plays the title anyway. Correlation, not mechanism. The check
+was withdrawn. What answers the question is running the titles.
