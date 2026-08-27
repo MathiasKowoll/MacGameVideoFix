@@ -350,7 +350,15 @@ size twice before drawing anything from it.
   back separates the transplant from the engine change, at the cost of Beast
   stalling again while the test runs.
 
-- **NINJA GAIDEN 4 crashed on the same engine**, after the enumeration reported a
-  VP9 decoder for the first time -- which is the gate its fix exists to answer.
-  The fix now stands its workaround down when the engine offers a decoder; that
-  change is written and installed and has not been run yet.
+- **NINJA GAIDEN 4 on the same engine.** Its enumeration reported a VP9 decoder
+  for the first time -- the gate its fix exists to answer -- so the fix now
+  stands its workaround down when the engine offers one. Run since, and the
+  conditional took the new branch:
+
+      MFCreateDXGIDeviceManager -- ALLOWED after all: this engine offered a decoder
+      MFCreateDXGIDeviceManager -> 0x00000000
+      IMFDXGIDeviceManager::ResetDevice(device=...) -> 0x00000000   << a device is bound
+
+  and the intro video played, which it had not on that engine before. The title
+  still ends in a crash afterwards; that is being left alone for now and is not
+  what this entry is about.
