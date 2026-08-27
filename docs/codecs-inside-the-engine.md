@@ -1,9 +1,20 @@
 # Codecs inside the engine
 
-Measured 2026-08-26. The staged-plugin arrangement this project has used since
-the beginning — a directory of compiled GStreamer plugins per engine, pointed at
-by `GST_PLUGIN_PATH` in each bottle — can be replaced by putting the same files
-inside the engine, and the replacement is simpler in every direction.
+Measured 2026-08-26.
+
+**This does not replace the staging, and is not meant to.** MacGameVideoFix
+installs onto whatever CrossOver a person already has, and does not modify it:
+a directory of compiled GStreamer plugins per engine, pointed at by
+`GST_PLUGIN_PATH` in each bottle, is how that works and how it stays working.
+Nothing here changes that.
+
+What follows applies to a **launcher that owns its engine** and can put files
+inside it. RaccoonBot is one, and moved to this arrangement; our own installers
+did not. The two coexist: the same plugins, placed differently by whoever is in
+a position to place them.
+
+For that case, putting the files inside the engine is simpler in every
+direction.
 
 ## What was placed
 
@@ -59,10 +70,11 @@ written cache says:
 **Anyone repeating this owes it those three doors.** A codec test with a stale
 registry cache is not a codec test.
 
-## What it removes
+## What it removes, for whoever can use it
 
-Every failure this arrangement produced in one afternoon, none of which
-announced itself:
+Every failure the staged arrangement produced in one afternoon, none of which
+announced itself. These are reasons for a launcher to prefer placement, not
+faults that make staging unusable -- it carries the titles it always did:
 
 - one plugin cache per architecture, shared by every engine on the machine, so
   two engines with different plugin sets take turns overwriting each other's view
