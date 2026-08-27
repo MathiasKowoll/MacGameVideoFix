@@ -71,11 +71,13 @@ That is also how to check a port rather than trust it: whoever carries 0018 and
 0019 into another engine can ask the built binary whether they arrived.
 
 **winevideo dissolves it.** In its bottle the same build plays the cutscene
-whole: 475 frames, one every 16.7 ms of wall clock, ending on its own. Its
-patches `0018-winegstreamer-remove-compressed-queue-time-bound` and
-`0019-lift-decodebin-demux-time-bound` are the plausible reason — the bound is
-on the transform's own queue, not on the source reader, which is why this looked
-at first like a path the title does not use.
+whole: 475 frames, one every 16.7 ms of wall clock, ending on its own. Which of its patches is the reason was got
+wrong twice: `0018` and `0019` were named, and reading them showed `0019`
+reverting `0018` and both touching the source reader, which this title does not
+use. The candidate now is `0008`, "always provide 2D-capable output samples" —
+the log below records `dwFlags=0x7` without `PROVIDES_SAMPLES`, so on stock the
+caller allocates every frame, and that is the stand-off. Candidate, not
+finding.
 
 ### The patches can be carried, when the Wine build matches
 

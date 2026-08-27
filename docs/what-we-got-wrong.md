@@ -394,3 +394,32 @@ size twice before drawing anything from it.
   from being investigated as a defect of NINJA GAIDEN 4. Two people driving one
   machine is a measurement hazard of its own, and the cost is not the killed run
   -- it is the hours that would have gone into explaining it.
+
+- **That 0018 and 0019 are what Beast of Reincarnation needs.** Said to the
+  other session, written into the wiki page, into two commit messages and into
+  a diagnostic's header comment, on the strength of their titles and of four
+  strings found in winevideo's binary. Then the patches were read.
+
+  `0019` reverts `0018`: the first adds a bounded demux queue behind an
+  environment variable, the second removes it entirely. Net effect on the source,
+  nothing. And both touch `wg_parser.c`, which is the source reader -- the path
+  an Electra title does not use, which is the one thing about this title that
+  was established early and firmly.
+
+  The `max-size-*` strings that survive in the binary come from `0030`, which
+  reintroduces the queue gated on a per-process feature flag, still on the parser
+  path.
+
+  What plausibly fixes it is `0008`, "always provide 2D-capable output samples":
+  Beast's own log records `dwFlags=0x7` on stock, without `PROVIDES_SAMPLES`, so
+  the caller allocates every frame -- the decoder cannot emit until Electra hands
+  it a buffer, and Electra will not hand over more until it receives pictures.
+  That is the stand-off exactly, and it is the one thing the game-side shim could
+  not change: it wrapped the caller's buffer, it did not change who allocates.
+
+  Not proven either. It is a candidate, and it is labelled one.
+
+  What survives unharmed is the measurement -- winevideo's winegstreamer plays
+  the title and stock does not, on five engines -- and check-engine-media.py,
+  which still separates them correctly because those strings do distinguish the
+  builds. Only the explanation of *why* was invented.

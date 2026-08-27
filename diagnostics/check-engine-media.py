@@ -15,9 +15,16 @@
 # The same DLL and the same build play the cutscene whole on winevideo: 475
 # frames, one every 16.7 ms of wall clock, ending on its own.
 #
-# The difference between those engines is four strings in one binary. winevideo
-# sets the queue properties; nobody else mentions them, so nobody else can be
-# setting them. That makes the question answerable without launching anything,
+# The difference between those engines is four strings in one binary, and this
+# looks for them. What it does NOT do is explain the fix: the strings were first
+# attributed to patches 0018 and 0019, and reading those patches showed 0019
+# reverting 0018 and both touching the source reader, which an Electra title does
+# not use. They survive because 0030 reintroduces the queue behind a per-process
+# flag. The likely fix is 0008, which makes the transform provide its own output
+# samples rather than waiting for the caller to allocate -- which is the
+# stand-off this title dies of. That is a candidate, not a finding.
+#
+# The strings still separate the builds, which is all this needs to do. That makes the question answerable without launching anything,
 # and answerable again after somebody ports those patches -- the same search
 # says whether the new binary really carries them, rather than trusting that a
 # patch number was applied.
