@@ -45,6 +45,9 @@
 # window is black for most of it. That is the title, not this fix. Give it time
 # before deciding it has hung.
 #
+# MGVF-GAME: METAL GEAR SOLID 4 | mgs4.exe | MGS4
+# MGVF-WHY: Black window and a click of audio, then it exits. Nothing to do with video: it loads its audio banks behind a busy-wait that starves itself under Wine, and Steam's pipe times out first. It plays on stock CrossOver untouched.
+#
 # Part of MacGameVideoFix — https://github.com/MathiasKowoll/MacGameVideoFix
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
