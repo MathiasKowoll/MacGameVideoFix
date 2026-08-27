@@ -180,9 +180,17 @@ proved which one does the work. `0008` remains the candidate.
 | NieR Replicant | WMV through the source reader | **plays**, 300 samples, 200 frames blitted, luma 14..238 |
 | DYNASTY WARRIORS: ORIGINS | matroska plus the D3D11-to-D3D12 bridge | **plays**, NV12 at 2560x1440, 300 samples |
 | Wo Long: Fallen Dynasty | the D3D bridge -- its samples are asked for `IMFDXGIBuffer` | **plays**, luma 15..171 to frame 120 |
+| Nioh 3 | the DYNASTY WARRIORS bridge, second title on that path | **plays**, luma 19..209, 300 samples |
+| TMNT: Splintered Fate | started, and its own half reported itself inert: "the 16:9 mode guard stays out of TMNTSF.exe" -- worth a look, not counted either way |
 | Both Life is Strange | node guard, not the media path | both **start** on the rebuilt engine, but neither has our fix installed, so this tests the engine and not our work. Their fix answers a freeze that appears after a while of play, which a short launch does not exercise either way |
 
-**NINJA GAIDEN 4 is not a regression.** It opens its `.msd` container, is offered
+**NINJA GAIDEN 4 crashes without any DLL of ours in the process.** Run with the
+fix uninstalled -- the game back to its own `dstorage.dll`, nothing of ours
+loaded, no log written -- and it still dies. So the crash is the title or the
+engine, and our DLL is not in it. That is the cleanest thing learned about NG4
+all night, and it took removing our own code to learn it.
+
+**And it is not a regression.** It opens its `.msd` container, is offered
 a VP9 decoder, binds a device and plays the video -- which validates `0002` and
 `0003`, the two patches no other title here exercises -- and then the process
 dies with no crash report and no further log. It behaved identically two hours
