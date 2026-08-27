@@ -120,3 +120,65 @@ duplicate fixes this project already ships as DLLs.
 Adding patches one at a time and running that list is slower than replaying all
 thirty-five, and it is the only way to end up knowing which patch does what --
 which is precisely what was not known when the whole file was copied.
+
+## It worked, and what it took
+
+Built with `0002 0003 0006 0008` and installed in the launcher's own engine:
+
+| winegstreamer | Beast of Reincarnation | Devil May Cry 5 |
+| --- | --- | --- |
+| stock CrossOver 26.3 | stalls after a GOP | plays |
+| winevideo's, all 35 patches | plays | **crashes** |
+| **ours, those four** | **plays** | **plays** |
+
+So the thirty-one patches that were not wanted were also the ones doing harm.
+This is a combination neither project publishes: the fork's graphics stack with
+winevideo's video fixes and without the collateral.
+
+Three things cost a run each and are now in the script rather than in memory:
+
+- macOS ships **bison 2.3** and GStreamer wants 2.4. Homebrew's goes first on
+  PATH, or meson stops before generating the enum headers.
+- Declaring `--host` puts autoconf in cross mode and it **loses the SDK**. The
+  symptom is "C compiler cannot create executables" while the same command
+  works by hand. `SDKROOT` has to be explicit.
+- The engine's dylibs carry an install_name of **`/opt/cxoffice/lib64/...`**,
+  CodeWeavers' build prefix, which exists on no Mac. Link against them and the
+  linker copies that path into the result, which then cannot load its own
+  dependencies. The stock binary uses `@rpath` plus a second rpath three levels
+  up; both have to be put back with `install_name_tool` afterwards. This one was
+  found by building something that compiled, linked, installed, and crashed the
+  game -- which is exactly what the "reproduce before patching" step exists to
+  catch, and did.
+
+And one that is not about Wine at all: **the build path must not contain a
+space.** Under `Application Support` the failure reads as clang being handed
+half a filename.
+
+### Two things the tooling gets wrong here, deliberately recorded
+
+`check-engine-media.py` reports this build as `ABSENT / stalls`. It is looking
+for strings that come from patch `0030`, which we did not apply. It still
+separates winevideo's build from stock, which is what it was written for, but it
+cannot see our subset. The verdict came from the games.
+
+And `--patches` order is the `series` order, not ours to choose: these four were
+taken because they touch the paths an Electra title uses, not because anyone
+proved which one does the work. `0008` remains the candidate.
+
+## Still to test
+
+Two titles of nineteen are verified. The engine change touches every title that
+decodes through it, so the rest is a regression pass, in this order:
+
+1. **NINJA GAIDEN 4** -- VP9, which `0002` and `0003` directly change.
+2. **Persona 5 Strikers**, **Nioh**, **Nioh 2** -- source reader and libav, plus
+   the D3D9 bridge our own DLLs provide.
+3. **Mortal Shell 2** -- Electra with VPx cutscenes, the path `0006` and `0008`
+   change.
+4. **NieR Replicant** -- WMV through the source reader.
+5. **Both Life is Strange** -- least likely affected; their fix is the node
+   guard, not the media path.
+
+A title that regresses names the patch to drop: the script takes patch numbers,
+so isolating one is a rebuild and a launch.
