@@ -2348,9 +2348,44 @@ static void WINAPI my_Sleep(DWORD ms)
     real_Sleep(ms);
 }
 
+/* The environment this process was actually given.
+ *
+ * A launcher's settings screen says what it means to pass; the process is what
+ * receives it. Those are different claims, and the whole of 27 Aug went into
+ * the gap between them: RaccoonBot showed DXMT selected for this title and the
+ * process got d3dmetal, which is the backend under which GetSharedHandle is
+ * E_NOTIMPL and this bridge cannot work. Nothing in the failure said so -- the
+ * title died with Steam's client pipe breaking and a fatal assert in
+ * pipes.cpp, which points nowhere near a graphics backend.
+ *
+ * Reading it from in here is the only thing that told "selected" from
+ * "received" apart. Named variables only: the whole block would print paths and
+ * tokens into a log that gets pasted into bug reports. */
+static void dump_environment(void)
+{
+    static const char *names[] = {
+        "CX_GRAPHICS_BACKEND", "CX_GRAPHICS_BACKEND_VERSION", "CX_BOTTLE",
+        "D3DM_ENABLE_METALFX", "D3DM_MTL4", "D3DM_SUPPORT_DXR", "D3DM_MAX_FPS",
+        "DXMT_ENABLE_NVEXT", "DXMT_CONFIG", "DXMT_METALFX_SPATIAL_SWAPCHAIN",
+        "DXVK_HUD", "DXVK_CONFIG",
+        "WINEMSYNC", "WINEESYNC", "WINEDEBUG", "WINEDLLOVERRIDES",
+        "MTL_HUD_ENABLED", "MVK_CONFIG_LOG_LEVEL", "ROSETTA_ADVERTISE_AVX",
+        "GST_PLUGIN_PATH", "GST_PLUGIN_SYSTEM_PATH", "GST_REGISTRY",
+    };
+    char v[512];
+    size_t i;
+    logf_("environment this process was given:");
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+    {
+        DWORD n = GetEnvironmentVariableA(names[i], v, sizeof(v) - 1);
+        if (n && n < sizeof(v)) logf_("    %s=%s", names[i], v);
+    }
+}
+
 static DWORD WINAPI worker(LPVOID unused)
 {
     (void)unused;
+    dump_environment();
     AddVectoredExceptionHandler(1, note_exception);
     /* The two levers, from the environment or from a file beside the bottle.
      *
