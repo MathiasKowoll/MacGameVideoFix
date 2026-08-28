@@ -2727,6 +2727,30 @@ static void report_hot_files(void)
           who[2] >= 0 ? "| " : "", who[2] >= 0 ? hotfile[who[2]].name : "");
 }
 
+/* The ANSI half of the file opens, which is not a formality here.
+ *
+ * The handle-to-name table was wired into CreateFileW only, so any file the
+ * game opens through the ANSI entry contributes reads that belong to nobody.
+ * RONIN's black screen reads six megabytes every fifteen seconds -- a video
+ * bitrate, and none of the reads empty -- while the heartbeat says "reading
+ * from: nothing", and an unhooked open is the obvious way for both to be true
+ * at once. This file already carries the same lesson about LoadLibrary, learned
+ * on METAL GEAR SOLID 4: hooking only the wide entry watches half a road. */
+static HANDLE (WINAPI *real_CreateFileA)(LPCSTR, DWORD, DWORD, void *, DWORD, DWORD, HANDLE);
+
+static HANDLE WINAPI my_CreateFileA(LPCSTR name, DWORD access, DWORD share, void *sa,
+                                    DWORD disp, DWORD flags, HANDLE tmpl)
+{
+    HANDLE h;
+    if (name) lstrcpynA(last_file, name, MAX_PATH);
+    InterlockedIncrement(&files_opened);
+    InterlockedIncrement(&opens_in);
+    h = real_CreateFileA(name, access, share, sa, disp, flags, tmpl);
+    InterlockedIncrement(&opens_out);
+    if (name) note_open_handle(h, name);
+    return h;
+}
+
 static HANDLE WINAPI my_CreateFileW(LPCWSTR name, DWORD access, DWORD share, void *sa,
                                     DWORD disp, DWORD flags, HANDLE tmpl)
 {
@@ -3273,6 +3297,8 @@ static void arm_startup_trace(void)
 
     if ((was = hook_import("kernel32.dll", "CreateFileW", (void *)my_CreateFileW)))
         *(void **)&real_CreateFileW = was;
+    if ((was = hook_import("kernel32.dll", "CreateFileA", (void *)my_CreateFileA)))
+        real_CreateFileA = (HANDLE (WINAPI *)(LPCSTR, DWORD, DWORD, void *, DWORD, DWORD, HANDLE))was;
     if ((was = hook_import("kernel32.dll", "LoadLibraryW", (void *)my_LoadLibraryW)))
         *(void **)&real_LoadLibraryW = was;
     if ((was = hook_import("kernel32.dll", "LoadLibraryExW", (void *)my_LoadLibraryExW)))
