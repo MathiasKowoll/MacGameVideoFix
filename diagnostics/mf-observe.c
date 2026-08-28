@@ -1126,9 +1126,19 @@ static HRESULT WINAPI my_MFCreateSourceReaderFromURL(LPCWSTR url, void *attrs, v
  * So: patch QueryInterface on the device and name every interface asked for.
  * If ID3D12VideoDevice is requested and refused, that is the whole fault.
  *
- * Behind a switch because NINJA GAIDEN 4 stalls when this probe patches D3D12
+ * Behind a switch, and the switch is a one-shot diagnostic rather than
+ * something to leave armed. NINJA GAIDEN 4 stalls when this probe patches D3D12
  * vtables -- see ng4-observe, where every such patch is deliberately left out
- * for that reason. Asked for by name: put 'd3d12' in C:\mgvf-trace.txt. */
+ * for that reason -- and RISE OF THE RONIN loses its two intro videos while it
+ * is on, measured both ways on 2026-08-28: armed, no logos; disarmed, logos
+ * back, nothing else changed. Two titles, two different breakages, same cause.
+ *
+ * It earned its keep in one run: it caught D3D12CreateDevice, patched the
+ * device, and recorded that Ronin asks for exactly three interfaces, all
+ * granted, none of them a video device. That answered the question. Turn it
+ * off once it has.
+ *
+ * Asked for by name: put 'd3d12' in C:\mgvf-trace.txt. */
 static BOOL watch_d3d12;
 static HRESULT (WINAPI *real_D3D12CreateDevice)(void *, UINT, const GUID *, void **);
 static HRESULT WINAPI my_D3D12CreateDevice(void *, UINT, const GUID *, void **);
@@ -2634,6 +2644,57 @@ static BOOL name_has_nvapi(LPCSTR s)
     return FALSE;
 }
 
+/* Arm Streamline the moment it appears, not on the next watchdog tick.
+ *
+ * The retry loop found sl.interposer.dll at five seconds and the DLL had
+ * loaded at 1.3 -- it resolves what it needs immediately, so by the time the
+ * hook landed the D3D12 device already existed and every QueryInterface on it
+ * had gone past unseen. A five-second poll cannot win a race decided in the
+ * first second. LoadLibrary is already hooked here, so this rides in on the
+ * one event that is exactly on time. */
+static void arm_streamline_if_it_is(const char *libname)
+{
+    static LONG armed_interposer, armed_common;
+    const char *p;
+    HMODULE m;
+
+    if (!watch_d3d12 || !libname) return;
+
+    /* Tail only: these arrive as full Z:\... paths. */
+    p = libname;
+    {
+        const char *q;
+        for (q = libname; *q; q++)
+            if (*q == '\\' || *q == '/') p = q + 1;
+    }
+
+    if (lstrcmpiA(p, "sl.interposer.dll") == 0 && !armed_interposer)
+    {
+        armed_interposer = 1;
+        if ((m = GetModuleHandleA("sl.interposer.dll")) != NULL
+            && hook_import_mod(m, "KERNEL32.dll", "GetProcAddress",
+                               (void *)my_GetProcAddress))
+            logf_("armed sl.interposer.dll as it loaded");
+        else
+            armed_interposer = 0;   /* not mapped yet: let the watchdog retry */
+    }
+    else if (lstrcmpiA(p, "sl.common.dll") == 0 && !armed_common)
+    {
+        armed_common = 1;
+        if ((m = GetModuleHandleA("sl.common.dll")) != NULL)
+        {
+            void *was = hook_import_mod(m, "d3d12.dll", "D3D12CreateDevice",
+                                        (void *)my_D3D12CreateDevice);
+            if (was)
+            {
+                *(void **)&real_D3D12CreateDevice = was;
+                logf_("armed sl.common.dll as it loaded");
+            }
+        }
+        else armed_common = 0;
+    }
+}
+
 static HMODULE WINAPI my_LoadLibraryA(LPCSTR name)
 {
     HMODULE h;
@@ -2646,6 +2707,7 @@ static HMODULE WINAPI my_LoadLibraryA(LPCSTR name)
     }
     if (trace_startup && name) logf_("  loads: %s", name);
     h = real_LoadLibraryA(name);
+    if (h) arm_streamline_if_it_is(name);
     if (!h) logf_("  LoadLibraryA FAILED: %s (err %lu)", name ? name : "(null)", GetLastError());
     return h;
 }
@@ -2656,6 +2718,7 @@ static HMODULE WINAPI my_LoadLibraryExA(LPCSTR name, HANDLE f, DWORD flags)
     if (name) { lstrcpynA(last_lib, name, MAX_PATH); InterlockedIncrement(&libs_loaded); }
     if (trace_startup && name) logf_("  loads: %s", name);
     h = real_LoadLibraryExA(name, f, flags);
+    if (h) arm_streamline_if_it_is(name);
     if (!h) logf_("  LoadLibraryExA FAILED: %s (err %lu)", name ? name : "(null)", GetLastError());
     return h;
 }
@@ -2667,6 +2730,7 @@ static HMODULE WINAPI my_LoadLibraryW(LPCWSTR name)
     InterlockedIncrement(&libs_loaded);
     if (trace_startup) logf_("  loads: %s", last_lib);
     h = real_LoadLibraryW(name);
+    if (h) arm_streamline_if_it_is(last_lib);
     if (!h) logf_("  LoadLibrary FAILED: %s (err %lu)", last_lib, GetLastError());
     return h;
 }
@@ -2677,6 +2741,7 @@ static HMODULE WINAPI my_LoadLibraryExW(LPCWSTR name, HANDLE f, DWORD flags)
     note_name(last_lib, name);
     InterlockedIncrement(&libs_loaded);
     h = real_LoadLibraryExW(name, f, flags);
+    if (h) arm_streamline_if_it_is(last_lib);
     if (!h) logf_("  LoadLibraryEx FAILED: %s (err %lu)", last_lib, GetLastError());
     return h;
 }
@@ -3222,6 +3287,26 @@ static DWORD WINAPI worker(LPVOID unused)
                 { *(void **)&real_Direct3DCreate9Ex = was; got++; }
             if ((was = hook_import("d3d11.dll", "D3D11CreateDevice", (void *)my_D3D11CreateDevice)))
                 { *(void **)&real_D3D11CreateDevice = was; got++; }
+
+            /* D3D12 the way a title that ships Streamline actually asks for it.
+             *
+             * RISE OF THE RONIN imports D3D12CreateDevice from
+             * sl.interposer.dll, not from d3d12.dll -- exporting the whole
+             * D3D12 and DXGI surface under its own name is the entire point of
+             * an interposer. Two rounds went into chasing this: first a hook on
+             * the executable's d3d12.dll entry, which does not exist; then
+             * hooks placed inside Streamline itself, on the theory that it
+             * resolved the real thing by hand. It does not need to. The table
+             * was right all along and the DLL name in it was wrong. Try both
+             * names, since a title without Streamline uses the plain one. */
+            if ((was = hook_import("sl.interposer.dll", "D3D12CreateDevice",
+                                   (void *)my_D3D12CreateDevice)))
+                { *(void **)&real_D3D12CreateDevice = was;
+                  logf_("D3D12CreateDevice hooked -- the game asks Streamline for it"); }
+            else if ((was = hook_import("d3d12.dll", "D3D12CreateDevice",
+                                        (void *)my_D3D12CreateDevice)))
+                { *(void **)&real_D3D12CreateDevice = was;
+                  logf_("D3D12CreateDevice hooked -- straight from d3d12.dll"); }
         }
         logf_("import table: %d of %d Media Foundation and D3D9 entries hooked "
               "(0 here means this game resolves them some other way)",
