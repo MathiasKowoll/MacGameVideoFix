@@ -175,6 +175,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
     case tmntSplinteredFate
     case tormentedSouls2
     case ninjaGaiden4
+    case metalGearSolid4
+    case resonance
 
     var id: String { rawValue }
 
@@ -197,6 +199,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .tmntSplinteredFate: return "TMNT: Splintered Fate"
         case .tormentedSouls2:    return "Tormented Souls 2"
         case .ninjaGaiden4:       return "NINJA GAIDEN 4"
+        case .metalGearSolid4:    return "METAL GEAR SOLID 4"
+        case .resonance:          return "RESONANCE: A PLAGUE TALE LEGACY"
         }
     }
 
@@ -218,6 +222,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .tmntSplinteredFate: return "Opens a window, then closes silently"
         case .tormentedSouls2:    return "Fatal error before the first frame"
         case .ninjaGaiden4:       return "Says the VP9 codec is missing, then exits"
+        case .metalGearSolid4:    return "Black window, a click of audio, then it exits"
+        case .resonance:          return "Refuses to start: Shader Model 6.7 not supported"
         }
     }
 
@@ -242,6 +248,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .kingdomHearts1525: return "KINGDOM HEARTS HD 1.5+2.5 Launcher.exe"
         case .tmntSplinteredFate: return "TMNTSF.exe"
         case .ninjaGaiden4:       return "NINJAGAIDEN4-Steam.exe"
+        case .metalGearSolid4:    return "mgs4.exe"
+        case .resonance:          return "Resonance.exe"
         case .tormentedSouls2:    return "TormentedSouls2.exe"
         }
     }
@@ -260,6 +268,10 @@ enum SupportedGame: String, CaseIterable, Identifiable {
             return "the folder holding TormentedSouls2.exe"
         case .ninjaGaiden4:
             return "the folder holding NINJAGAIDEN4-Steam.exe"
+        case .metalGearSolid4:
+            return "the folder holding the MGS4 folder"
+        case .resonance:
+            return "the folder holding Resonance.exe"
         default:               return "the game folder, the one with Engine inside"
         }
     }
@@ -288,6 +300,10 @@ enum SupportedGame: String, CaseIterable, Identifiable {
             return "…/steamapps/common/Tormented Souls 2"
         case .ninjaGaiden4:
             return "…/steamapps/common/NINJAGAIDEN4"
+        case .metalGearSolid4:
+            return "…/steamapps/common/METAL GEAR SOLID 4"
+        case .resonance:
+            return "…/steamapps/common/Resonance A Plague Tale Legacy"
         }
     }
 
@@ -351,6 +367,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
          * the one about 16:9. */
         case .tormentedSouls2: return "install-tormented-fix.sh"
         case .ninjaGaiden4:    return "install-ng4-fix.sh"
+        case .metalGearSolid4: return "install-mgs4-fix.sh"
+        case .resonance:       return "install-resonance-fix.sh"
         default:               return "install-runtime-fix.sh"
         }
     }
@@ -435,7 +453,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
             || self == .nierReplicant || self == .woLong
             || self == .kingdomHearts28 || self == .kingdomHearts1525
             || self == .tmntSplinteredFate || self == .tormentedSouls2
-            || self == .ninjaGaiden4 {
+            || self == .ninjaGaiden4
+            || self == .metalGearSolid4 || self == .resonance {
             guard let exe = executable else { return nil }
             var candidates = [url]
             if let subs = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
@@ -3594,7 +3613,8 @@ extension SupportedGame {
         switch self {
         case .dynastyWarriors, .personaStrikers, .nioh, .nioh2, .nioh3,
              .nierReplicant, .woLong, .kingdomHearts28, .kingdomHearts1525,
-             .tmntSplinteredFate, .tormentedSouls2, .ninjaGaiden4:
+             .tmntSplinteredFate, .tormentedSouls2, .ninjaGaiden4,
+             .resonance:
             return FileManager.default.fileExists(
                 atPath: folder.appendingPathComponent(exe).path)
         default:

@@ -10,7 +10,11 @@
 		</data>
 		<key>Resources/GfeSDK.dll</key>
 		<data>
-		LROCBwRX6gRYr7v9B7/00dKfxvE=
+		6Hws6QhVBj4k9kQUnrR2yxd8tIs=
+		</data>
+		<key>Resources/NvCloth_x64-resonance.dll</key>
+		<data>
+		hix1sy6FqvIEthDikWpfLFd0Xg4=
 		</data>
 		<key>Resources/OpenColorIO_2_3-tormented.dll</key>
 		<data>
@@ -22,7 +26,11 @@
 		</data>
 		<key>Resources/amd_ags_x64.dll</key>
 		<data>
-		LyHkPQR5zn4BCQDc2F0JUoOgX94=
+		SkAoO9Cy0ygYIiYRRc+hr9u5kUY=
+		</data>
+		<key>Resources/bink2w64-mgs4.dll</key>
+		<data>
+		GSwfC9ZwoGaX5rVKmMnSkbz2mTQ=
 		</data>
 		<key>Resources/dinput8-kh.dll</key>
 		<data>
@@ -34,7 +42,7 @@
 		</data>
 		<key>Resources/dstorage-ng4.dll</key>
 		<data>
-		p7sTBcVl6QJ6T4PuMSp9F2PwxHA=
+		Zg40WDZvVP9rtktQ+mqYTaMiJmw=
 		</data>
 		<key>Resources/fmod-tmnt.dll</key>
 		<data>
@@ -47,6 +55,10 @@
 		<key>Resources/install-kh-bridge.sh</key>
 		<data>
 		q1nED/TuU6QxJplrn/2ThSJHIW8=
+		</data>
+		<key>Resources/install-mgs4-fix.sh</key>
+		<data>
+		HwgzbjGdoKiy/Qk+zqc3OIITSKY=
 		</data>
 		<key>Resources/install-ng4-fix.sh</key>
 		<data>
@@ -68,6 +80,10 @@
 		<data>
 		dht6DM2QW1DIgUFOIPnzfZKVOjE=
 		</data>
+		<key>Resources/install-resonance-fix.sh</key>
+		<data>
+		e0Bjkwq3IqdivBSb3WpmcNEnnoU=
+		</data>
 		<key>Resources/install-runtime-fix.sh</key>
 		<data>
 		cymzrQSmfacboPqc8Ve7b54dCOI=
@@ -82,7 +98,7 @@
 		</data>
 		<key>Resources/libogg_64.dll</key>
 		<data>
-		w8+FcxNUDYN0V/yJWnyFwQ9mkhA=
+		TE7jVCMXDUuYB8sjMpAoxqaCw8o=
 		</data>
 		<key>Resources/libxess.dll</key>
 		<data>
@@ -118,7 +134,14 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			OrWxiDxvM84KOhNlFr/iO/JIHFvCkoKDG0cwWGXdvIA=
+			Gq/doEMw2PFcKIYo2pflFEy1kdsTpq1g9rYlCpZxrVs=
+			</data>
+		</dict>
+		<key>Resources/NvCloth_x64-resonance.dll</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			lCX7iIdjXSsP16gQ65+j/uJdXh77LyOW13M+KPG/N28=
 			</data>
 		</dict>
 		<key>Resources/OpenColorIO_2_3-tormented.dll</key>
@@ -139,7 +162,14 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			J2iC6u/wQh6GfjuHhRT1G1sTAiNPXI2sOpXRDKZVn+0=
+			zI8IWIZgqhQ4V5K6BWI3ZljCVoal8zErs66wbSWUP4w=
+			</data>
+		</dict>
+		<key>Resources/bink2w64-mgs4.dll</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			LOHZIHB2glL4ZrRRr2nWZND8oBF/hSOKvHIthQWhmRk=
 			</data>
 		</dict>
 		<key>Resources/dinput8-kh.dll</key>
@@ -160,7 +190,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			qRwxe/I8SVXMHa/1UuwNAaVxoonPiiV5eGUc8UeCI+M=
+			HLhrlRImzEDdYU28b6deAQonhx1lc6EYb6oLrQb+BIk=
 			</data>
 		</dict>
 		<key>Resources/fmod-tmnt.dll</key>
@@ -182,6 +212,13 @@
 			<key>hash2</key>
 			<data>
 			BryVvlCmxPsg5+PVfE6PJMuJ+YK7wR+Y8e++/IbKjNE=
+			</data>
+		</dict>
+		<key>Resources/install-mgs4-fix.sh</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			Ra3E7w5Br0dgMVZR2XWkuiPFMtSkbFvoGrPKxFghInQ=
 			</data>
 		</dict>
 		<key>Resources/install-ng4-fix.sh</key>
@@ -219,6 +256,13 @@
 			VCT1B44MLOcG2vCQAA23bMIKfxVcYqizxI7LTrhqSck=
 			</data>
 		</dict>
+		<key>Resources/install-resonance-fix.sh</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			JgpyMp0GPmZVWwlbH8+9qUHAmS4Fe0dHnkQrTxYqfbg=
+			</data>
+		</dict>
 		<key>Resources/install-runtime-fix.sh</key>
 		<dict>
 			<key>hash2</key>
@@ -244,7 +288,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			kHgnStY3VviRTYT7nwAYwtelYMH3ykBZAhF5dzSP+vg=
+			yBCl5q8a63TxEmKeO46QgWruKAx9IMw/aU++ISseyBU=
 			</data>
 		</dict>
 		<key>Resources/libxess.dll</key>
