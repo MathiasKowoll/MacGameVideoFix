@@ -261,6 +261,66 @@ picked and what was tried and did not work is in [Findings](Findings.md). The
 division is deliberate: these pages carry the per-title findings and the wrong
 turns that came first, that one carries what is common to all of them.
 
+## Not a video fix: RISE OF THE RONIN
+
+Deliberately absent from the table above, and for a different reason from METAL
+GEAR SOLID 4: this title has a video fault, and it is not one we can repair.
+
+**What was fixed, and it is worth more than the title.** The game ran at 7.30
+frames a second with 83.50 ms of GPU time per frame, on a scene of 36 draw
+calls — a cost that cannot be the scene. The cause is its own setting:
+
+    Documents/KoeiTecmo/Ronin/config.xml
+    <RES_SCALING>XESS</RES_SCALING>   ->   OFF
+
+| | XESS | OFF |
+|---|---|---|
+| FPS | 7.30 | 58.05 |
+| GPU per frame | 83.50 ms | 3.51 ms |
+| Dispatches | 19 | 2 |
+
+The seventeen missing dispatches are XeSS's compute passes. Intel's upscaler has
+no Intel GPU to run on under D3DMetal and falls back to a generic compute path
+the translation layer makes ruinous. **It is XeSS in particular, not upscaling:**
+DLSS in the same slot costs nothing, because it finds no NVIDIA hardware and
+D3DMetal substitutes MetalFX. Any Koei Tecmo title shipping `libxess.dll` is
+worth checking this way before the engine is blamed. No DLL, no code, no
+install — one value in the game's own config.
+
+**What is not fixed.** The opening cutscene plays its audio over a black screen
+for twenty to a hundred seconds, input ignored, and then the menu appears. This
+is not specific to macOS. GloriousEggroll/proton-ge-custom issue 165, filed for
+this title, reports it word for word — *"wait for shaders to compile. It will
+then play the intro video with audio and a black screen"* — and guesses the
+format as WebM. It varies by Proton build and **has no identified cause and no
+released fix upstream**.
+
+Measured here, with every hook verified to install:
+
+- Five Media Foundation entry points hooked — `MFTEnumEx`, both source readers,
+  `IMFMediaEngine` through `CoCreateInstance`, and `MFCreateFile` — and **none
+  is ever called**. `MFStartup` runs three times and nothing follows.
+- `ID3D12VideoDevice` is never requested; the game asks its D3D12 device for
+  `ID3D12Device1`, `ID3D12Device5` and one vendor interface, all granted.
+- No NV12 or P010 among 67 distinct texture shapes. There is a 1920x1080
+  `B8G8R8A8_TYPELESS` created 2.6 s in, in a game drawing at 2048x1152.
+- `libgstmatroska` and `libgstvpx` are staged, the GStreamer registry lists both,
+  and the bottle registers byte-stream handlers for `.mkv` and `.webm` — all
+  legacy of the NINJA GAIDEN 4 work. Nothing that would normally be missing is.
+- During the black the game streams ~6 MB per 15 s from a 691 MB `.file` whose
+  header is `IDRK`/`TSRS`/`KTSR` — Koei Tecmo Sound Resource, the soundtrack.
+  All fifteen loose resource files are audio; there is no loose video in 149 GB.
+
+So the game does not attempt playback at all here. That matches the state
+GE-Proton calls *skipped* rather than the one it calls *black*, and whatever it
+probes before deciding sits upstream of every door listed above.
+
+**A negative worth banking:** `sleep-yield-fix` at divisor 64 cuts this title's
+`Sleep(0)` storm from eight million per fifteen seconds to a quarter of a
+million — a thirtyfold reduction, measured twice — and moves neither the frame
+rate nor the length of the black screen. Real waste, no benefit. It is not a fix
+for this game and is not shipped as one.
+
 ## Not a video fix: METAL GEAR SOLID 4
 
 Deliberately absent from the table above. It has no video fault: it plays on
