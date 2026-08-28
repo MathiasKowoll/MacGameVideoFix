@@ -63,6 +63,20 @@ codesign --verify "$APP" 2>/dev/null || die "the bundle's signature does not ver
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP" || die "could not package the app"
 say "MacGameVideoFix-$VERSION.zip  $(( $(stat -f%z "$ZIP") / 1024 )) KB"
 
+# The fixes bundle, which is the asset a launcher actually downloads.
+#
+# This step used to live in somebody's habit, exactly like the app once did.
+# 4.11.0 went out with the app attached and no bundle, because the guard added
+# after four appless releases was written to check for the app and nothing else.
+# A checklist that only remembers the last thing that went wrong is a checklist
+# with one entry.
+"$ROOT/runtime/make-fixes-bundle.sh" "$OUT" >/dev/null \
+  || die "could not build the fixes bundle"
+BUNDLE="$OUT/fixes-v$VERSION.tar.gz"
+[ -f "$BUNDLE" ] || die "the fixes bundle is not where it should be: $BUNDLE"
+[ -f "$BUNDLE.sha256" ] || die "the fixes bundle has no checksum beside it"
+say "fixes-v$VERSION.tar.gz  $(( $(stat -f%z "$BUNDLE") / 1024 )) KB"
+
 if [ "$DRY" = 1 ]; then
   echo
   say "--check: nothing was tagged, pushed or uploaded."
@@ -76,6 +90,8 @@ gh release view "$TAG" >/dev/null 2>&1 \
   || gh release create "$TAG" --title "MacGameVideoFix $VERSION" --notes "See the commit for what changed." >/dev/null \
   || die "could not create the release"
 gh release upload "$TAG" "$ZIP" --clobber >/dev/null || die "could not upload the app"
-say "$TAG published with MacGameVideoFix-$VERSION.zip attached"
+gh release upload "$TAG" "$BUNDLE" "$BUNDLE.sha256" --clobber >/dev/null \
+  || die "could not upload the fixes bundle"
+say "$TAG published with the app, the fixes bundle and its checksum"
 echo
 say "Write the notes with: gh release edit $TAG --notes-file <file>"
