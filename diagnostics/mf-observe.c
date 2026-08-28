@@ -2642,7 +2642,16 @@ static void note_name(CHAR *slot, LPCWSTR w)
  * open counter goes quiet while the interesting traffic continues. Slots are
  * overwritten when a handle value comes back from the OS, which is what makes
  * reuse safe without hooking CloseHandle. */
-#define HOTFILES 96
+/* Big enough that a burst cannot flush it.
+ *
+ * 96 slots was sized for a game that opens a few dozen files. RONIN opens 805
+ * in a single fifteen-second window and fourteen thousand over a session, so a
+ * 96-slot table is emptied eight times over before the screen even goes black,
+ * and anything opened beforehand is guaranteed to be gone by the time it
+ * matters. No eviction rule fixes that -- three were tried and the first two
+ * reported silence they had made. At 80 bytes a slot this costs 80 KB and the
+ * scan stays linear over something a video stream keeps warm at the front. */
+#define HOTFILES 1024
 static struct { HANDLE h; CHAR name[64]; LONG bytes; LONG seen; } hotfile[HOTFILES];
 static LONG hotfile_next;
 /* Ticks up on every read, so "least recently read" is answerable. */
