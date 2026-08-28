@@ -2643,8 +2643,10 @@ static void note_name(CHAR *slot, LPCWSTR w)
  * overwritten when a handle value comes back from the OS, which is what makes
  * reuse safe without hooking CloseHandle. */
 #define HOTFILES 96
-static struct { HANDLE h; CHAR name[64]; LONG bytes; } hotfile[HOTFILES];
+static struct { HANDLE h; CHAR name[64]; LONG bytes; LONG seen; } hotfile[HOTFILES];
 static LONG hotfile_next;
+/* Ticks up on every read, so "least recently read" is answerable. */
+static LONG hotfile_clock;
 
 static void note_open_handle(HANDLE h, const char *full)
 {
@@ -2674,16 +2676,30 @@ static void note_open_handle(HANDLE h, const char *full)
      *
      * Idle means no bytes since the last report, and report_hot_files zeroes
      * as it reads, so a file being streamed is never idle when this runs. */
+    /* Same handle, then an empty slot, then the one read longest ago.
+     *
+     * Two eviction rules have already been wrong here and both reported a
+     * silence they created. Round robin recycled a slot every few seconds
+     * against fourteen thousand opens, so the archive being streamed was
+     * evicted mid-stream. Preferring slots with zero bytes looked like the fix
+     * and was not: report_hot_files zeroes every counter as it reads, so a
+     * moment after each report every slot is "idle" and the file being read is
+     * as evictable as anything else. Only a timestamp survives the report,
+     * which is why there is a separate clock. */
     for (i = 0; i < HOTFILES; i++)
         if (hotfile[i].h == h) { slot = i; goto fill; }
     for (i = 0; i < HOTFILES; i++)
         if (hotfile[i].h == NULL) { slot = i; goto fill; }
-    for (i = 0; i < HOTFILES; i++)
-        if (hotfile[i].bytes == 0) { slot = i; goto fill; }
-    slot = InterlockedIncrement(&hotfile_next) % HOTFILES;
+    {
+        LONG oldest = 0;
+        slot = 0;
+        for (i = 0; i < HOTFILES; i++)
+            if (i == 0 || hotfile[i].seen < oldest) { oldest = hotfile[i].seen; slot = i; }
+    }
 fill:
     if (hotfile[slot].h != h) hotfile[slot].bytes = 0;
     hotfile[slot].h = h;
+    hotfile[slot].seen = InterlockedIncrement(&hotfile_clock);
     lstrcpynA(hotfile[slot].name, tail, sizeof(hotfile[0].name));
 }
 
@@ -2691,7 +2707,12 @@ static void note_read_bytes(HANDLE h, DWORD n)
 {
     LONG i;
     for (i = 0; i < HOTFILES; i++)
-        if (hotfile[i].h == h) { InterlockedExchangeAdd(&hotfile[i].bytes, (LONG)n); return; }
+        if (hotfile[i].h == h)
+        {
+            InterlockedExchangeAdd(&hotfile[i].bytes, (LONG)n);
+            hotfile[i].seen = InterlockedIncrement(&hotfile_clock);
+            return;
+        }
 }
 
 /* The three busiest files since the last call, and it resets as it reads so
