@@ -34,6 +34,7 @@ static const char *process_name(void)
 }
 
 static LONG log_lines;
+static BOOL logf_had_enough;
 
 /* Milliseconds since the probe loaded, in front of every line.
  *
@@ -63,7 +64,33 @@ static void logf_(const char *fmt, ...)
     n += m;
     buf[n] = '\n';
 
-    if (InterlockedIncrement(&log_lines) > 300) return;
+    /* The cap keeps a runaway hook from filling the disk. It used to be 300,
+     * which a title that actually reaches its videos exhausts in minutes --
+     * and it stops without a word, so a truncated log and a dead process read
+     * exactly alike. Higher, and it says when it stops. */
+    {
+        LONG line = InterlockedIncrement(&log_lines);
+        if (line == 3000)
+            logf_had_enough = TRUE;
+        if (line > 3000)
+        {
+            if (line == 3001)
+            {
+                char note[] = "[log full: 3000 lines, nothing further is recorded]\n";
+                HANDLE hh = CreateFileA(LOGFILE, FILE_APPEND_DATA,
+                                        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                                        OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+                if (hh != INVALID_HANDLE_VALUE)
+                {
+                    DWORD w;
+                    SetFilePointer(hh, 0, NULL, FILE_END);
+                    WriteFile(hh, note, sizeof(note) - 1, &w, NULL);
+                    CloseHandle(hh);
+                }
+            }
+            return;
+        }
+    }
 
     h = CreateFileA(LOGFILE, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -1084,6 +1111,98 @@ static HRESULT WINAPI my_MFCreateSourceReaderFromURL(LPCWSTR url, void *attrs, v
     return hr;
 }
 
+/* Watch what the game asks the D3D12 device for.
+ *
+ * Media Foundation has three doors -- MFTEnumEx, the source readers, and
+ * IMFMediaEngine through CoCreateInstance -- and this probe watches all three.
+ * RISE OF THE RONIN opens none of them and plays a cutscene anyway: audio
+ * fine, picture black, eight megabytes a second streaming out of a packed
+ * archive the whole time. There is a fourth door. A D3D12 title can decode
+ * video with ID3D12VideoDevice, obtained by QueryInterface on the device it
+ * already has, and nothing about that touches Media Foundation. Three zeroes
+ * were read here as "this game has no video" when they only meant "not through
+ * those three".
+ *
+ * So: patch QueryInterface on the device and name every interface asked for.
+ * If ID3D12VideoDevice is requested and refused, that is the whole fault.
+ *
+ * Behind a switch because NINJA GAIDEN 4 stalls when this probe patches D3D12
+ * vtables -- see ng4-observe, where every such patch is deliberately left out
+ * for that reason. Asked for by name: put 'd3d12' in C:\mgvf-trace.txt. */
+static BOOL watch_d3d12;
+static HRESULT (WINAPI *real_D3D12CreateDevice)(void *, UINT, const GUID *, void **);
+static HRESULT WINAPI my_D3D12CreateDevice(void *, UINT, const GUID *, void **);
+
+/* The interfaces worth recognising by name. Everything else is printed raw. */
+static const GUID IID_ID3D12VideoDevice_  =
+    { 0x1f052807, 0x0b46, 0x4acc, { 0x8a, 0x89, 0x36, 0x4f, 0x79, 0x37, 0x18, 0xa4 } };
+static const GUID IID_ID3D12VideoDevice1_ =
+    { 0x981611ad, 0xa144, 0x4c83, { 0x98, 0x90, 0xf3, 0x0e, 0x26, 0xd6, 0x58, 0xab } };
+static const GUID IID_ID3D12VideoDevice2_ =
+    { 0xf019ac49, 0xf838, 0x4a95, { 0x9b, 0x17, 0x57, 0x94, 0x37, 0xc8, 0xf5, 0x13 } };
+static const GUID IID_ID3D12VideoDevice3_ =
+    { 0x4243adb4, 0x3a32, 0x4666, { 0x97, 0x3c, 0x0c, 0xcc, 0x56, 0x25, 0xdc, 0x44 } };
+
+static const char *name_of_iid(const GUID *g)
+{
+    if (IsEqualGUID(g, &IID_ID3D12VideoDevice_))  return "ID3D12VideoDevice";
+    if (IsEqualGUID(g, &IID_ID3D12VideoDevice1_)) return "ID3D12VideoDevice1";
+    if (IsEqualGUID(g, &IID_ID3D12VideoDevice2_)) return "ID3D12VideoDevice2";
+    if (IsEqualGUID(g, &IID_ID3D12VideoDevice3_)) return "ID3D12VideoDevice3";
+    return NULL;
+}
+
+static HRESULT (WINAPI *real_dev12_QueryInterface)(void *, const GUID *, void **);
+
+static HRESULT WINAPI my_dev12_QueryInterface(void *self, const GUID *iid, void **out)
+{
+    HRESULT hr = real_dev12_QueryInterface(self, iid, out);
+    if (iid)
+    {
+        const char *known = name_of_iid(iid);
+        if (known)
+        {
+            /* Not capped. This is the answer the whole probe was rebuilt for,
+             * and it is asked once or twice in a session. */
+            logf_("  D3D12 QueryInterface(%s) -> 0x%08lX  %s", known, (unsigned long)hr,
+                  SUCCEEDED(hr) ? "<< GRANTED: the game can decode video on the GPU"
+                                : "<< REFUSED: this is where the cutscene goes black");
+        }
+        else
+        {
+            static LONG said;
+            if (InterlockedIncrement(&said) <= 40)
+                logf_("  D3D12 QueryInterface {%08lX-%04X-%04X-%02X%02X%02X%02X%02X%02X%02X%02X} -> 0x%08lX",
+                      (unsigned long)iid->Data1, iid->Data2, iid->Data3,
+                      iid->Data4[0], iid->Data4[1], iid->Data4[2], iid->Data4[3],
+                      iid->Data4[4], iid->Data4[5], iid->Data4[6], iid->Data4[7],
+                      (unsigned long)hr);
+        }
+    }
+    return hr;
+}
+
+static HRESULT WINAPI my_D3D12CreateDevice(void *adapter, UINT level,
+                                           const GUID *iid, void **device)
+{
+    HRESULT hr = real_D3D12CreateDevice(adapter, level, iid, device);
+    logf_("D3D12CreateDevice(featureLevel=0x%lX) -> 0x%08lX", (unsigned long)level,
+          (unsigned long)hr);
+    if (SUCCEEDED(hr) && device && *device && watch_d3d12)
+    {
+        static LONG done;
+        if (InterlockedIncrement(&done) == 1)
+        {
+            void *was = NULL;
+            if (patch_slot("d3d12 QueryInterface", *device, 0,
+                           (void *)my_dev12_QueryInterface, &was))
+                real_dev12_QueryInterface =
+                    (HRESULT (WINAPI *)(void *, const GUID *, void **))was;
+        }
+    }
+    return hr;
+}
+
 /* Delay-loaded imports are resolved through GetProcAddress, so this is where
  * the hooks actually land for this game. */
 static FARPROC (WINAPI *real_GetProcAddress)(HMODULE, LPCSTR);
@@ -1105,6 +1224,7 @@ static FARPROC WINAPI my_GetProcAddress(HMODULE module, LPCSTR name)
     SWAP(MFCreateSourceReaderFromByteStream)
     SWAP(MFCreateSourceReaderFromURL)
     SWAP(MFCreateDXGIDeviceManager)
+    SWAP(D3D12CreateDevice)
 #undef SWAP
 
     /* Name every Media Foundation entry the title resolves, hooked or not.
@@ -1128,9 +1248,18 @@ static FARPROC WINAPI my_GetProcAddress(HMODULE module, LPCSTR name)
     return proc;
 }
 
-static void *hook_import(const char *dll, const char *func, void *replacement)
+/* Patch an import in a named module, not only in the executable.
+ *
+ * The executable's table is the right place when the executable is the caller.
+ * RISE OF THE RONIN never calls D3D12CreateDevice itself: sl.interposer.dll
+ * does, and that DLL imports neither d3d12 nor anything else useful -- it
+ * carries LoadLibrary and GetProcAddress and resolves the world by hand. A
+ * hook on the executable's table watched a road nobody drives on, and reported
+ * no traffic, which is the third time in this file that a zero has been read
+ * as an answer when it was a blind spot. */
+static void *hook_import_mod(HMODULE base, const char *dll, const char *func,
+                             void *replacement)
 {
-    HMODULE base = GetModuleHandleA(NULL);
     IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;
     IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)((BYTE *)base + dos->e_lfanew);
     IMAGE_DATA_DIRECTORY *dir = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
@@ -1167,6 +1296,13 @@ static void *hook_import(const char *dll, const char *func, void *replacement)
     }
     return original;
 }
+
+/* The executable's own table, which is what almost every hook wants. */
+static void *hook_import(const char *dll, const char *func, void *replacement)
+{
+    return hook_import_mod(GetModuleHandleA(NULL), dll, func, replacement);
+}
+
 
 
 /* Watch the D3D9 side, where this game is understood to stop.
@@ -2348,6 +2484,88 @@ static void note_name(CHAR *slot, LPCWSTR w)
     lstrcpynA(slot, tmp, MAX_PATH);
 }
 
+/* Which file the bytes are actually coming from.
+ *
+ * The read counter says how much is being read and never says from where, and
+ * that gap cost a wrong conclusion on RISE OF THE RONIN: a steady 287 KB/s
+ * during a black screen was written off as "the idle rate" because the menu
+ * showed the same figure -- when two and a bit megabits a second is also
+ * exactly what a video stream looks like, and the menu has an animated
+ * background. A rate with no name attached cannot settle that.
+ *
+ * Handles are the key because a game that streams from a packed archive opens
+ * it once and then reads for minutes without opening anything again, so the
+ * open counter goes quiet while the interesting traffic continues. Slots are
+ * overwritten when a handle value comes back from the OS, which is what makes
+ * reuse safe without hooking CloseHandle. */
+#define HOTFILES 96
+static struct { HANDLE h; CHAR name[64]; LONG bytes; } hotfile[HOTFILES];
+static LONG hotfile_next;
+
+static void note_open_handle(HANDLE h, const char *full)
+{
+    const char *tail;
+    LONG i, slot;
+    if (h == INVALID_HANDLE_VALUE || !full || !full[0]) return;
+
+    /* The tail is what identifies it: these paths are long and the leaf is the
+     * only part that differs. */
+    tail = full;
+    {
+        const char *p;
+        for (p = full; *p; p++)
+            if (*p == '\\' || *p == '/') tail = p + 1;
+    }
+
+    for (i = 0; i < HOTFILES; i++)
+        if (hotfile[i].h == h) { slot = i; goto fill; }
+    slot = InterlockedIncrement(&hotfile_next) % HOTFILES;
+fill:
+    hotfile[slot].h = h;
+    hotfile[slot].bytes = 0;
+    lstrcpynA(hotfile[slot].name, tail, sizeof(hotfile[0].name));
+}
+
+static void note_read_bytes(HANDLE h, DWORD n)
+{
+    LONG i;
+    for (i = 0; i < HOTFILES; i++)
+        if (hotfile[i].h == h) { InterlockedExchangeAdd(&hotfile[i].bytes, (LONG)n); return; }
+}
+
+/* The three busiest files since the last call, and it resets as it reads so
+ * every report covers only its own window. */
+static void report_hot_files(void)
+{
+    LONG best[3] = {0, 0, 0};
+    int  who[3]  = {-1, -1, -1};
+    LONG i;
+    int  k, j;
+
+    for (i = 0; i < HOTFILES; i++)
+    {
+        LONG b = InterlockedExchange(&hotfile[i].bytes, 0);
+        if (b <= 0) continue;
+        for (k = 0; k < 3; k++)
+            if (b > best[k])
+            {
+                for (j = 2; j > k; j--) { best[j] = best[j-1]; who[j] = who[j-1]; }
+                best[k] = b; who[k] = (int)i;
+                break;
+            }
+    }
+    if (who[0] < 0)
+    {
+        logf_("      reading from: nothing");
+        return;
+    }
+    logf_("      reading from: %s %ld KB%s%s%s%s%s",
+          hotfile[who[0]].name, (long)(best[0] / 1024),
+          who[1] >= 0 ? " | " : "", who[1] >= 0 ? hotfile[who[1]].name : "",
+          who[1] >= 0 ? " " : "",
+          who[2] >= 0 ? "| " : "", who[2] >= 0 ? hotfile[who[2]].name : "");
+}
+
 static HANDLE WINAPI my_CreateFileW(LPCWSTR name, DWORD access, DWORD share, void *sa,
                                     DWORD disp, DWORD flags, HANDLE tmpl)
 {
@@ -2384,6 +2602,7 @@ static HANDLE WINAPI my_CreateFileW(LPCWSTR name, DWORD access, DWORD share, voi
         InterlockedIncrement(&opens_in);
         h = real_CreateFileW(name, access, share, sa, disp, flags, tmpl);
         InterlockedIncrement(&opens_out);
+        note_open_handle(h, last_file);
         return h;
     }
 }
@@ -2531,6 +2750,7 @@ static BOOL WINAPI my_ReadFile(HANDLE h, LPVOID buf, DWORD n, LPDWORD got, LPVOI
     InterlockedIncrement(&reads_in);
     r = real_ReadFile(h, buf, n, got, ov);
     InterlockedIncrement(&reads_out);
+    if (r) note_read_bytes(h, got ? *got : n);
     return r;
 }
 
@@ -2709,6 +2929,46 @@ static DWORD WINAPI watchdog(LPVOID unused)
         Sleep(5000);
         ticks++;
 
+        /* Streamline loads a second after we arm, and resolves D3D12 by hand.
+         *
+         * Retried from here because there is no load event we can wait on, and
+         * the flag is set BEFORE the patch rather than after: patching an
+         * import twice makes our own function the "original" it saves, and the
+         * second call recurses until the stack is gone. Once attempted, never
+         * again, whether it took or not. */
+        if (watch_d3d12)
+        {
+            static LONG tried_common, tried_interposer;
+            HMODULE m;
+            void *was;
+
+            if (!real_D3D12CreateDevice && !tried_common
+                && (m = GetModuleHandleA("sl.common.dll")) != NULL)
+            {
+                tried_common = 1;
+                was = hook_import_mod(m, "d3d12.dll", "D3D12CreateDevice",
+                                      (void *)my_D3D12CreateDevice);
+                if (was)
+                {
+                    *(void **)&real_D3D12CreateDevice = was;
+                    logf_("hooked D3D12CreateDevice inside sl.common.dll");
+                }
+                else
+                    logf_("sl.common.dll is loaded but does not bind D3D12CreateDevice");
+            }
+            if (!tried_interposer && (m = GetModuleHandleA("sl.interposer.dll")) != NULL)
+            {
+                tried_interposer = 1;
+                if (hook_import_mod(m, "KERNEL32.dll", "GetProcAddress",
+                                    (void *)my_GetProcAddress))
+                    logf_("hooked GetProcAddress inside sl.interposer.dll -- "
+                          "watching for D3D12CreateDevice");
+                else
+                    logf_("sl.interposer.dll is loaded but its GetProcAddress "
+                          "could not be patched");
+            }
+        }
+
         /* The heartbeat.
          *
          * These counters used to print only inside the quiet branch below, so
@@ -2740,6 +3000,7 @@ static DWORD WINAPI watchdog(LPVOID unused)
                   "opens %ld, reads %ld, files %ld",
                   (long)ticks * 5, (long)d_sleep, (long)d_pollw,
                   (long)d_opens, (long)d_reads, (long)d_files);
+            report_hot_files();
             logf_("      in flight now -- infinite waits %ld, WaitEx %ld, condvar %ld, "
                   "WaitOnAddress %ld, reads %ld, opens %ld",
                   (long)(waits_in - waits_out), (long)(waitex_in - waitex_out),
@@ -2820,6 +3081,7 @@ static void arm_startup_trace(void)
         if (strstr(buf, "nonvapi")) refuse_nvapi = TRUE;
         if (strstr(buf, "ownreg")) own_registry = TRUE;
         if (strstr(buf, "magenta")) paint_the_border = TRUE;
+        if (strstr(buf, "d3d12")) watch_d3d12 = TRUE;
     }
     CloseHandle(f);
     trace_startup = TRUE;
@@ -2963,7 +3225,7 @@ static DWORD WINAPI worker(LPVOID unused)
         }
         logf_("import table: %d of %d Media Foundation and D3D9 entries hooked "
               "(0 here means this game resolves them some other way)",
-              got, (int)(sizeof(hooks) / sizeof(hooks[0])) + 2);
+              got, (int)(sizeof(hooks) / sizeof(hooks[0])) + 3);
     }
 
     logf_("---- write-path hooks %s | painting %s ----",
