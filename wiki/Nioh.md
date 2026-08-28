@@ -11,7 +11,37 @@ bridge does.
 | Symptom | `Failure to play movie. (RTM_ID_EV0001)`, then a crash |
 | Fix | Stage the WMV3 decoder, then hand the game a share handle that exists |
 | Backend | **DXMT only.** The sidecar needs `GetSharedHandle`, `E_NOTIMPL` under D3DMetal |
-| CrossOver | `crossover-preview-arm64-20260821`. Not tried on 26.3 |
+| CrossOver | `crossover-preview-arm64-20260821`, and winevideo 0.5 on 26.3 (`cxoffice-26.3.0rc2`) |
+
+## Verified on 26.3, and what the failure was not
+
+27 Aug 2026, winevideo 0.5 on `cxoffice-26.3.0rc2`, bottle backend `dxmt`, with
+the shipped bridge and nothing else: the cutscene plays, picture and all. The
+bridge does one thing and the log says so —
+
+    CreateRenderTarget(1920x1080 fmt=21, SHARED requested) -> 0x00000000, handle 0000000040000002
+
+— one shared render target, a handle that exists, and no StretchRect afterwards
+because the frames go up through the d3d9 bridge itself.
+
+A day was spent on this title in a different engine, where it dies in seconds,
+and none of it was the fix. What kills it there is Steam:
+
+    src\common\pipes.cpp (879) : CClientPipe::BWriteAndReadResult: BWrite failed
+    src\common\pipes.cpp (879) : Fatal assert; application exiting
+
+Four runs, always the same, and always before any call to the bridge — no
+CreateTexture, no CreateOffscreen, no StretchRect. Where it works, the same
+moment reads `Received stats and achievements from Steam` instead. The pipe is
+the whole difference, and the two candidates for why are that engine's bottle
+running `d3dmetal` where this one runs `dxmt` — this page has always said DXMT
+only, because `GetSharedHandle` returns `E_NOTIMPL` under D3DMetal — and the
+health of that particular Steam.
+
+Also measured and worth deleting from anyone's mental model: the two levers this
+title is listed as needing, `BEAST_FORCE_NV12` and `BEAST_REFUSE_D3D_MANAGER`,
+never fire. `MFCreateDXGIDeviceManager` is not called once in any run. That row
+was inherited from Persona 5 Strikers rather than measured here.
 
 ## Two faults, one behind the other
 
