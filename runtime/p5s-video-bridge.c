@@ -2312,6 +2312,42 @@ static LONG CALLBACK note_exception(EXCEPTION_POINTERS *info)
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
+/* A real yield now and then, for a title Steam gives up on.
+ *
+ * Nioh's last words are not its own:
+ *
+ *     src\common\pipes.cpp (879) : CClientPipe::BWriteAndReadResult: BWrite failed
+ *     src\common\pipes.cpp (879) : Fatal assert; application exiting
+ *
+ * That is Steam's client pipe breaking and the title killing itself over it --
+ * the same ending METAL GEAR SOLID 4 had, one line up in the same file, and
+ * there the cause was a busy-wait that starved everything else including the
+ * pipe. Four and a half million Sleep(0) calls, and turning every sixty-fourth
+ * into a real Sleep(1) took the spin count down by a factor of a hundred and
+ * twenty-five.
+ *
+ * Whether Nioh spins the same way is not yet measured, which is why this counts
+ * as well as yields and says so on the way out. Off unless asked for: 'yield' in
+ * C:\mgvf-p5s.txt, with an optional divisor after it. */
+static LONG spins_seen, spins_yielded;
+static LONG yield_every;          /* 0 = off */
+static void (WINAPI *real_Sleep)(DWORD);
+
+static void WINAPI my_Sleep(DWORD ms)
+{
+    if (ms == 0)
+    {
+        LONG n = InterlockedIncrement(&spins_seen);
+        if (yield_every > 0 && (n % yield_every) == 0)
+        {
+            InterlockedIncrement(&spins_yielded);
+            real_Sleep(1);
+            return;
+        }
+    }
+    real_Sleep(ms);
+}
+
 static DWORD WINAPI worker(LPVOID unused)
 {
     (void)unused;
@@ -2361,6 +2397,14 @@ static DWORD WINAPI worker(LPVOID unused)
              * and a stray "refuse" in the same file. */
             if (strstr(buf, "norefuse")) refuse_d3d_manager = FALSE;
             if (strstr(buf, "nonv12"))   restore_nv12 = FALSE;
+            if (strstr(buf, "yield"))
+            {
+                const char *y = strstr(buf, "yield") + 5;
+                int n = 0;
+                while (*y == ' ' || *y == '=') y++;
+                while (*y >= '0' && *y <= '9') { n = n * 10 + (*y - '0'); y++; }
+                yield_every = (n > 0 && n < 100000) ? n : 64;
+            }
             logf_("switches from C:\\mgvf-p5s.txt read");
         }
     }
@@ -2411,6 +2455,18 @@ static DWORD WINAPI worker(LPVOID unused)
     logf_("---- write-path hooks %s | painting %s ----",
           watch_write_path ? "ON" : "off",
           "the real frames");
+    if (yield_every > 0)
+    {
+        void *was = hook_import("kernel32.dll", "Sleep", (void *)my_Sleep);
+        if (was)
+        {
+            real_Sleep = (void (WINAPI *)(DWORD))was;
+            logf_("Sleep hooked -- every %ld'th Sleep(0) becomes a real yield",
+                  (long)yield_every);
+        }
+        else
+            logf_("Sleep is not in this game's import table -- nothing to yield");
+    }
     logf_("---- armed: D3D manager %s from the MFT | NV12 relabel %s | "
           "MFCreateDXGIDeviceManager %s ----",
           withhold_d3d_from_mft ? "WITHHELD" : "passed",
@@ -2422,6 +2478,8 @@ static DWORD WINAPI worker(LPVOID unused)
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
 {
     (void)reserved;
+    if (reason == DLL_PROCESS_DETACH && real_Sleep)
+        logf_("%ld spins, %ld of them yielded for real", (long)spins_seen, (long)spins_yielded);
     if (reason == DLL_PROCESS_ATTACH)
     {
         DisableThreadLibraryCalls(inst);

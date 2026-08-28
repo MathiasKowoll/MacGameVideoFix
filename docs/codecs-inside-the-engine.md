@@ -130,3 +130,43 @@ binary. That was tried -- a check that separated winevideo's build from stock
 across five engines -- and this project's own four-patch build carries none of
 those strings and plays the title anyway. Correlation, not mechanism. The check
 was withdrawn. What answers the question is running the titles.
+
+## The d3d9 video bridge is two patches, and we had one
+
+Nioh's page says its repair is "hand the game a share handle that exists". That
+comes from winevideo's patch set, and it is in two halves:
+
+    0008-d3d9-dxmt-video-bridge-handle.patch    the surface, and its shared handle
+    0009-d3d9-dxmt-video-bridge-upload.patch    the pixels, and a query to wait on
+
+0008 gives a d3d9 surface an ID3D11Device, context and texture, and a handle that
+can be shared. 0009 adds `dxmt_video_map_data`, `dxmt_video_map_pitch` and an
+`ID3D11Query` -- it is the half that actually uploads the decoded frame and waits
+for the upload to finish. With only 0008, a game gets a valid handle to a surface
+nothing ever writes to.
+
+`built-for.json` records `patches 0002 0003 0006 0008`, which reads as though we
+had that first half. We did not: `scripts/build-winegstreamer.sh` takes its
+patches from `winevideo Patcher.app/.../source-patches/0.5.0`, a different set
+with different numbering, so its 0008 is some other patch entirely. The number in
+that file is not a cross-reference to this repository's copy of winevideo, and
+reading it as one is how an afternoon gets spent.
+
+Both applied cleanly to wine-11.0-8726 on 27 Aug 2026 and d3d9.dll builds with
+`make dlls/d3d9/all` -- with llvm-mingw first on PATH, because the tree is
+configured for clang and a real x86_64-w64-mingw32-gcc rejects `-fms-hotpatch`
+and `-ffp-exception-behavior=maytrap` before it compiles a line. The result is
+1.5 MB against winevideo's 294 KB, which is `-Wl,-debug:dwarf` and not more code.
+
+It did not fix Nioh, and that is worth recording too: with the complete bridge in
+the engine the title still dies with zero calls to it -- no CreateTexture, no
+CreateOffscreen, no StretchRect. It never reaches video. What kills it is
+Steam's client pipe:
+
+    src\common\pipes.cpp (879) : CClientPipe::BWriteAndReadResult: BWrite failed
+    src\common\pipes.cpp (879) : Fatal assert; application exiting
+
+Four runs, always the same. Note the verb: MGS4 fails to *read* that pipe because
+it is too busy to answer, and a real yield fixed it. Nioh fails to *write*, which
+is what a pipe already closed at the other end looks like -- so the two are not
+the same fault wearing the same message.
