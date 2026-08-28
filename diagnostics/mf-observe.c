@@ -1244,24 +1244,44 @@ static const char *dxgi_format_note(UINT f)
 
 static HRESULT (WINAPI *real_create_committed)(void *, const void *, UINT,
         const void *, UINT, const void *, const GUID *, void **);
+static HRESULT (WINAPI *real_create_placed)(void *, void *, UINT64,
+        const void *, UINT, const void *, const GUID *, void **);
+
+/* The shared body: both entry points carry a D3D12_RESOURCE_DESC and differ
+ * only in where it sits in the argument list. */
+static void note_resource_shape(const char *how, const void *desc, HRESULT hr)
+{
+    const char *d = (const char *)desc;
+    UINT w, h, fmt;
+    if (!desc) return;
+    w   = (UINT)(*(const UINT64 *)(d + 16));
+    h   = *(const UINT *)(d + 24);
+    fmt = *(const UINT *)(d + 32);
+    if (w >= 640 && h >= 360 && shape_is_new(12, w, h, fmt))
+        logf_("  D3D12 texture %ux%u format=%u via %s -> 0x%08lX%s",
+              w, h, fmt, how, (unsigned long)hr, dxgi_format_note(fmt));
+}
 
 static HRESULT WINAPI my_create_committed(void *self, const void *heap, UINT heap_flags,
         const void *desc, UINT state, const void *clear, const GUID *iid, void **out)
 {
+    /* D3D12_RESOURCE_DESC: Width is a UINT64 at +16, Height a UINT at +24,
+     * Format a UINT at +32. Offsets taken from the header, as this project's
+     * own rule requires, not guessed from a struct that looks right. */
     HRESULT hr = real_create_committed(self, heap, heap_flags, desc, state, clear, iid, out);
-    if (desc)
-    {
-        /* D3D12_RESOURCE_DESC: Width is a UINT64 at +16, Height a UINT at +24,
-         * Format a UINT at +32. Offsets taken from the header, as this project's
-         * own rule requires, not guessed from a struct that looks right. */
-        const char *d = (const char *)desc;
-        UINT w   = (UINT)(*(const UINT64 *)(d + 16));
-        UINT h   = *(const UINT *)(d + 24);
-        UINT fmt = *(const UINT *)(d + 32);
-        if (w >= 640 && h >= 360 && shape_is_new(12, w, h, fmt))
-            logf_("  D3D12 texture %ux%u format=%u -> 0x%08lX%s",
-                  w, h, fmt, (unsigned long)hr, dxgi_format_note(fmt));
-    }
+    note_resource_shape("committed", desc, hr);
+    return hr;
+}
+
+/* Slot 29. A modern renderer reserves a few large heaps and places resources
+ * inside them, so almost nothing goes through CreateCommittedResource and a
+ * census that watches only slot 27 reports no textures at all in a game
+ * drawing at 2048x1152 -- which is what happened. */
+static HRESULT WINAPI my_create_placed(void *self, void *heap, UINT64 offset,
+        const void *desc, UINT state, const void *clear, const GUID *iid, void **out)
+{
+    HRESULT hr = real_create_placed(self, heap, offset, desc, state, clear, iid, out);
+    note_resource_shape("placed", desc, hr);
     return hr;
 }
 
@@ -1296,17 +1316,31 @@ static HRESULT WINAPI my_D3D12CreateDevice(void *adapter, UINT level,
         for (i = 0; i < n && i < 8; i++) if (armed[i] == vt) already = TRUE;
         if (!already && n < 8)
         {
-            void *was = NULL;
+            /* One saved pointer per slot, and never one shared between two.
+             *
+             * patch_slot opens with `if (*saved) return TRUE;` so that a shared
+             * vtable is patched once. Passing the same variable to two slots
+             * therefore made the second call report success without patching
+             * anything -- and hand back the FIRST slot's original as though it
+             * were the second's. The census silently never installed, and
+             * real_create_committed pointed at QueryInterface; had anything
+             * called it the game would have died on the spot. */
+            static void *was_qi, *was_cc, *was_cp;
             armed[n] = vt; armed_n = n + 1;
             if (patch_slot("d3d12 QueryInterface", *device, 0,
-                           (void *)my_dev12_QueryInterface, &was))
+                           (void *)my_dev12_QueryInterface, &was_qi))
                 real_dev12_QueryInterface =
-                    (HRESULT (WINAPI *)(void *, const GUID *, void **))was;
+                    (HRESULT (WINAPI *)(void *, const GUID *, void **))was_qi;
             if (patch_slot("d3d12 CreateCommittedResource", *device, 27,
-                           (void *)my_create_committed, &was))
+                           (void *)my_create_committed, &was_cc))
                 real_create_committed =
                     (HRESULT (WINAPI *)(void *, const void *, UINT, const void *,
-                                        UINT, const void *, const GUID *, void **))was;
+                                        UINT, const void *, const GUID *, void **))was_cc;
+            if (patch_slot("d3d12 CreatePlacedResource", *device, 29,
+                           (void *)my_create_placed, &was_cp))
+                real_create_placed =
+                    (HRESULT (WINAPI *)(void *, void *, UINT64, const void *,
+                                        UINT, const void *, const GUID *, void **))was_cp;
             logf_("watching D3D12 device %ld", (long)(n + 1));
         }
     }
@@ -2547,7 +2581,7 @@ static LONG waits_in, waits_out, files_opened, libs_loaded;
 /* Entered-and-returned pairs, so a call that never comes back is visible.
  * A counter that only counts entries cannot tell 'the last thing it did'
  * from 'the thing it is still doing', and those are different bugs. */
-static LONG opens_in, opens_out, reads_in, reads_out;
+static LONG opens_in, opens_out, reads_in, reads_out, reads_empty, read_bytes;
 /* The other ways a thread can stop.
  *
  * Measured 27 Aug on METAL GEAR SOLID 4: all file I/O complete, and the count
@@ -2906,7 +2940,18 @@ static BOOL WINAPI my_ReadFile(HANDLE h, LPVOID buf, DWORD n, LPDWORD got, LPVOI
     InterlockedIncrement(&reads_in);
     r = real_ReadFile(h, buf, n, got, ov);
     InterlockedIncrement(&reads_out);
-    if (r) note_read_bytes(h, got ? *got : n);
+    if (r)
+    {
+        DWORD n_got = got ? *got : n;
+        /* A read that returns nothing is not the same as no read. During
+         * RONIN's black screen the heartbeat showed two thousand reads a
+         * window and no bytes attributed to any file, which read as an
+         * accounting hole; counting the empty ones separately says instead
+         * that the game is polling something that has no data for it. */
+        if (n_got == 0) InterlockedIncrement(&reads_empty);
+        else InterlockedExchangeAdd(&read_bytes, (LONG)(n_got / 1024));
+        note_read_bytes(h, n_got);
+    }
     return r;
 }
 
@@ -3121,9 +3166,11 @@ static DWORD WINAPI watchdog(LPVOID unused)
         if (ticks % 3 == 0)
         {
             logf_("PULSE at %ld s -- in the last 15 s: Sleep %ld, timed waits %ld, "
-                  "opens %ld, reads %ld, files %ld",
+                  "opens %ld, reads %ld (%ld empty, %ld KB), files %ld",
                   (long)ticks * 5, (long)d_sleep, (long)d_pollw,
-                  (long)d_opens, (long)d_reads, (long)d_files);
+                  (long)d_opens, (long)d_reads,
+                  (long)InterlockedExchange(&reads_empty, 0),
+                  (long)InterlockedExchange(&read_bytes, 0), (long)d_files);
             report_hot_files();
             logf_("      in flight now -- infinite waits %ld, WaitEx %ld, condvar %ld, "
                   "WaitOnAddress %ld, reads %ld, opens %ld",
