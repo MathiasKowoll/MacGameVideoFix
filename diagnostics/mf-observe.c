@@ -2699,16 +2699,60 @@ static DWORD WINAPI watchdog(LPVOID unused)
 {
     CHAR seen_file[MAX_PATH] = "", seen_lib[MAX_PATH] = "";
     LONG seen_files = -1, ticks = 0, quiet = 0;
+    LONG prev_files = 0, prev_opens = 0, prev_reads = 0;
+    LONG prev_sleep = 0, prev_pollw = 0;
     (void)unused;
     for (;;)
     {
+        LONG d_files, d_opens, d_reads, d_sleep, d_pollw;
+
         Sleep(5000);
         ticks++;
+
+        /* The heartbeat.
+         *
+         * These counters used to print only inside the quiet branch below, so
+         * they were legible only once the process had already stopped moving.
+         * A game that is busy and wrong -- burning twelve cores at seven frames
+         * a second -- never goes quiet, and nothing was ever reported about it.
+         * Reading no STILL line then says only "not deadlocked"; it says
+         * nothing about where the time goes.
+         *
+         * What separates real work from a spin storm is not the totals but
+         * their rate, so every third tick says what moved since the last one.
+         * Deltas over the window, not per second: a spin storm shows up in the
+         * millions and would be legible either way, but file opens arrive a few
+         * per minute and a per-second figure would round them to nothing. */
+        d_files = files_opened - prev_files;
+        d_opens = opens_in     - prev_opens;
+        d_reads = reads_in     - prev_reads;
+        d_sleep = polls_sleep  - prev_sleep;
+        d_pollw = polls_wait   - prev_pollw;
+        prev_files = files_opened;
+        prev_opens = opens_in;
+        prev_reads = reads_in;
+        prev_sleep = polls_sleep;
+        prev_pollw = polls_wait;
+
+        if (ticks % 3 == 0)
+        {
+            logf_("PULSE at %ld s -- in the last 15 s: Sleep %ld, timed waits %ld, "
+                  "opens %ld, reads %ld, files %ld",
+                  (long)ticks * 5, (long)d_sleep, (long)d_pollw,
+                  (long)d_opens, (long)d_reads, (long)d_files);
+            logf_("      in flight now -- infinite waits %ld, WaitEx %ld, condvar %ld, "
+                  "WaitOnAddress %ld, reads %ld, opens %ld",
+                  (long)(waits_in - waits_out), (long)(waitex_in - waitex_out),
+                  (long)(cond_in - cond_out), (long)(addr_in - addr_out),
+                  (long)(reads_in - reads_out), (long)(opens_in - opens_out));
+        }
+
         if (files_opened == seen_files
             && !lstrcmpA(seen_file, last_file) && !lstrcmpA(seen_lib, last_lib))
         {
             quiet++;
             if (quiet == 2 || quiet == 6 || quiet == 18)
+            {
                 logf_("STILL: nothing new in %ld s. last file '%s'", (long)quiet * 5, last_file);
                 logf_("      opens %ld in / %ld out (%ld in flight), reads %ld in / %ld out "
                       "(%ld in flight, last asked %ld bytes), infinite waits %ld/%ld",
@@ -2723,6 +2767,7 @@ static DWORD WINAPI watchdog(LPVOID unused)
                 logf_("      polling -- timed waits %ld, Sleep %ld  "
                       "(if these climb between reports it is spinning, not deadlocked)",
                       (long)polls_wait, (long)polls_sleep);
+            }
         }
         else
         {

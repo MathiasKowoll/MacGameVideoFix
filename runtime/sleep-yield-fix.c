@@ -40,7 +40,7 @@
 #define LOGFILE "C:\\sleep-yield-fix.log"
 
 static void (WINAPI *real_Sleep)(DWORD);
-static LONG spun, yielded;
+static LONG spun, yielded, slept;
 static LONG sleep_every = 64;
 
 static void logf_(const char *fmt, ...)
@@ -76,7 +76,38 @@ static void WINAPI my_Sleep(DWORD ms)
             return;
         }
     }
+    else InterlockedIncrement(&slept);
     real_Sleep(ms);
+}
+
+/* Says what the lever is doing, while it is doing it.
+ *
+ * The detach message below is the whole report, and it arrives only if the
+ * process exits cleanly. RISE OF THE RONIN spins hard enough that it gets
+ * killed rather than closed, and NIOH did the same: the count was measured
+ * twice and read zero times. So this says it out loud every fifteen seconds.
+ *
+ * Rates, not totals. A divisor is right or wrong by what the spin rate does
+ * after it is applied, and a total cannot show that -- RONIN was measured at
+ * sixteen million Sleep(0) per fifteen seconds before this fix, and the only
+ * question that matters is what that number becomes. */
+static DWORD WINAPI report(LPVOID unused)
+{
+    LONG prev_spun = 0, prev_yield = 0, prev_slept = 0;
+    (void)unused;
+    for (;;)
+    {
+        LONG d_spun, d_yield, d_slept;
+        real_Sleep(15000);
+        d_spun  = spun    - prev_spun;
+        d_yield = yielded - prev_yield;
+        d_slept = slept   - prev_slept;
+        prev_spun = spun; prev_yield = yielded; prev_slept = slept;
+        logf_("[%lu s] last 15 s: Sleep(0) %ld, of them yielded for real %ld, "
+              "Sleep(n) %ld  (total spins %ld)",
+              (unsigned long)(GetTickCount() / 1000),
+              (long)d_spun, (long)d_yield, (long)d_slept, (long)spun);
+    }
 }
 
 /* Patch one imported function in the main executable's import table. */
@@ -148,6 +179,7 @@ static DWORD WINAPI arm(LPVOID unused)
         real_Sleep = (void (WINAPI *)(DWORD))was;
         logf_("Sleep hooked -- every %ld'th Sleep(0) becomes a real yield%s",
               (long)sleep_every, sleep_every ? "" : " (disabled by C:\\mgvf-sleep.txt)");
+        CreateThread(NULL, 0, report, NULL, 0, NULL);
     }
     else
         logf_("Sleep is not in this game's import table -- nothing to do");
@@ -165,6 +197,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
         CreateThread(NULL, 0, arm, NULL, 0, NULL);
     }
     else if (reason == DLL_PROCESS_DETACH && real_Sleep)
-        logf_("%ld spins, %ld of them yielded for real", (long)spun, (long)yielded);
+        logf_("%ld spins, %ld of them yielded for real, %ld sleeps with a duration",
+              (long)spun, (long)yielded, (long)slept);
     return TRUE;
 }
