@@ -1347,6 +1347,40 @@ static HRESULT WINAPI my_D3D12CreateDevice(void *adapter, UINT level,
     return hr;
 }
 
+/* The door before all the others.
+ *
+ * Four Media Foundation entry points were watched here and all four stayed at
+ * zero for RISE OF THE RONIN, which was read as "this game has no Media
+ * Foundation video". It has. GloriousEggroll's proton-ge-custom issue 165,
+ * filed for this exact title, reports the symptom word for word -- "wait for
+ * shaders to compile. It will then play the intro video with audio and a black
+ * screen" -- and names the format: WebM.
+ *
+ * MFCreateFile is what opens the byte stream a source reader is then built on,
+ * and it sits ahead of every entry point this probe was watching. A failure
+ * here is silent downstream: no source, so no topology, so no MFTEnumEx, so
+ * four zeroes that are all true and none of which is the answer. It is in this
+ * game's import table and was never hooked.
+ *
+ * Not capped: a title opens a handful of these per cutscene, and this is the
+ * line the whole search is for. */
+static HRESULT (WINAPI *real_MFCreateFile)(DWORD, DWORD, DWORD, LPCWSTR, void **);
+
+static HRESULT WINAPI my_MFCreateFile(DWORD access, DWORD open, DWORD flags,
+                                      LPCWSTR path, void **stream)
+{
+    HRESULT hr = real_MFCreateFile(access, open, flags, path, stream);
+    CHAR narrow[MAX_PATH];
+    /* note_name is defined further down; this is the same two lines inline. */
+    narrow[0] = 0;
+    if (path) WideCharToMultiByte(CP_ACP, 0, path, -1, narrow, MAX_PATH, NULL, NULL);
+    narrow[MAX_PATH - 1] = 0;
+    logf_("MFCreateFile(\"%s\") -> 0x%08lX  %s", narrow, (unsigned long)hr,
+          SUCCEEDED(hr) ? "<< the byte stream the video is read from"
+                        : "<< FAILED HERE, and everything downstream goes quiet");
+    return hr;
+}
+
 /* Delay-loaded imports are resolved through GetProcAddress, so this is where
  * the hooks actually land for this game. */
 static FARPROC (WINAPI *real_GetProcAddress)(HMODULE, LPCSTR);
@@ -1368,6 +1402,7 @@ static FARPROC WINAPI my_GetProcAddress(HMODULE module, LPCSTR name)
     SWAP(MFCreateSourceReaderFromByteStream)
     SWAP(MFCreateSourceReaderFromURL)
     SWAP(MFCreateDXGIDeviceManager)
+    SWAP(MFCreateFile)
     SWAP(D3D12CreateDevice)
 #undef SWAP
 
@@ -3427,6 +3462,8 @@ static DWORD WINAPI worker(LPVOID unused)
               (void *)my_MFStartup,      (void **)&real_MFStartup },
             { "mfplat.dll",      "MFTEnumEx",
               (void *)my_MFTEnumEx,      (void **)&real_MFTEnumEx },
+            { "mfplat.dll",      "MFCreateFile",
+              (void *)my_MFCreateFile,   (void **)&real_MFCreateFile },
             { "mfreadwrite.dll", "MFCreateSourceReaderFromByteStream",
               (void *)my_MFCreateSourceReaderFromByteStream,
               (void **)&real_MFCreateSourceReaderFromByteStream },
