@@ -1197,6 +1197,74 @@ static HRESULT WINAPI my_dev12_QueryInterface(void *self, const GUID *iid, void 
     return hr;
 }
 
+/* Every distinct texture shape the renderer asks D3D12 for, reported once.
+ *
+ * Lifted from dwo-video-bridge, whose comment explains why shapes and not
+ * calls: a renderer creates thousands of textures and reuses a handful of
+ * shapes, so the first two dozen calls are all interface art and the one that
+ * matters -- the surface the size of the clip -- is created later and never
+ * reaches a log capped by call count.
+ *
+ * This is the evidence that does not require knowing anything about the
+ * decoder. RONIN decodes its cutscene inside its own packed executable: all
+ * four system video paths are measured shut, and the code cannot be read off
+ * disk. But whatever decodes it still has to put the picture somewhere D3D12
+ * can draw from. A video-shaped resource appearing when the black screen
+ * starts says a frame was produced and lost on the way to the screen. None
+ * appearing says the decoder never produced one. Those are the two remaining
+ * explanations and they are indistinguishable from the sofa. */
+static BOOL shape_is_new(UINT tag, UINT w, UINT h, UINT fmt)
+{
+    static struct { UINT tag, w, h, fmt; } seen[96];
+    static LONG count;
+    LONG i, n = count;
+
+    for (i = 0; i < n && i < (LONG)(sizeof(seen) / sizeof(seen[0])); ++i)
+        if (seen[i].tag == tag && seen[i].w == w && seen[i].h == h && seen[i].fmt == fmt)
+            return FALSE;
+    if (n >= (LONG)(sizeof(seen) / sizeof(seen[0]))) return FALSE;
+    seen[n].tag = tag; seen[n].w = w; seen[n].h = h; seen[n].fmt = fmt;
+    count = n + 1;
+    return TRUE;
+}
+
+/* The formats a decoded frame actually arrives in, named. Everything else is
+ * printed as a number, because guessing at a name is worse than a number. */
+static const char *dxgi_format_note(UINT f)
+{
+    switch (f)
+    {
+    case 103: return "  << NV12 -- a decoded video frame";
+    case 104: return "  << P010 -- a decoded 10-bit video frame";
+    case 87:  return "  (BGRA8)";
+    case 28:  return "  (RGBA8)";
+    default:  return "";
+    }
+}
+
+static HRESULT (WINAPI *real_create_committed)(void *, const void *, UINT,
+        const void *, UINT, const void *, const GUID *, void **);
+
+static HRESULT WINAPI my_create_committed(void *self, const void *heap, UINT heap_flags,
+        const void *desc, UINT state, const void *clear, const GUID *iid, void **out)
+{
+    HRESULT hr = real_create_committed(self, heap, heap_flags, desc, state, clear, iid, out);
+    if (desc)
+    {
+        /* D3D12_RESOURCE_DESC: Width is a UINT64 at +16, Height a UINT at +24,
+         * Format a UINT at +32. Offsets taken from the header, as this project's
+         * own rule requires, not guessed from a struct that looks right. */
+        const char *d = (const char *)desc;
+        UINT w   = (UINT)(*(const UINT64 *)(d + 16));
+        UINT h   = *(const UINT *)(d + 24);
+        UINT fmt = *(const UINT *)(d + 32);
+        if (w >= 640 && h >= 360 && shape_is_new(12, w, h, fmt))
+            logf_("  D3D12 texture %ux%u format=%u -> 0x%08lX%s",
+                  w, h, fmt, (unsigned long)hr, dxgi_format_note(fmt));
+    }
+    return hr;
+}
+
 static HRESULT WINAPI my_D3D12CreateDevice(void *adapter, UINT level,
                                            const GUID *iid, void **device)
 {
@@ -1205,14 +1273,41 @@ static HRESULT WINAPI my_D3D12CreateDevice(void *adapter, UINT level,
           (unsigned long)hr);
     if (SUCCEEDED(hr) && device && *device && watch_d3d12)
     {
-        static LONG done;
-        if (InterlockedIncrement(&done) == 1)
+        /* Arm every device, keyed on the vtable rather than the device.
+         *
+         * The once-only guard this replaces would have watched device one and
+         * silently ignored a second -- and dwo-video-bridge and ng4-observe
+         * both still carry that shape. The four negatives banked for RONIN all
+         * rest on having watched the right device, and ng4 records exactly how
+         * that fails: a hook that stopped being installed produced "the game
+         * does not activate" three runs running, when what had happened is
+         * that nobody was watching. An absence in a log is only evidence if
+         * the thing that writes it was running.
+         *
+         * The vtable is the key because it is shared between devices: patching
+         * one twice makes our own function the original it saves, and the next
+         * call recurses until the stack is gone. */
+        static void *armed[8];
+        static LONG armed_n;
+        void *vt = *(void **)*device;
+        LONG i, n = armed_n;
+        BOOL already = FALSE;
+
+        for (i = 0; i < n && i < 8; i++) if (armed[i] == vt) already = TRUE;
+        if (!already && n < 8)
         {
             void *was = NULL;
+            armed[n] = vt; armed_n = n + 1;
             if (patch_slot("d3d12 QueryInterface", *device, 0,
                            (void *)my_dev12_QueryInterface, &was))
                 real_dev12_QueryInterface =
                     (HRESULT (WINAPI *)(void *, const GUID *, void **))was;
+            if (patch_slot("d3d12 CreateCommittedResource", *device, 27,
+                           (void *)my_create_committed, &was))
+                real_create_committed =
+                    (HRESULT (WINAPI *)(void *, const void *, UINT, const void *,
+                                        UINT, const void *, const GUID *, void **))was;
+            logf_("watching D3D12 device %ld", (long)(n + 1));
         }
     }
     return hr;
@@ -2532,12 +2627,29 @@ static void note_open_handle(HANDLE h, const char *full)
             if (*p == '\\' || *p == '/') tail = p + 1;
     }
 
+    /* Take the same handle's slot if it has one, then any idle slot, and only
+     * then recycle.
+     *
+     * A plain round robin over 96 slots was worse than useless here: RONIN
+     * opens fourteen thousand files, so a slot is recycled every few seconds
+     * and the archive it streams from -- opened early, read for minutes -- was
+     * evicted while still being read. The heartbeat then printed "reading
+     * from: nothing" for three minutes straight and it was read as the game
+     * having gone quiet. It had not. An instrument that recycles its own
+     * memory faster than the thing it watches reports silence it manufactured.
+     *
+     * Idle means no bytes since the last report, and report_hot_files zeroes
+     * as it reads, so a file being streamed is never idle when this runs. */
     for (i = 0; i < HOTFILES; i++)
         if (hotfile[i].h == h) { slot = i; goto fill; }
+    for (i = 0; i < HOTFILES; i++)
+        if (hotfile[i].h == NULL) { slot = i; goto fill; }
+    for (i = 0; i < HOTFILES; i++)
+        if (hotfile[i].bytes == 0) { slot = i; goto fill; }
     slot = InterlockedIncrement(&hotfile_next) % HOTFILES;
 fill:
+    if (hotfile[slot].h != h) hotfile[slot].bytes = 0;
     hotfile[slot].h = h;
-    hotfile[slot].bytes = 0;
     lstrcpynA(hotfile[slot].name, tail, sizeof(hotfile[0].name));
 }
 
