@@ -1126,17 +1126,22 @@ static HRESULT WINAPI my_MFCreateSourceReaderFromURL(LPCWSTR url, void *attrs, v
  * So: patch QueryInterface on the device and name every interface asked for.
  * If ID3D12VideoDevice is requested and refused, that is the whole fault.
  *
- * Behind a switch, and the switch is a one-shot diagnostic rather than
- * something to leave armed. NINJA GAIDEN 4 stalls when this probe patches D3D12
+ * Behind a switch because NINJA GAIDEN 4 stalls when this probe patches D3D12
  * vtables -- see ng4-observe, where every such patch is deliberately left out
- * for that reason -- and RISE OF THE RONIN loses its two intro videos while it
- * is on, measured both ways on 2026-08-28: armed, no logos; disarmed, logos
- * back, nothing else changed. Two titles, two different breakages, same cause.
+ * for that reason.
  *
- * It earned its keep in one run: it caught D3D12CreateDevice, patched the
- * device, and recorded that Ronin asks for exactly three interfaces, all
- * granted, none of them a video device. That answered the question. Turn it
- * off once it has.
+ * It was briefly written up here that the same patch cost RISE OF THE RONIN its
+ * two intro videos. That was wrong, and the error is worth keeping: the switch
+ * armed three things at once -- this patch, a hook on GetProcAddress inside
+ * sl.interposer.dll, and one in sl.common.dll -- so turning it off moved three
+ * variables and proved nothing about any of them. With the switch reduced to
+ * this patch alone the videos play and the patch still reports everything. What
+ * cost the videos was hooking inside Streamline, which is an interposer already
+ * proxying the graphics API. A control that moves three things measures none.
+ *
+ * With that settled the reading means what it says: Ronin asks the device for
+ * ID3D12Device1, ID3D12Device5 and one vendor interface, all granted, and never
+ * for a video device -- measured in a run where its video works.
  *
  * Asked for by name: put 'd3d12' in C:\mgvf-trace.txt. */
 static BOOL watch_d3d12;
