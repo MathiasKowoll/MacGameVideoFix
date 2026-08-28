@@ -321,39 +321,38 @@ million — a thirtyfold reduction, measured twice — and moves neither the fra
 rate nor the length of the black screen. Real waste, no benefit. It is not a fix
 for this game and is not shipped as one.
 
-## Not a video fix: METAL GEAR SOLID 4
+## Withdrawn: METAL GEAR SOLID 4
 
-Deliberately absent from the table above. It has no video fault: it plays on
-stock CrossOver with nothing installed, and it opens no `.bk2` and imports no
-Media Foundation before the fault. What the fix repairs is the environment
-RaccoonBot launches it in.
+This title shipped a fix here between 2026-08-27 and 2026-08-28. It has been
+removed from the app, the installers and the release, and the page is kept as a
+record of how it got here.
 
-The title loads its audio banks behind a busy-wait that starves itself under
-Wine. Measured on an M4 Max: four and a half million `Sleep(0)` calls before the
-menu, about fifteen thousand a second, with all file I/O complete and nothing
-advancing. The window renders black at fifty-six frames a second until Steam's
-client pipe times out, and the title kills itself with a fatal assert — which a
-person sees as a crash with a click of audio.
+**The reading was wrong.** The title showed a black window, a click of audio and
+an exit, and the measured explanation was a busy-wait: four and a half million
+`Sleep(0)` calls before the menu, Steam's client pipe timing out, and a fatal
+assert. Turning every sixty-fourth `Sleep(0)` into a real `Sleep(1)` cut that to
+36,160 spins and the title loaded. A control was even run — the fix built to set
+only the environment variable, with the wrappers gone, and the title stopped
+loading again — which seemed to isolate the yield as the cause.
 
-`install-mgs4-fix.sh` proxies `bink2w64.dll`, one level down beside `mgs4.exe`,
-and turns every sixty-fourth `Sleep(0)` into a real `Sleep(1)`. First run with it
-in place:
+**What was actually happening.** RaccoonBot was killing games that hand off from
+their own launcher: the launcher exits once the game is running, that was read as
+the title having finished, and the game went down with it. MGS4 is exactly that
+shape — `Launcher/launcher.exe` starts `MGS4/mgs4.exe`. With the launcher fixed
+on 2026-08-28, MGS4 reaches its menu **with nothing of ours installed at all**.
 
-    36,160 spins, 565 of them yielded for real
+The busy-wait is real and the measurement stands. It was never the fault. The
+control did not catch it because anything that changes the timing — including a
+probe's own overhead — also changes whether a kill lands.
 
-A hundred and twenty-five times fewer, and half a second of real sleeping in
-total. The yields do not pace the game, they let it finish. The divisor is read
-from `C:\mgvf-sleep.txt`, and `0` there disables the fix without uninstalling it,
-which is the honest way to check whether it still does anything on a machine that
-is not this one.
+**What this costs elsewhere.** `sleep-yield-fix.c` stays in the tree with no
+title to its name. It was measured again on RISE OF THE RONIN, where it cuts a
+`Sleep(0)` storm thirtyfold and moves neither the frame rate nor anything the
+player sees. Two titles, no benefit either time.
 
-Loading is still slow: three to four minutes of banks behind a black window. That
-is the title, not the fix.
-
-Ruled out getting there, each costing a launch: the Steam overlay, GStreamer, the
-GStreamer registry shared between two engines, D3DMetal's `nvapi64` — refused, as
-a machine with no NVIDIA card would, and it changed nothing — and the video path
-entirely.
+**The rule that came out of it:** a launcher that kills the game underneath it
+manufactures a defect that looks exactly like the game's own, and every reading
+of "it starts and then dies" taken before 2026-08-28 is suspect until re-run.
 
 ## Adding a row
 

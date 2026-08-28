@@ -28,10 +28,6 @@
 		<data>
 		NioaK7SKc6pJl0ra2bfhMD7StKk=
 		</data>
-		<key>Resources/bink2w64-mgs4.dll</key>
-		<data>
-		GSwfC9ZwoGaX5rVKmMnSkbz2mTQ=
-		</data>
 		<key>Resources/dinput8-kh.dll</key>
 		<data>
 		vV4G+uN8fVDqDeAlEf5EwflS5P4=
@@ -55,10 +51,6 @@
 		<key>Resources/install-kh-bridge.sh</key>
 		<data>
 		q1nED/TuU6QxJplrn/2ThSJHIW8=
-		</data>
-		<key>Resources/install-mgs4-fix.sh</key>
-		<data>
-		HwgzbjGdoKiy/Qk+zqc3OIITSKY=
 		</data>
 		<key>Resources/install-ng4-fix.sh</key>
 		<data>
@@ -165,13 +157,6 @@
 			7qJwxmNDLzhXhEWAFOKIX+5c//vESjxpjAlMjIczxSA=
 			</data>
 		</dict>
-		<key>Resources/bink2w64-mgs4.dll</key>
-		<dict>
-			<key>hash2</key>
-			<data>
-			LOHZIHB2glL4ZrRRr2nWZND8oBF/hSOKvHIthQWhmRk=
-			</data>
-		</dict>
 		<key>Resources/dinput8-kh.dll</key>
 		<dict>
 			<key>hash2</key>
@@ -212,13 +197,6 @@
 			<key>hash2</key>
 			<data>
 			BryVvlCmxPsg5+PVfE6PJMuJ+YK7wR+Y8e++/IbKjNE=
-			</data>
-		</dict>
-		<key>Resources/install-mgs4-fix.sh</key>
-		<dict>
-			<key>hash2</key>
-			<data>
-			Ra3E7w5Br0dgMVZR2XWkuiPFMtSkbFvoGrPKxFghInQ=
 			</data>
 		</dict>
 		<key>Resources/install-ng4-fix.sh</key>

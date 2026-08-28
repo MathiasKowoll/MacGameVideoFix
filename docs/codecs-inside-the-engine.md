@@ -166,7 +166,12 @@ Steam's client pipe:
     src\common\pipes.cpp (879) : CClientPipe::BWriteAndReadResult: BWrite failed
     src\common\pipes.cpp (879) : Fatal assert; application exiting
 
-Four runs, always the same. Note the verb: MGS4 fails to *read* that pipe because
-it is too busy to answer, and a real yield fixed it. Nioh fails to *write*, which
-is what a pipe already closed at the other end looks like -- so the two are not
-the same fault wearing the same message.
+Four runs, always the same -- and the reading of them was wrong. It was written
+up here that MGS4 fails to *read* that pipe because it is too busy to answer,
+and that a real yield fixed it. It does not, and it did not. The title was being
+killed by RaccoonBot, which took down games that hand off from their own
+launcher; with that fixed, MGS4 reaches its menu with nothing of ours installed
+at all. The busy-wait was real and measured, and it was never the fault.
+
+Nioh fails to *write*, which is what a pipe already closed at the other end
+looks like. Two different messages, and neither of them was the yield.

@@ -25,14 +25,6 @@ than the translation layer's: it keeps 16:9 resolutions and nothing else, and a
 laptop display has none. They install the same way: open the app, pick the game
 from the list, drop its folder on it, press Apply.
 
-One more title ships here without appearing above. **METAL GEAR SOLID 4** plays
-on stock CrossOver with nothing installed and has no video fault at all — what
-its fix repairs is the environment a launcher puts it in, where it starves
-itself on a busy-wait until Steam drops the connection and the game kills
-itself. It has an installer and is in the app.
-[Games](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Games#not-a-video-fix-metal-gear-solid-4)
-says what it does and what was ruled out getting there.
-
 <!-- readme-games:begin -->
 
 | Game | Symptom | CrossOver |

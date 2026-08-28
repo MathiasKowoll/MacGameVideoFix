@@ -29,8 +29,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleName</key><string>MacGameVideoFix</string>
   <key>CFBundleDisplayName</key><string>MacGameVideoFix</string>
   <key>CFBundleIdentifier</key><string>io.github.mortalshell2macfix</string>
-  <key>CFBundleVersion</key><string>4.10.0</string>
-  <key>CFBundleShortVersionString</key><string>4.10.0</string>
+  <key>CFBundleVersion</key><string>4.11.0</string>
+  <key>CFBundleShortVersionString</key><string>4.11.0</string>
   <key>CFBundleExecutable</key><string>MacGameVideoFix</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
@@ -66,7 +66,6 @@ cp "$ROOT/runtime/install-nioh-bridge.sh" "$ROOT/runtime/install-nioh3-bridge.sh
    "$ROOT/runtime/install-tmnt-fix.sh" \
    "$ROOT/runtime/install-tormented-fix.sh" \
    "$ROOT/runtime/install-ng4-fix.sh" \
-    "$ROOT/runtime/install-mgs4-fix.sh" "$ROOT/runtime/bink2w64-mgs4.dll" \
     "$ROOT/runtime/install-resonance-fix.sh" "$ROOT/runtime/NvCloth_x64-resonance.dll" "$RES/"
 cp "$ROOT/runtime/stage-codecs.sh" "$RES/"
 chmod +x "$RES/transcode-movies.sh" "$RES/pak-hide-videos.py" \
@@ -74,7 +73,7 @@ chmod +x "$RES/transcode-movies.sh" "$RES/pak-hide-videos.py" \
          "$RES/install-nioh3-bridge.sh" "$RES/install-nier-bridge.sh" \
          "$RES/install-kh-bridge.sh" "$RES/install-tmnt-fix.sh" \
          "$RES/install-tormented-fix.sh" "$RES/install-ng4-fix.sh" \
-    "$RES/install-mgs4-fix.sh" "$RES/install-resonance-fix.sh"
+    "$RES/install-resonance-fix.sh"
 
 # The runtime patch: the installer resolves the proxy and the PE reader next to
 # itself, so all three have to land in the same folder.
