@@ -2654,45 +2654,19 @@ static BOOL name_has_nvapi(LPCSTR s)
  * one event that is exactly on time. */
 static void arm_streamline_if_it_is(const char *libname)
 {
-    static LONG armed_interposer, armed_common;
-    const char *p;
-    HMODULE m;
-
-    if (!watch_d3d12 || !libname) return;
-
-    /* Tail only: these arrive as full Z:\... paths. */
-    p = libname;
-    {
-        const char *q;
-        for (q = libname; *q; q++)
-            if (*q == '\\' || *q == '/') p = q + 1;
-    }
-
-    if (lstrcmpiA(p, "sl.interposer.dll") == 0 && !armed_interposer)
-    {
-        armed_interposer = 1;
-        if ((m = GetModuleHandleA("sl.interposer.dll")) != NULL
-            && hook_import_mod(m, "KERNEL32.dll", "GetProcAddress",
-                               (void *)my_GetProcAddress))
-            logf_("armed sl.interposer.dll as it loaded");
-        else
-            armed_interposer = 0;   /* not mapped yet: let the watchdog retry */
-    }
-    else if (lstrcmpiA(p, "sl.common.dll") == 0 && !armed_common)
-    {
-        armed_common = 1;
-        if ((m = GetModuleHandleA("sl.common.dll")) != NULL)
-        {
-            void *was = hook_import_mod(m, "d3d12.dll", "D3D12CreateDevice",
-                                        (void *)my_D3D12CreateDevice);
-            if (was)
-            {
-                *(void **)&real_D3D12CreateDevice = was;
-                logf_("armed sl.common.dll as it loaded");
-            }
-        }
-        else armed_common = 0;
-    }
+    /* Disabled, and kept as a record of a wrong turn.
+     *
+     * Two rounds went into hooking inside Streamline, on the theory that it
+     * resolved D3D12CreateDevice by hand. It does not need to: it EXPORTS the
+     * whole D3D12 and DXGI surface, and the executable imports the function
+     * from sl.interposer.dll by name. The exe's own table was right all along.
+     *
+     * Left off rather than deleted because it also confounded a control. The
+     * 'd3d12' switch turned on three things at once -- this, a hook in
+     * sl.common.dll, and the device vtable patch -- so when Ronin's intro
+     * videos came back with the switch off, which of the three had been
+     * costing them was not established. One switch, one act. */
+    (void)libname;
 }
 
 static HMODULE WINAPI my_LoadLibraryA(LPCSTR name)
@@ -3001,38 +2975,6 @@ static DWORD WINAPI watchdog(LPVOID unused)
          * import twice makes our own function the "original" it saves, and the
          * second call recurses until the stack is gone. Once attempted, never
          * again, whether it took or not. */
-        if (watch_d3d12)
-        {
-            static LONG tried_common, tried_interposer;
-            HMODULE m;
-            void *was;
-
-            if (!real_D3D12CreateDevice && !tried_common
-                && (m = GetModuleHandleA("sl.common.dll")) != NULL)
-            {
-                tried_common = 1;
-                was = hook_import_mod(m, "d3d12.dll", "D3D12CreateDevice",
-                                      (void *)my_D3D12CreateDevice);
-                if (was)
-                {
-                    *(void **)&real_D3D12CreateDevice = was;
-                    logf_("hooked D3D12CreateDevice inside sl.common.dll");
-                }
-                else
-                    logf_("sl.common.dll is loaded but does not bind D3D12CreateDevice");
-            }
-            if (!tried_interposer && (m = GetModuleHandleA("sl.interposer.dll")) != NULL)
-            {
-                tried_interposer = 1;
-                if (hook_import_mod(m, "KERNEL32.dll", "GetProcAddress",
-                                    (void *)my_GetProcAddress))
-                    logf_("hooked GetProcAddress inside sl.interposer.dll -- "
-                          "watching for D3D12CreateDevice");
-                else
-                    logf_("sl.interposer.dll is loaded but its GetProcAddress "
-                          "could not be patched");
-            }
-        }
 
         /* The heartbeat.
          *
