@@ -12,17 +12,26 @@ Makes Windows games show their cutscenes under CrossOver on Apple Silicon.
 > stops the rest is in the translation stack shipped with it rather than in
 > anything installed beside the game.
 
-Eighteen entries, and more games than that: the two KINGDOM HEARTS packages
+Twenty entries, and more games than that: the two KINGDOM HEARTS packages
 hold seven playable titles between them.
 
-Most of these are video faults, which is what the name says. Two are not.
-Splintered Fate and Tormented Souls 2 never reach a cutscene because they do
-not start, and what stops each one is answered the same way everything else
-here is fixed — by giving a better answer to a call the game already makes.
+Most of these are video faults, which is what the name says. Three are not.
+Splintered Fate, Tormented Souls 2 and RESONANCE never reach a cutscene because
+they do not start, and what stops each one is answered the same way everything
+else here is fixed — by giving a better answer to a call the game already makes.
+RESONANCE needs one thing besides: a 16:9 display, which no fix can supply.
 Tormented Souls 2 is also the only entry whose fault is the game's own rather
 than the translation layer's: it keeps 16:9 resolutions and nothing else, and a
 laptop display has none. They install the same way: open the app, pick the game
 from the list, drop its folder on it, press Apply.
+
+One more title ships here without appearing above. **METAL GEAR SOLID 4** plays
+on stock CrossOver with nothing installed and has no video fault at all — what
+its fix repairs is the environment a launcher puts it in, where it starves
+itself on a busy-wait until Steam drops the connection and the game kills
+itself. It has an installer and is in the app.
+[Games](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Games#not-a-video-fix-metal-gear-solid-4)
+says what it does and what was ruled out getting there.
 
 <!-- readme-games:begin -->
 
@@ -47,6 +56,7 @@ from the list, drop its folder on it, press Apply.
 | [**RESIDENT EVIL 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/RE-Engine-VC1) | Crashes when a video plays | 26.3 and Preview |
 | [**RESIDENT EVIL 3**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/RE-Engine-VC1) | Crashes when a video plays | 26.3 and Preview |
 | [**NINJA GAIDEN 4**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Ninja-Gaiden-4) | Says the VP9 codec is missing, then exits | 26.3 only -- Preview stalls before video |
+| [**RESONANCE: A PLAGUE TALE LEGACY**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Resonance-A-Plague-Tale-Legacy) | Fatal error: Shader Model 6.7 is not supported | 26.3 |
 
 <!-- readme-games:end -->
 

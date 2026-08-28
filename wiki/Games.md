@@ -33,6 +33,7 @@ otherwise.
 | [RESIDENT EVIL 2](RE-Engine-VC1.md) | RE Engine | Crashes when a video plays | The same staged VC-1 codec, unchanged | D3DMetal | 12 | 3.0 and 4.0b2 | 26.3 and Preview | Fixed |
 | [RESIDENT EVIL 3](RE-Engine-VC1.md) | RE Engine | Crashes when a video plays | The same staged VC-1 codec, unchanged | D3DMetal | 12 | 3.0 and 4.0b2 | 26.3 and Preview | Fixed |
 | [NINJA GAIDEN 4](Ninja-Gaiden-4.md) | Koei Tecmo, in-house | Says the VP9 codec is missing, then exits | Staged Matroska demuxer, and the MFT gate answered | D3DMetal | 12 | **3.0 only** -- 4.0b2 stalls it | 26.3 only -- Preview stalls before video | Fixed |
+| [RESONANCE: A PLAGUE TALE LEGACY](Resonance-A-Plague-Tale-Legacy.md) | Asobo, in-house | Fatal error: Shader Model 6.7 is not supported | Shader model floor lowered in memory; needs a 16:9 display | D3DMetal | 12 | 3.0 | 26.3 | Fixed |
 
 **Update the toolkit, then pick a CrossOver.** Every fix here was written
 against Apple's Game Porting Toolkit 4.0b2, which is what CrossOver Preview
@@ -167,12 +168,13 @@ file at all.
 | [RESIDENT EVIL 2](RE-Engine-VC1.md) | D3DMetal | 12 | 3.0 and 4.0b2 | — | — | — | `libgstlibav` | — | — |
 | [RESIDENT EVIL 3](RE-Engine-VC1.md) | D3DMetal | 12 | 3.0 and 4.0b2 | — | — | — | `libgstlibav` | — | — |
 | [NINJA GAIDEN 4](Ninja-Gaiden-4.md) | D3DMetal | 12 | **3.0 only** -- 4.0b2 stalls it | `dstorage.dll` | `dstorage_real.dll` | `ng4-observe.c` | `libgstmatroska` | `BEAST_FORCE_NV12`, `BEAST_REFUSE_D3D_MANAGER`, `NG4_ANSWER_MFT`, `NG4_CPU_DECOMP`, `NG4_FAKE_OPTIONS17`, `NG4_NO_D3D11_PATCH`, `NG4_PATCH_D3D12`, `NG4_REFUSE_DSTORAGE`, `NG4_SMALL_STAGING` | — |
+| [RESONANCE: A PLAGUE TALE LEGACY](Resonance-A-Plague-Tale-Legacy.md) | D3DMetal | 12 | 3.0 | `NvCloth_x64.dll` | `NvCloth_x64_real.dll` | `shader-floor-fix.c` | — | — | — |
 
 **Carrier** is the DLL the fix rides on -- one the game already loads, chosen
 because it has nothing to do with video. **Kept as** is what the original is
 renamed to; where the carrier is a DLL Wine implements itself, that original is
 a copy taken from your own CrossOver and nothing is redistributed. **Bridge** is
-the source the shipped proxy was built from: 5 sources serve every title
+the source the shipped proxy was built from: 6 sources serve every title
 here, so a fault found in one is often already fixed in the others.
 
 **Registry** says whether Wine has to be told to prefer our DLL. 2 fixes
@@ -258,6 +260,40 @@ Why each hook exists, which vtable slot each one takes, how a carrier DLL is
 picked and what was tried and did not work is in [Findings](Findings.md). The
 division is deliberate: these pages carry the per-title findings and the wrong
 turns that came first, that one carries what is common to all of them.
+
+## Not a video fix: METAL GEAR SOLID 4
+
+Deliberately absent from the table above. It has no video fault: it plays on
+stock CrossOver with nothing installed, and it opens no `.bk2` and imports no
+Media Foundation before the fault. What the fix repairs is the environment
+RaccoonBot launches it in.
+
+The title loads its audio banks behind a busy-wait that starves itself under
+Wine. Measured on an M4 Max: four and a half million `Sleep(0)` calls before the
+menu, about fifteen thousand a second, with all file I/O complete and nothing
+advancing. The window renders black at fifty-six frames a second until Steam's
+client pipe times out, and the title kills itself with a fatal assert — which a
+person sees as a crash with a click of audio.
+
+`install-mgs4-fix.sh` proxies `bink2w64.dll`, one level down beside `mgs4.exe`,
+and turns every sixty-fourth `Sleep(0)` into a real `Sleep(1)`. First run with it
+in place:
+
+    36,160 spins, 565 of them yielded for real
+
+A hundred and twenty-five times fewer, and half a second of real sleeping in
+total. The yields do not pace the game, they let it finish. The divisor is read
+from `C:\mgvf-sleep.txt`, and `0` there disables the fix without uninstalling it,
+which is the honest way to check whether it still does anything on a machine that
+is not this one.
+
+Loading is still slow: three to four minutes of banks behind a black window. That
+is the title, not the fix.
+
+Ruled out getting there, each costing a launch: the Steam overlay, GStreamer, the
+GStreamer registry shared between two engines, D3DMetal's `nvapi64` — refused, as
+a machine with no NVIDIA card would, and it changed nothing — and the video path
+entirely.
 
 ## Adding a row
 

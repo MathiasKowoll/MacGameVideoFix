@@ -101,6 +101,7 @@ videos".
 | [RESIDENT EVIL 2](RE-Engine-VC1.md) | RE Engine | Crashes when a video plays | The same staged VC-1 codec, unchanged | D3DMetal | 12 | 3.0 and 4.0b2 | 26.3 and Preview | Fixed |
 | [RESIDENT EVIL 3](RE-Engine-VC1.md) | RE Engine | Crashes when a video plays | The same staged VC-1 codec, unchanged | D3DMetal | 12 | 3.0 and 4.0b2 | 26.3 and Preview | Fixed |
 | [NINJA GAIDEN 4](Ninja-Gaiden-4.md) | Koei Tecmo, in-house | Says the VP9 codec is missing, then exits | Staged Matroska demuxer, and the MFT gate answered | D3DMetal | 12 | **3.0 only** -- 4.0b2 stalls it | 26.3 only -- Preview stalls before video | Fixed |
+| [RESONANCE: A PLAGUE TALE LEGACY](Resonance-A-Plague-Tale-Legacy.md) | Asobo, in-house | Fatal error: Shader Model 6.7 is not supported | Shader model floor lowered in memory; needs a 16:9 display | D3DMetal | 12 | 3.0 | 26.3 | Fixed |
 
 **Update the toolkit, then pick a CrossOver.** Every fix here was written
 against Apple's Game Porting Toolkit 4.0b2, which is what CrossOver Preview

@@ -121,6 +121,14 @@
       "env": {},
       "symptom": "Failed to play movie"
     },
+    "Resonance.exe": {
+      "title": "RESONANCE: A PLAGUE TALE LEGACY",
+      "backend": "d3dmetal",
+      "codec": "",
+      "gptk": "",
+      "env": {},
+      "symptom": "Fatal error: Shader Model 6.7 is not supported"
+    },
     "TMNTSF.exe": {
       "title": "TMNT: Splintered Fate",
       "backend": "d3dmetal",

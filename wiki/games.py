@@ -106,6 +106,10 @@ GAMES = [
      "Staged Matroska demuxer, and the MFT gate answered",
      "D3DMetal", "12", "26.3 only -- Preview stalls before video",
      "Fixed", "Ninja-Gaiden-4"),
+    ("RESONANCE: A PLAGUE TALE LEGACY", "Asobo, in-house",
+     "Fatal error: Shader Model 6.7 is not supported", "Shader model floor lowered in memory; needs a 16:9 display",
+     "D3DMetal", "12", "26.3",
+     "Fixed", "Resonance-A-Plague-Tale-Legacy"),
 ]
 
 HEAD = ("| Game | Engine | Symptom | Fix | Backend | DX | GPTK | CrossOver | Status |\n"
@@ -262,6 +266,7 @@ CODEC = {
     "Mortal Shell 2": NONE,
     "Wo Long: Fallen Dynasty": NONE,
     "Nioh 3": NONE,
+    "RESONANCE: A PLAGUE TALE LEGACY": NONE,
     "Beast of Reincarnation": NONE,
     "Life is Strange: Reunion": NONE,
     "Life is Strange: Double Exposure": NONE,
