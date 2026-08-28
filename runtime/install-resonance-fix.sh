@@ -45,6 +45,29 @@
 # This is why the same title runs for people on 16:9 monitors with the same
 # D3DMetal and no fix at all beyond the byte.
 #
+# AND THE VIDEOS, which are not a video problem.
+#
+# The logo and tutorial MP4s never appear, at any resolution, and it is worth
+# saying plainly that nothing in this project can fix that. They are H.264 High
+# in MP4 with AAC -- the most ordinary file there is -- and the whole path works:
+#
+#     MediaEngineClassFactory::CreateInstance -> 0x00000000
+#     OnVideoStreamTick: asked 1200 times, a frame was ready 428 of them
+#     TransferVideoFrame -> ok (360 so far)      0 failures
+#
+# The title plays them through IMFMediaEngine, created over COM -- which is why
+# nothing here saw them for an afternoon: it never calls MFTEnumEx and never
+# creates a source reader, so the five entry points this probe swapped were the
+# wrong five. Underneath, mfmp4srcsnk demuxes and winegstreamer decodes, both
+# measured present and both working.
+#
+# Then the frames are handed to a texture of the game's own and never drawn.
+# Confirmed by filling the surrounds of every transferred frame with opaque
+# magenta: three hundred and sixty frames delivered, forty percent of the
+# surface painted a colour the game does not contain, and the screen stayed
+# black. That surface does not reach the screen, and what happens to it after
+# TransferVideoFrame is inside the engine, not inside anything we can hook.
+#
 # Ruled out along the way, so nobody repeats it: MetalFX and its temporal
 # scaling, the Metal 4 backend, the video memory budget (the adapter reports 76
 # GB; the zero in the game's own crash report is its own number), D3D11 against

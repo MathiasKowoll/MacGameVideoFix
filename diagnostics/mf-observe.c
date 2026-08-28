@@ -2329,6 +2329,7 @@ static BOOL (WINAPI *real_SleepConditionVariableCS)(void *, void *, DWORD);
 static BOOL (WINAPI *real_WaitOnAddress)(volatile void *, void *, SIZE_T, DWORD);
 static LONG last_read_bytes;
 static BOOL (WINAPI *real_ReadFile)(HANDLE, LPVOID, DWORD, LPDWORD, LPVOID);
+static HRESULT (WINAPI *real_CoCreateInstance)(const GUID *, void *, DWORD, const GUID *, void **);
 
 static HANDLE (WINAPI *real_CreateFileW)(LPCWSTR, DWORD, DWORD, void *, DWORD, DWORD, HANDLE);
 static HMODULE (WINAPI *real_LoadLibraryW)(LPCWSTR);
@@ -2533,6 +2534,163 @@ static BOOL WINAPI my_ReadFile(HANDLE h, LPVOID buf, DWORD n, LPDWORD got, LPVOI
     return r;
 }
 
+/* Every COM object the title asks for, by CLSID.
+ *
+ * RESONANCE plays its MP4s through IMFMediaEngine, created with
+ * CoCreateInstance -- so MFCreateSourceReader is never called, MFTEnumEx is
+ * never called, and a probe watching those two saw a title with no video at
+ * all while mfmediaengine, mfmp4srcsnk and winegstreamer sat loaded in its
+ * address space. The door was open; we were watching a different one.
+ *
+ * Named rather than hooked: what is created says which path the video takes,
+ * and that has to be known before anything is worth patching. */
+/* The Media Engine, and the two calls that hand a frame to the game.
+ *
+ * RESONANCE plays its MP4s through IMFMediaEngine, confirmed by the bottle's
+ * own registry: {B44392DA-499B-446B-A4CB-005FEAD0E6D5} is "Media Engine Class
+ * Factory", served by mfmediaengine.dll, and the title creates it and gets
+ * S_OK. Underneath sit mfmp4srcsnk for the container and winegstreamer for the
+ * H.264 -- both measured present in the process.
+ *
+ * A title playing video this way does not read samples. It asks the engine, on
+ * each frame, whether a new one is ready (OnVideoStreamTick) and then to copy
+ * it into a texture of its own (TransferVideoFrame). Sound with no picture is
+ * exactly what those two failing looks like from outside, and neither appears
+ * in any log we had, because they are vtable calls on an object obtained
+ * through COM.
+ *
+ * IMFMediaEngineClassFactory slot 3 is CreateInstance. On the engine it hands
+ * back, slot 43 is TransferVideoFrame and 44 OnVideoStreamTick -- IUnknown's
+ * three, then forty of IMFMediaEngine's own, in the order the interface
+ * declares them.
+ *
+ * Watching only: what these return decides whether there is anything to fix
+ * and where, and guessing that before measuring it is how this afternoon went. */
+/* Paint the frame's surroundings a colour this game does not contain.
+ *
+ * The same trick as ue5-media-fix's magenta switch, adapted: there the frame
+ * arrived in system memory and could be overwritten, here it lands in a GPU
+ * texture we do not own. But TransferVideoFrame takes a destination rectangle
+ * and a border colour, and those are enough to ask the question.
+ *
+ * With this on, the video is drawn into the middle sixty percent of the
+ * destination and everything around it is filled opaque magenta. Then:
+ *
+ *   - magenta with a small picture inside  -> the surface reaches the screen,
+ *     and whatever is wrong is in how the game composites it afterwards.
+ *   - magenta and nothing else             -> the surface is presented but the
+ *     frame is not landing in it.
+ *   - nothing at all                       -> the surface never reaches the
+ *     screen, and the video is a bystander to the same fault as the rest.
+ *
+ * Three answers, and the difference between them is not something the return
+ * codes can tell us: TransferVideoFrame has returned S_OK a hundred and twenty
+ * times while the screen stayed black.
+ *
+ * Asked for by name: 'magenta' in C:\\mgvf-trace.txt. */
+static BOOL paint_the_border;
+
+/* MFARGB is blue, green, red, alpha -- in that order. */
+static const BYTE MAGENTA[4] = { 0xFF, 0x00, 0xFF, 0xFF };
+
+static HRESULT (WINAPI *real_transfer)(void *, void *, RECT *, RECT *, void *);
+static HRESULT (WINAPI *real_streamtick)(void *, LONGLONG *);
+static HRESULT (WINAPI *real_factory_create)(void *, DWORD, void *, void **);
+
+static HRESULT WINAPI my_transfer(void *self, void *surf, RECT *src, RECT *dst, void *clr)
+{
+    RECT inset;
+    HRESULT hr;
+
+    if (paint_the_border && dst)
+    {
+        LONG w = dst->right - dst->left, h = dst->bottom - dst->top;
+        inset.left   = dst->left + w / 5;
+        inset.top    = dst->top  + h / 5;
+        inset.right  = dst->right  - w / 5;
+        inset.bottom = dst->bottom - h / 5;
+        dst = &inset;
+        clr = (void *)MAGENTA;
+        {
+            static LONG once;
+            if (InterlockedIncrement(&once) == 1)
+                logf_("magenta: video into the middle of %ldx%ld, the rest filled",
+                      (long)w, (long)h);
+        }
+    }
+    hr = real_transfer(self, surf, src, dst, clr);
+    static LONG said, failed;
+    if (FAILED(hr))
+    {
+        if (InterlockedIncrement(&failed) <= 4)
+            logf_("TransferVideoFrame -> 0x%08lX  << the frame never reaches the game",
+                  (unsigned long)hr);
+    }
+    else if (InterlockedIncrement(&said) <= 3 || (said % 120) == 0)
+        logf_("TransferVideoFrame -> ok (%ld so far)%s", (long)said,
+              dst ? "" : " -- with no destination rectangle");
+    return hr;
+}
+
+static HRESULT WINAPI my_streamtick(void *self, LONGLONG *pts)
+{
+    HRESULT hr = real_streamtick(self, pts);
+    static LONG asked, ready;
+    InterlockedIncrement(&asked);
+    if (hr == S_OK) InterlockedIncrement(&ready);
+    if (asked == 1 || (asked % 240) == 0)
+        logf_("OnVideoStreamTick: asked %ld times, a frame was ready %ld of them "
+              "(last 0x%08lX)", (long)asked, (long)ready, (unsigned long)hr);
+    return hr;
+}
+
+static HRESULT WINAPI my_factory_create(void *self, DWORD flags, void *attrs, void **engine)
+{
+    HRESULT hr = real_factory_create(self, flags, attrs, engine);
+    logf_("MediaEngineClassFactory::CreateInstance(flags 0x%lX) -> 0x%08lX",
+          (unsigned long)flags, (unsigned long)hr);
+    if (SUCCEEDED(hr) && engine && *engine)
+    {
+        void *was = NULL;
+        if (!real_transfer && patch_slot("TransferVideoFrame", *engine, 43,
+                                         (void *)my_transfer, &was) && was)
+            real_transfer = (HRESULT (WINAPI *)(void *, void *, RECT *, RECT *, void *))was;
+        was = NULL;
+        if (!real_streamtick && patch_slot("OnVideoStreamTick", *engine, 44,
+                                           (void *)my_streamtick, &was) && was)
+            real_streamtick = (HRESULT (WINAPI *)(void *, LONGLONG *))was;
+    }
+    return hr;
+}
+
+static HRESULT WINAPI my_CoCreateInstance(const GUID *clsid, void *outer, DWORD ctx,
+                                          const GUID *iid, void **out)
+{
+    HRESULT hr = real_CoCreateInstance(clsid, outer, ctx, iid, out);
+    static LONG said;
+
+    /* {B44392DA-499B-446B-A4CB-005FEAD0E6D5} -- Media Engine Class Factory. */
+    if (SUCCEEDED(hr) && clsid && out && *out
+        && clsid->Data1 == 0xB44392DA && clsid->Data2 == 0x499B
+        && !real_factory_create)
+    {
+        void *was = NULL;
+        if (patch_slot("MediaEngineClassFactory::CreateInstance", *out, 3,
+                       (void *)my_factory_create, &was) && was)
+            real_factory_create = (HRESULT (WINAPI *)(void *, DWORD, void *, void **))was;
+    }
+    if (clsid && InterlockedIncrement(&said) <= 30)
+    {
+        const GUID *g = clsid;
+        logf_("  CoCreateInstance {%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X} -> 0x%08lX",
+              (unsigned long)g->Data1, g->Data2, g->Data3,
+              g->Data4[0], g->Data4[1], g->Data4[2], g->Data4[3],
+              g->Data4[4], g->Data4[5], g->Data4[6], g->Data4[7],
+              (unsigned long)hr);
+    }
+    return hr;
+}
+
 /* Says what the process last touched, every five seconds.
  *
  * A hang is legible from the outside only as "nothing changed since": the
@@ -2616,6 +2774,7 @@ static void arm_startup_trace(void)
         if (ReadFile(f, buf, sizeof(buf) - 1, &got, NULL) && got) buf[got] = 0; else buf[0] = 0;
         if (strstr(buf, "nonvapi")) refuse_nvapi = TRUE;
         if (strstr(buf, "ownreg")) own_registry = TRUE;
+        if (strstr(buf, "magenta")) paint_the_border = TRUE;
     }
     CloseHandle(f);
     trace_startup = TRUE;
@@ -2646,6 +2805,8 @@ static void arm_startup_trace(void)
         *(void **)&real_LoadLibraryExA = was;
     if ((was = hook_import("kernel32.dll", "ReadFile", (void *)my_ReadFile)))
         *(void **)&real_ReadFile = was;
+    if ((was = hook_import("ole32.dll", "CoCreateInstance", (void *)my_CoCreateInstance)))
+        *(void **)&real_CoCreateInstance = was;
     if ((was = hook_import("kernel32.dll", "WaitForSingleObjectEx", (void *)my_WaitForSingleObjectEx)))
         *(void **)&real_WaitForSingleObjectEx = was;
     if ((was = hook_import("kernel32.dll", "SleepConditionVariableSRW", (void *)my_SleepConditionVariableSRW)))
