@@ -31,12 +31,29 @@ and none of it was the fix. What kills it there is Steam:
     src\common\pipes.cpp (879) : Fatal assert; application exiting
 
 Four runs, always the same, and always before any call to the bridge — no
-CreateTexture, no CreateOffscreen, no StretchRect. Where it works, the same
 moment reads `Received stats and achievements from Steam` instead. The pipe is
-the whole difference, and the two candidates for why are that engine's bottle
-running `d3dmetal` where this one runs `dxmt` — this page has always said DXMT
-only, because `GetSharedHandle` returns `E_NOTIMPL` under D3DMetal — and the
-health of that particular Steam.
+the whole difference, and it is the backend. Same engine, same bottle, same
+Steam, same DLL, one variable changed:
+
+    CX_GRAPHICS_BACKEND=dxmt
+
+and the line that read `BWrite failed` reads `Received stats and achievements
+from Steam` instead. The game runs, the cutscenes play, the videos play. Under
+`d3dmetal` the Steam pipe breaks and the title kills itself before it touches
+video at all -- which is why a day went into its cutscene and none of it was
+about video.
+
+This page has always said DXMT only, because `GetSharedHandle` is `E_NOTIMPL`
+under D3DMetal. What it could not say is what a wrong backend looks like from
+outside: not a missing picture, not an error about a surface, but Steam
+disconnecting and a fatal assert in `pipes.cpp`. Nothing in that message points
+at a graphics backend, and it is worth knowing that it can.
+
+For anyone driving this through a launcher: RaccoonBot had DXMT selected for this
+title in its own options screen and passed `d3dmetal` anyway -- its game detail
+view launched with defaults rather than saved settings. A setting being right in
+the UI is not the same as the process receiving it, and what told them apart was
+dumping the environment from inside the process.
 
 Also measured and worth deleting from anyone's mental model: the two levers this
 title is listed as needing, `BEAST_FORCE_NV12` and `BEAST_REFUSE_D3D_MANAGER`,
