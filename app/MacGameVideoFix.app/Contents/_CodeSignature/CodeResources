@@ -22,7 +22,7 @@
 		</data>
 		<key>Resources/amd_ags_x64-nioh3.dll</key>
 		<data>
-		aGhfisnGxznt55/Y5Fw1dqsqTM8=
+		OM5dxRyCkOFrImj1sqhJs/GDzno=
 		</data>
 		<key>Resources/amd_ags_x64.dll</key>
 		<data>
@@ -30,11 +30,11 @@
 		</data>
 		<key>Resources/dinput8-kh.dll</key>
 		<data>
-		vV4G+uN8fVDqDeAlEf5EwflS5P4=
+		GtEdYmbHyhM/HNAhMYaBirsG/bY=
 		</data>
 		<key>Resources/dinput8-nier.dll</key>
 		<data>
-		vV4G+uN8fVDqDeAlEf5EwflS5P4=
+		uG7oHZUE0MBqJcxQVzUfbY3gWD8=
 		</data>
 		<key>Resources/dstorage-ng4.dll</key>
 		<data>
@@ -50,7 +50,7 @@
 		</data>
 		<key>Resources/install-kh-bridge.sh</key>
 		<data>
-		CV0/xi2aV3jVae8iNa7Qkn7CTgQ=
+		ZP1dIZpwf+VbTIzXMzopMWddpfs=
 		</data>
 		<key>Resources/install-ng4-fix.sh</key>
 		<data>
@@ -58,7 +58,7 @@
 		</data>
 		<key>Resources/install-nier-bridge.sh</key>
 		<data>
-		T/ru1Y4iPKOxQofR5L76gVocE+0=
+		W6lIzrQZxoedK4m21jqVnqRir3o=
 		</data>
 		<key>Resources/install-nioh-bridge.sh</key>
 		<data>
@@ -94,7 +94,7 @@
 		</data>
 		<key>Resources/libxess.dll</key>
 		<data>
-		k/pvarv107BSKf+QgrUpgaO6Tf8=
+		yCDtm8y/0VszoOOA1pQ6Y2FeQwE=
 		</data>
 		<key>Resources/pak-hide-videos.py</key>
 		<data>
@@ -147,7 +147,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			NP2btveX0kt70+jWUq7uF0g8g+EqGSILlmEHr7h1iSg=
+			KT6JBgJugbr3grlewlcOhfR6g0hdroV3bwxPQ9z/Slg=
 			</data>
 		</dict>
 		<key>Resources/amd_ags_x64.dll</key>
@@ -161,14 +161,14 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			NjlIOmE9erUsEq0Hv0u4mFm82xFNaaQYI8pv18ncwNc=
+			udK/xgH3Xwx2sCQ6yzRTUO4+vdhMiMIaTkWBf6olduA=
 			</data>
 		</dict>
 		<key>Resources/dinput8-nier.dll</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			NjlIOmE9erUsEq0Hv0u4mFm82xFNaaQYI8pv18ncwNc=
+			PDlGmdvppJl+i6f6s4CPFi6O5hGno1i1jaZSb3cTWs0=
 			</data>
 		</dict>
 		<key>Resources/dstorage-ng4.dll</key>
@@ -196,7 +196,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			y97ch2LgVxKtcJIISmrsvMmha/4LRXxV4RfyFqZBUh0=
+			Nwz0czE2WrysNYPvpckcT1c5xbMYjyfjeq2RPVRIRJk=
 			</data>
 		</dict>
 		<key>Resources/install-ng4-fix.sh</key>
@@ -210,7 +210,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			MFm9zi+0KaNMh9XbLFr9UpA9lPfsVoQ7Vhtr5cpEt+U=
+			IK3nBL5gM78zSAvcY8rv5iTACZiJiBuzRg5lO8Fbu1c=
 			</data>
 		</dict>
 		<key>Resources/install-nioh-bridge.sh</key>
@@ -273,7 +273,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			QeBVJusSZ4FMZSX976bKEbRpjudONYfqHDx1WrAMHXM=
+			qmwwEcDehyyU27O2AZKF0rWf/cRer1aiWsSM46sGpBI=
 			</data>
 		</dict>
 		<key>Resources/pak-hide-videos.py</key>

@@ -94,6 +94,8 @@ is_ours() { [ -f "$1" ] && LC_ALL=C grep -qa "$MARKER" "$1"; }
 # Naming them all is deliberate: the user may switch bottles between runs, and
 # an override for one executable is inert in a bottle that never runs it.
 find_bottles() {
+  # A caller that named the bottle gets that bottle and no other.
+  if pinned_bottle; then return 0; fi
   local b root vdf lib key hit=0
   # The library root, as a slash-free lowercase key: libraryfolders.vdf writes
   # it as Z:\Volumes\Disk\Library, doubling every separator, so compare with

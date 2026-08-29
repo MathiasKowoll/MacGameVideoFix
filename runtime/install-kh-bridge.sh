@@ -114,6 +114,8 @@ is_ours() { [ -f "$1" ] && LC_ALL=C grep -qa "$MARKER" "$1"; }
 
 
 find_bottles() {
+  # A caller that named the bottle gets that bottle and no other.
+  if pinned_bottle; then return 0; fi
   local b root vdf lib key hit=0
   lib="${GAME%/steamapps/common/*}"
   key="$(printf '%s' "${lib#/}" | tr -d '/\\' | tr '[:upper:]' '[:lower:]')"
@@ -278,9 +280,20 @@ esac
 # upgrade -- and re-running is the documented remedy. The file steps are skipped
 # and every key is asserted again.
 SKIP_FILES=0
+REPLACE=0
 if is_ours "$LIVE" && [ -f "$REAL" ]; then
-  echo "the bridge files are already in place; re-asserting the overrides"
-  SKIP_FILES=1
+  # ...but an OLDER bridge of ours is not "already in place", it is a bridge
+  # that needs replacing. Skipping on "is it ours" alone meant a rebuilt DLL
+  # could never reach a folder that already had one: two successive builds were
+  # installed, reported "installed", and left the previous binary sitting
+  # there. What the copy costs is nothing; what the skip cost was an afternoon.
+  if cmp -s "$PROXY" "$LIVE"; then
+    echo "the bridge files are already in place; re-asserting the overrides"
+    SKIP_FILES=1
+  else
+    echo "a different build of the bridge is in place; replacing it"
+    REPLACE=1
+  fi
 fi
 
 echo "[1/4] finding the bottle and the CrossOver that runs it"
@@ -297,6 +310,13 @@ echo "      bottle: $(basename "$BOTTLE")"
 echo "      ${#EXE_NAMES[@]} executable(s) that play video in this package"
 
 if [ "$SKIP_FILES" = 0 ]; then
+if [ "$REPLACE" = 1 ]; then
+  # Replacing our own older proxy. $REAL is already the bottle's original and
+  # taking the copy again would copy a proxy over it, destroying the only copy
+  # of the real DLL. The steps below assume a folder that has never been
+  # touched; this one has.
+  echo "[2/4] keeping the original already saved as $(basename "$REAL")"
+else
 echo "[2/4] taking a copy of the bottle's own dinput8"
 if is_ours "$LIVE"; then
   echo "error: $LIVE is already a proxy but $REAL is gone." >&2
@@ -319,6 +339,7 @@ cp "$BOTTLE/drive_c/windows/system32/dinput8.dll" "$REAL" || {
   echo "error: could not copy the original beside the package" >&2
   exit 1
 }
+fi
 
 echo "[3/4] checking the proxy forwards everything the original exports"
 if ! real_exports="$(/usr/bin/perl "$EXPORTS" exports "$REAL" 2>&1)"; then

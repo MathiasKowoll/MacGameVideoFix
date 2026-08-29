@@ -1948,6 +1948,98 @@ static DWORD WINAPI worker(LPVOID unused)
     return 0;
 }
 
+/*
+ * The KINGDOM HEARTS launcher, and nothing else on this bridge.
+ *
+ * "KINGDOM HEARTS HD 1.5+2.5 Launcher.exe" is a .NET 4.0 WinForms program run
+ * under Mono. It starts the game correctly and then faults while tearing
+ * itself down, so Wine's AeDebug starts winedbg and the user gets a crash
+ * dialog for a program that did its job. Measured from the dump:
+ *
+ *     Unhandled exception: page fault on write access to 0x0000000000000000
+ *     ntdll+0x38d55: movq $0, (%rax)      rax = 0
+ *     backtrace: five frames, ALL inside ntdll
+ *
+ * All five frames are in ntdll's process-shutdown chain, and the dump's own
+ * process list already shows "KINGDOM HEARTS HD 1.5+2.5 ReMIX.exe" running.
+ * The launcher has handed off before it dies.
+ *
+ * Why here and not in the registry: AeDebug lives in HKLM and is bottle-wide.
+ * Turning it off would silence the crash reporting of every other game in that
+ * bottle to spare one dialog, which is a bad trade. This DLL is already loaded
+ * into that exact process -- the dump shows a wine_dinput_worker thread in it
+ * -- so the narrowest place to act is inside it.
+ *
+ * A top-level filter was tried first and never ran: the log said "filter
+ * armed" and never said it fired, because at that depth of shutdown Wine no
+ * longer consults SetUnhandledExceptionFilter. A VECTORED handler runs inside
+ * the exception dispatcher itself, before any of that, which is why it is the
+ * mechanism here.
+ *
+ * The gate is deliberately tight: this executable, an access violation, a
+ * WRITE, to address zero, AND from inside ntdll. That last one is not
+ * pedantry -- see the note in the handler.
+ */
+static LONG CALLBACK quiet_launcher_shutdown(EXCEPTION_POINTERS *info)
+{
+    const EXCEPTION_RECORD *r = info ? info->ExceptionRecord : NULL;
+    static char *ntdll_lo, *ntdll_hi;
+
+    if (!r || r->ExceptionCode != EXCEPTION_ACCESS_VIOLATION)
+        return EXCEPTION_CONTINUE_SEARCH;
+    /* [0] is 1 for a write, [1] is the address. */
+    if (r->NumberParameters < 2 || r->ExceptionInformation[0] != 1
+        || r->ExceptionInformation[1] != 0)
+        return EXCEPTION_CONTINUE_SEARCH;
+
+    /*
+     * THE CONDITION THAT MAKES THIS SAFE: the fault must come from inside
+     * ntdll.
+     *
+     * A vectored handler sees every exception in the process before anything
+     * else does, and this launcher is Mono. Mono implements
+     * NullReferenceException by letting the write to address zero fault and
+     * catching it -- so "access violation writing to 0" is NORMAL, FREQUENT
+     * and HANDLED here. Killing the process on the first one would kill the
+     * launcher while it is working, which is far worse than the dialog this
+     * exists to remove.
+     *
+     * The fault we want is in ntdll's shutdown path: the dump had five frames
+     * and every one of them was ntdll. Mono's belong to JIT-generated code
+     * outside any module. So the module the fault came from is what separates
+     * them, and nothing else here does.
+     */
+    if (!ntdll_lo)
+    {
+        HMODULE nt = GetModuleHandleA("ntdll.dll");
+        MEMORY_BASIC_INFORMATION mbi;
+        IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)nt;
+        if (nt && dos->e_magic == IMAGE_DOS_SIGNATURE)
+        {
+            IMAGE_NT_HEADERS *nth = (IMAGE_NT_HEADERS *)((char *)nt + dos->e_lfanew);
+            ntdll_lo = (char *)nt;
+            ntdll_hi = ntdll_lo + nth->OptionalHeader.SizeOfImage;
+        }
+        else if (nt && VirtualQuery(nt, &mbi, sizeof(mbi)))
+        {
+            ntdll_lo = (char *)nt;
+            ntdll_hi = ntdll_lo + mbi.RegionSize;
+        }
+        else ntdll_lo = ntdll_hi = (char *)1;   /* unusable: never match */
+    }
+    {
+        char *at = (char *)r->ExceptionAddress;
+        if (!(at >= ntdll_lo && at < ntdll_hi))
+            return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    logf_("launcher: write to NULL inside ntdll at %p -- shutdown fault, "
+          "exiting quietly so winedbg does not open a dialog for a job "
+          "already done", r->ExceptionAddress);
+    TerminateProcess(GetCurrentProcess(), 0);
+    return EXCEPTION_CONTINUE_SEARCH;   /* not reached */
+}
+
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
 {
     HANDLE thread;
@@ -1972,6 +2064,34 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
          */
         real_GetProcAddress = hook_import("KERNEL32.dll", "GetProcAddress",
                                           my_GetProcAddress);
+
+        /*
+         * Four titles ship this bridge and only one of them has a launcher
+         * that dies on the way out, so the filter is armed by name rather
+         * than installed for everybody. Inert everywhere else.
+         */
+        {
+            /*
+             * Both KINGDOM HEARTS launchers, named rather than matched on
+             * "Launcher": four titles ship this bridge, and a substring rule
+             * would arm the filter inside whatever else one day happens to be
+             * called that. Measured on 1.5+2.5 first; 2.8 was reported doing
+             * the same thing and is the same Mono launcher pattern.
+             */
+            static const char *const launchers[] = {
+                "KINGDOM HEARTS HD 1.5+2.5 Launcher.exe",
+                "KINGDOM HEARTS HD 2.8 Launcher.exe",
+            };
+            size_t i;
+            for (i = 0; i < sizeof(launchers) / sizeof(launchers[0]); ++i)
+                if (!lstrcmpiA(exe_tag_(), launchers[i]))
+                {
+                    AddVectoredExceptionHandler(1, quiet_launcher_shutdown);
+                    logf_("launcher: shutdown fault filter armed for %s",
+                          launchers[i]);
+                    break;
+                }
+        }
 
         thread = CreateThread(NULL, 0, worker, NULL, 0, NULL);
         if (thread) CloseHandle(thread);

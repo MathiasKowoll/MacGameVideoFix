@@ -35,6 +35,42 @@
 # stale the moment one was renamed -- which happened: the fork became RaccoonBot,
 # its support folder moved with it, and a hardcoded "Procyon/CXPBottles" knew
 # about neither. The engines knew all along.
+# ONE bottle, named by whoever already knows which one.
+#
+# The roots above answer "where could this game be launched from", and every
+# installer that writes a registry override used to write to all of them. That
+# is overreach the moment another product owns one: MacGameVideoFix writing into
+# RaccoonBot's bottle duplicates work RaccoonBot does itself from the manifest,
+# and one unreachable bottle of somebody else's turned a successful install into
+# a screenful of red "failed" lines.
+#
+# So a caller that knows the bottle says so, and then that is the only bottle
+# touched. The app passes the bottle the user picked in it; RaccoonBot uses the
+# one it defines; the scan remains only for a person running the script by hand
+# with nothing selected.
+#
+# An invalid value is an error, never a fallback to scanning everything. Falling
+# back would reintroduce exactly the behaviour this exists to prevent, and would
+# do it silently, on the run where somebody was trying hardest to be specific.
+pinned_bottle() {
+  [ -n "${MGVF_BOTTLE:-}" ] || return 1
+  printf '%s\n' "${MGVF_BOTTLE%/}"
+}
+
+# Validated here, at source time, and NOT inside pinned_bottle.
+#
+# find_bottles runs inside $(...) and inside process substitution, so an `exit`
+# raised down there kills a subshell and nothing else: the first version of this
+# answered `absent` with status 0 for a bottle path that does not exist, which is
+# the worst possible reply -- a confident, wrong, quiet one. This file is sourced
+# by the main shell, so a check at this level stops the run.
+if [ -n "${MGVF_BOTTLE:-}" ] && [ ! -d "${MGVF_BOTTLE%/}/drive_c" ]; then
+  echo "error: MGVF_BOTTLE is not a bottle: ${MGVF_BOTTLE%/}" >&2
+  echo "       Expected a directory containing drive_c." >&2
+  exit 1
+fi
+
+
 engine_bottle_roots() {
   local a conf r
   for a in /Applications/*.app "$HOME"/Applications/*.app; do
