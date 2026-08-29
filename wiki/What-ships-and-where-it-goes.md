@@ -1,16 +1,22 @@
 # What ships, and where it goes
 
-Every binary this project installs, what it is, and which of four places it
+Every binary this project installs, what it is, and which of five places it
 belongs to. Written because "which files does a launcher have to copy" was asked
-and could not be answered from one page — and because answering it turned up one
-category nothing copies at all.
+and could not be answered from one page.
+
+Asking it has twice turned up something the page did not know: a category
+nothing copied at all, and then a binary listed here as though it shipped while
+no installer named it. Both are recorded below rather than quietly corrected,
+because the second one was found by counting the files against a published
+release instead of against this table.
 
 ## 1. Built here, from sources in this repository
 
-Twelve proxy DLLs. Each rides on a library the game already loads, forwards
-every export to the renamed original, and gets `DllMain` — that is the whole
-mechanism. `check-builds.sh` rebuilds every one of them from the source named
-below and refuses a release where the shipped copy differs.
+Twelve are built here and **eleven of them travel**. Each rides on a library
+the game already loads, forwards every export to the renamed original, and gets
+`DllMain` — that is the whole mechanism. `check-builds.sh` rebuilds every one of
+them from the source named below and refuses a release where the shipped copy
+differs.
 
 | DLL | source | titles |
 | --- | --- | --- |
@@ -21,7 +27,7 @@ below and refuses a release where the shipped copy differs.
 | `dinput8-kh.dll` | `dwo-video-bridge.c` | Kingdom Hearts (both) |
 | `dinput8-nier.dll` | `dwo-video-bridge.c` | NieR Replicant |
 | `libogg_64.dll` | `ue5-media-fix.c` | Mortal Shell 2, Beast of Reincarnation, Life is Strange (both) |
-| `libogg_64_electra.dll` | `electra-h264-fix.c` | the Electra variant |
+| `libogg_64_electra.dll` | `electra-h264-fix.c` | **none — superseded, does not travel** |
 | `dstorage-ng4.dll` | `ng4-observe.c` | NINJA GAIDEN 4 |
 | `fmod-tmnt.dll` | `d3d12-guards.c` | TMNT: Splintered Fate |
 | `OpenColorIO_2_3-tormented.dll` | `d3d12-guards.c` | Tormented Souls 2 |
@@ -30,6 +36,14 @@ below and refuses a release where the shipped copy differs.
 **Where they go:** into the game's own folder, beside the executable, with the
 game's original renamed to `<name>_real.dll`. The installer for each title
 decides the exact folder. Nothing outside the game folder is touched.
+
+**The twelfth is `libogg_64_electra.dll`, and nothing uses it.** No installer
+names it and it is in no bundle. Beast of Reincarnation, the title it was made
+for, is served by `install-runtime-fix.sh` and the shipped `libogg_64.dll`,
+which carries the current fix: `ue5-media-fix.c` holds
+`CVAR_NAME[] = L"Electra.Win.H264UseOldOutputPath"`, the console variable that
+puts Electra on its CPU path. The variant is kept because it builds and
+`check-builds.sh` still verifies it, not because anything installs it.
 
 ## 2. Other people's binaries, redistributed
 
@@ -144,6 +158,44 @@ a stock CrossOver both report `26.3.0.39832`, which is how this project once
 wrote into a stock install during a test. The app name is the part that tells
 them apart. `install-engine-media.sh` checks both, and any patcher consuming the
 payload directly should check both too.
+
+## 5. Built here, installed into the engine, and not part of any fix
+
+One more binary exists and belongs in this inventory even though nothing here
+depends on it: `crossover/dxgi.dll`, 67,072 bytes, installed by
+`crossover/install-node-guard.sh`.
+
+It is the DXGI node guard — the same correction Life is Strange needs, which
+answers `QueryVideoMemoryInfo` for adapter nodes that do not exist so Unreal's
+node walk terminates — but applied to the whole CrossOver instead of one game.
+**No title requires it.** Every title that needs the guard gets it from its own
+game-folder proxy, and this is the engine-wide alternative that
+`docs/upstreaming.md` keeps as a direction for taking the work upstream.
+
+It is deliberately outside the bundle: `make-fixes-bundle.sh` globs
+`runtime/install-*.sh`, and this one lives in `crossover/`. Two consequences
+worth stating rather than leaving to be discovered.
+
+- **It does not declare the manifest schema.** Every other installer carries
+  `MGVF-SCOPE` and answers `--status`; this one predates that rule and has
+  neither. Anything that surveys the installers will not see it.
+- **A launcher cannot offer it, and should not want to.** It modifies a shared
+  CrossOver for every bottle and every game, and invalidates the code signature
+  — a decision for a person, not something to apply on a title's behalf.
+
+## A prerequisite that is not a file we ship
+
+The plugins in category 3 are copied out of **GStreamer.framework on the user's
+own machine**, from `/Library/Frameworks/GStreamer.framework/Versions/1.0`.
+`stage-codecs.sh` refuses with instructions when it is absent, naming the macOS
+*runtime* package of the 1.24 series.
+
+So the honest answer to "does a machine elsewhere have everything" is: it has
+every binary this project produces or redistributes, and it still needs
+GStreamer installed before any codec-dependent title works. That is a
+prerequisite a launcher has to check for and explain, not something a bundle can
+carry — the plugins are not ours to redistribute, which is why they are staged
+rather than shipped.
 
 ## What a launcher has to copy
 
