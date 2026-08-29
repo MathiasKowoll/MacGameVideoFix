@@ -131,29 +131,41 @@ src_for() {
 status() {
   local n=0 d
   for d in $DLLS; do [ -f "$SYS/$d.mgvf-stock" ] && n=$((n+1)); done
-  if grep -q "AppDefaults\\\\\\\\$EXE" "$REG" 2>/dev/null && [ "$n" -gt 0 ]; then
+  local key=0
+  grep -q "AppDefaults\\\\\\\\$EXE" "$REG" 2>/dev/null && key=1
+  # The same four words the other eleven installers answer with, so a launcher
+  # can read every fix the same way instead of testing for a carrier file here
+  # and asking a script there. half is a real state and not a rounding of
+  # broken: the DLLs are in place and the override is not, which is what an
+  # install interrupted between its two halves leaves behind, and it is fixed
+  # by running install again rather than by restoring first.
+  if [ "$key" = 1 ] && [ "$n" -eq 4 ]; then
     echo installed
-  elif [ "$n" -gt 0 ]; then
+  elif [ "$key" = 0 ] && [ "$n" -gt 0 ]; then
+    echo half
+  elif [ "$n" -gt 0 ] || [ "$key" = 1 ]; then
     echo broken
   else
     echo absent
   fi
 }
 
-# Before either action, not just install: --restore edits the registry too,
-# and a live wineserver undoes it just as silently.
-if pgrep -f wineserver >/dev/null 2>&1; then
-  echo "error: wine is running. Quit the game and CrossOver first -- a live" >&2
-  echo "       wineserver holds the registry in memory and writes it back on" >&2
-  echo "       exit, silently undoing anything written here." >&2
-  exit 1
-fi
-
 export MGVF_EXE="$EXE"
 
 case "$ACTION" in
   --status) status; exit 0 ;;
   --restore)
+      # Only where something is written. --status answers a question and changes
+      # nothing, and a launcher asks it while the bottle is very much alive -- so
+      # refusing it there would make the one call that must always work the one call
+      # that fails. Install and restore both edit the registry, and a live wineserver
+      # holds it in memory and writes it back on exit, undoing them in silence.
+      if pgrep -f wineserver >/dev/null 2>&1; then
+        echo "error: wine is running. Quit the game and CrossOver first -- a live" >&2
+        echo "       wineserver holds the registry in memory and writes it back on" >&2
+        echo "       exit, silently undoing anything written here." >&2
+        exit 1
+      fi
       for d in $DLLS; do
         if [ -f "$SYS/$d.mgvf-stock" ]; then
           mv -f "$SYS/$d.mgvf-stock" "$SYS/$d"
@@ -172,7 +184,19 @@ case "$ACTION" in
       ' "$REG" && echo "removed the per-application overrides"
       echo "restored"
       exit 0 ;;
-  install) ;;
+  install)
+      # Only where something is written. --status answers a question and changes
+      # nothing, and a launcher asks it while the bottle is very much alive -- so
+      # refusing it there would make the one call that must always work the one call
+      # that fails. Install and restore both edit the registry, and a live wineserver
+      # holds it in memory and writes it back on exit, undoing them in silence.
+      if pgrep -f wineserver >/dev/null 2>&1; then
+        echo "error: wine is running. Quit the game and CrossOver first -- a live" >&2
+        echo "       wineserver holds the registry in memory and writes it back on" >&2
+        echo "       exit, silently undoing anything written here." >&2
+        exit 1
+      fi
+      ;;
   *) usage ;;
 esac
 
