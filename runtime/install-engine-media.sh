@@ -127,7 +127,36 @@ fi
 install_one() {
   local src="$1" dest="$2"
   [ -f "$dest" ] || { echo "error: no $dest to replace" >&2; exit 1; }
-  [ -f "$dest.mgvf-stock" ] || cp "$dest" "$dest.mgvf-stock"
+
+  # Back up the ORIGINAL, and never our own build.
+  #
+  # This used to test only whether the backup already existed. On an engine
+  # that already had our winegstreamer in it -- which is how this one got here,
+  # installed by hand long before this script existed -- the very first run
+  # saved the patched file as "stock". The result is a backup that is byte for
+  # byte the patch, and a --restore that puts the patch back and reports
+  # success. Anything downstream asking "is this engine clean?" by comparing
+  # against .mgvf-stock then answers yes when it is not.
+  #
+  # Presence answers "have I run before". The question is "is what I am about
+  # to overwrite the original", and only the content answers that.
+  if [ -f "$dest.mgvf-stock" ]; then
+    # An existing backup that IS our build is poisoned. Carrying on would leave
+    # --restore lying, so it stops here rather than compounding it.
+    if cmp -s "$src" "$dest.mgvf-stock"; then
+      echo "error: $dest.mgvf-stock is this same build, not the original." >&2
+      echo "       It was taken from an engine that already carried our copy, so" >&2
+      echo "       --restore would reinstall the patch and report success." >&2
+      echo "       Delete it, put the real original back at $dest, and re-run." >&2
+      echo "       A CrossOver patcher usually leaves one as $dest.stock." >&2
+      exit 1
+    fi
+  elif ! cmp -s "$src" "$dest"; then
+    cp "$dest" "$dest.mgvf-stock"
+  else
+    echo "  note: $(basename "$dest") is already this build; no backup taken" >&2
+  fi
+
   cp "$src" "$dest"
   echo "  $(basename "$dest")  <- $(basename "$src")"
 }
