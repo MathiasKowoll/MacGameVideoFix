@@ -183,19 +183,46 @@ worth stating rather than leaving to be discovered.
   CrossOver for every bottle and every game, and invalidates the code signature
   — a decision for a person, not something to apply on a title's behalf.
 
-## A prerequisite that is not a file we ship
+## The GStreamer prerequisite, and who it applies to
 
-The plugins in category 3 are copied out of **GStreamer.framework on the user's
-own machine**, from `/Library/Frameworks/GStreamer.framework/Versions/1.0`.
-`stage-codecs.sh` refuses with instructions when it is absent, naming the macOS
+There are two ways the decoders reach a running game, and only one of them
+needs anything installed on the user's machine. Getting this wrong in either
+direction is easy, so it is stated as a table.
+
+| | where the plugins come from | needs GStreamer.framework |
+| --- | --- | --- |
+| **Our installers** — category 3 | copied out of `/Library/Frameworks/GStreamer.framework`, staged per engine, pointed at by `GST_PLUGIN_PATH` | **yes** |
+| **A launcher that owns its engine** | placed inside the engine it builds | **no** |
+
+MacGameVideoFix installs onto whatever CrossOver a person already has and does
+not modify it, so staging is the only route open to it — and `stage-codecs.sh`
+refuses with instructions when the framework is absent, naming the macOS
 *runtime* package of the 1.24 series.
 
-So the honest answer to "does a machine elsewhere have everything" is: it has
-every binary this project produces or redistributes, and it still needs
-GStreamer installed before any codec-dependent title works. That is a
-prerequisite a launcher has to check for and explain, not something a bundle can
-carry — the plugins are not ours to redistribute, which is why they are staged
-rather than shipped.
+**RaccoonBot is in the second row**, and has been since 2026-08-26. It builds
+its own engine, so it puts the plugins inside it, and its users need nothing
+installed. `docs/codecs-inside-the-engine.md` records that arrangement and why
+it is the better one: a staged plugin brings its own copy of the GStreamer core,
+so a process ends up with two — ours at 1.24.13 and the engine's at 1.28 —
+whereas a plugin placed inside binds to the engine's own.
+
+The engine on this machine shows the difference plainly. Stock CrossOver 26.3
+carries 18 plugins with no `libgstlibav`, no `libgstmatroska` and no
+`libgstvpx`; Preview adds matroska and no more; the patched engine has 21,
+including all three, with `libav*` and its dependencies beside them.
+
+**`winegstreamer` is not what supplies them.** It is Wine's *bridge* to
+GStreamer — `otool -L` shows it linking `libgstreamer-1.0`, `libgstvideo`,
+`libgstaudio`, `libgsttag` and `libglib`, and no decoder at all. It is what
+lets a Windows process reach whatever plugins are present; the plugins are a
+separate question, answered by the table above. Both halves are needed, and
+neither substitutes for the other.
+
+**The destination differs by engine, and guessing it breaks things.** 26.3 keeps
+plugins in `lib64/gstreamer-1.0`; 27 keeps them in `lib/<arch>/gstreamer-1.0`.
+Do not invent a `lib64` on a 27-based engine — the block in its `wine` that sets
+`GST_PLUGIN_SYSTEM_PATH` *replaces* the path rather than adding to it, so a
+half-filled `lib64` would hide the engine's own twenty plugins.
 
 ## What a launcher has to copy
 
@@ -228,7 +255,15 @@ rather than shipped.
   destinations. A patcher that would rather overlay a tree than read a mapping
   has `runtime/engine-payload/` for exactly that; the two are the same bytes.
 
-**Without category 4, a machine elsewhere is not merely missing a title's fix.**
-Every codec-dependent fix in categories 1 and 2 assumes the engine can decode at
-all, and that assumption is what this pair provides. It has never been tested
-against an engine without it.
+**Decoding takes two things, and category 4 is only one of them.** The
+`winegstreamer` pair is the bridge from a Windows process to GStreamer; the
+plugins in the table above are what actually decode. A machine with the bridge
+and no `libgstlibav` decodes nothing, and a machine with the plugins and a
+mismatched bridge is worse off still, because that failure looks exactly like
+the fault the bridge was built to repair.
+
+So the checklist for a machine elsewhere is both rows: the pair from category 4,
+installed against an engine whose app name and version match `built-for.json`,
+and the plugins by whichever of the two routes applies — staged from the user's
+own GStreamer, or placed inside an engine the launcher builds. Neither half has
+been tested without the other.
