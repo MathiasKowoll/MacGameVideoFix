@@ -26,6 +26,7 @@
 # runtime/check-builds.sh checks these against the app's own table, so the two
 # copies cannot drift apart in silence.
 #
+# MGVF-SCOPE: folder
 # MGVF-GAME: Persona 5 Strikers | game.exe | 
 # MGVF-WHY: Cutscene runs with sound and no picture. Needs the staged decoder as well: its video is VC-1.
 

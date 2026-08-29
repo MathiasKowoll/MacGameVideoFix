@@ -31,6 +31,7 @@
 # runtime/check-builds.sh checks these against the app's own table, so the two
 # copies cannot drift apart in silence.
 #
+# MGVF-SCOPE: folder
 # MGVF-GAME: Nioh 3 | Nioh3.exe | 
 # MGVF-WHY: Cutscene runs with sound, picture black. Same bridge as DYNASTY WARRIORS on a different carrier.
 

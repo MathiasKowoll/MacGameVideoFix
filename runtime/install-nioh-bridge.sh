@@ -32,6 +32,7 @@
 # runtime/check-builds.sh checks these against the app's own table, so the two
 # copies cannot drift apart in silence.
 #
+# MGVF-SCOPE: folder
 # MGVF-GAME: Nioh | nioh.exe | 
 # MGVF-GAME: Nioh 2 | nioh2.exe | 
 # MGVF-WHY: Cutscene runs with sound and no picture. Needs the staged decoder as well: its video is WMV3.

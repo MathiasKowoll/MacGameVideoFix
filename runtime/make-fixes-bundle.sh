@@ -139,7 +139,14 @@ for my $f (sort glob("$repo/runtime/install-*.sh")) {
     # a bottle, because its DLLs go into the bottle's system32 and its override
     # is a registry key, neither reachable from the folder a user drops on a
     # window. Absent means folder, so no existing entry changes meaning.
-    my $scope   = $grab->(qr/^# MGVF-SCOPE: (\S+)$/m) || "folder";
+    my $scope   = $grab->(qr/^# MGVF-SCOPE: (\S+)$/m);
+    # Declared, never defaulted. Falling back to "folder" would give a new
+    # installer that forgot the line the right answer by accident eleven times
+    # out of twelve, and the wrong one silently on the twelfth -- which is the
+    # failure this whole field exists to prevent. An omission is a mistake and
+    # is said so here, where it costs a rerun, rather than at a user's machine.
+    die "error: $script declares no # MGVF-SCOPE: line (folder or bottle)\n"
+        unless defined $scope && $scope =~ /^(folder|bottle)$/;
     my $esc = sub { my ($t) = @_; $t //= ""; $t =~ s/(["\\])/\\$1/g; $t };
 
     # One entry per TITLE, not per script: four of these serve more than one

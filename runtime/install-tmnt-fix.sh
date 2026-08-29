@@ -38,6 +38,7 @@
 # runtime/check-builds.sh checks these against the app's own table, so the two
 # copies cannot drift apart in silence.
 #
+# MGVF-SCOPE: folder
 # MGVF-GAME: TMNT: Splintered Fate | TMNTSF.exe | 
 # MGVF-WHY: Not about video: it guards one D3D12 call that ends the process instead of returning an error.
 

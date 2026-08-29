@@ -37,6 +37,7 @@
 # runtime/check-builds.sh checks these against the app's own table, so the two
 # copies cannot drift apart in silence.
 #
+# MGVF-SCOPE: folder
 # MGVF-GAME: NieR Replicant ver.1.22474487139 | NieR Replicant ver.1.22474487139.exe | 
 # MGVF-WHY: Crashes when the first video starts. Its video is WMV2 with WMA v2 audio in ASF, and CrossOver demuxes ASF while decoding neither stream, so the staged decoder is needed too.
 

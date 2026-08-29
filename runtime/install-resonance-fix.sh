@@ -75,6 +75,7 @@
 # disk exactly as the community fix says -- which is equivalent to this and just
 # as black on a non-16:9 display.
 #
+# MGVF-SCOPE: folder
 # MGVF-GAME: RESONANCE: A PLAGUE TALE LEGACY | Resonance.exe |
 # MGVF-WHY: Refuses to start: "Shader Model 6.7 is not supported by this device". Needs a 16:9 display as well -- on an Apple laptop panel it renders into a window that stays black.
 #

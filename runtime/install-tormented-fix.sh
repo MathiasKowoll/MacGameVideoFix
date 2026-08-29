@@ -53,6 +53,7 @@
 # runtime/check-builds.sh checks these against the app's own table, so the two
 # copies cannot drift apart in silence.
 #
+# MGVF-SCOPE: folder
 # MGVF-GAME: Tormented Souls 2 | TormentedSouls2.exe | TormentedSouls2/Binaries/Win64
 # MGVF-WHY: The same D3D12 guards on the colour-management library the game imports.
 
