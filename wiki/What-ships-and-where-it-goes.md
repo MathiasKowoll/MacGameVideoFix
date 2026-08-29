@@ -218,11 +218,23 @@ core it is re-homed onto — but its instructions used to name 1.24.14, which
 would have sent a user to a release the other route on the same machine refuses.
 Accepting a range and advising a version are different jobs.
 
-**Without it, nothing announces the problem.** The engine ends up as stock 26.3
-is — eighteen plugins, no `libgstlibav`, no `libgstmatroska`, no `libgstvpx` —
-and the first sign is a black cutscene in a title whose fix is installed and
-reporting healthy. A launcher should check for the framework and say so plainly
-before a user reaches that point.
+**All three surfaces do announce it, and that was worth checking rather than
+assuming.** `stage-codecs.sh` refuses outright when the framework is absent, and
+otherwise prints the version it found and compares its series against the engine
+core it is staging for. The app carries a staging step of its own and says per
+title — *"Also needs the VC-1 codec staged."* RaccoonBot reads `GStreamerStatus`
+into its Options screen and, for someone who installed the wrong release, names
+both versions in one sentence: *"GStreamer 1.24.14 is installed, but 1.24.13 is
+the one…"*, with an Install button when it is missing entirely.
+
+An earlier version of this paragraph said nothing announced it. That was written
+without opening any of the three, and each one disproves it.
+
+**The failure it still produces is worth knowing.** Ignore all of that and the
+engine ends up as stock 26.3 is — eighteen plugins, no `libgstlibav`, no
+`libgstmatroska`, no `libgstvpx` — and the first sign is a black cutscene in a
+title whose fix is installed and reporting healthy. The fix *is* healthy; it has
+nothing to decode.
 
 **`winegstreamer` is not what supplies them.** `otool -L` shows it linking
 `libgstreamer-1.0`, `libgstvideo`, `libgstaudio`, `libgsttag` and `libglib`, and
