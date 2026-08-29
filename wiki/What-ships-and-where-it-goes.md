@@ -58,44 +58,64 @@ entire fix and no DLL is installed beside the game at all.
 **Where they go:** into the CrossOver application's own
 `lib64/gstreamer-1.0`. They are shared by every bottle that engine runs.
 
-## 4. Built here, installed into the engine, and packaged nowhere
+## 4. Built here, installed into the engine
 
 Three files, all produced by this project, all sitting in the engine on this
-machine, none of them in any bundle. `scripts/build-winegstreamer.sh` builds
-them from a wine tree under `~/Development/mgvf-winegstreamer-build`, and
-`built-for.json` beside them records what they were built against:
+machine. `scripts/build-winegstreamer.sh` builds them from a wine tree under
+`~/Development/mgvf-winegstreamer-build`, and `built-for.json` beside them
+records what they were built against:
 
     engine 26.3.0.39832, wine-11.0-8726-g2e2f5fca349, patches 0002 0003 0006 0008
 
-| file | size | what it is |
-| --- | --- | --- |
-| `winegstreamer.dll` | 2,330,624 | Wine's GStreamer bridge, PE half |
-| `winegstreamer.so` | 222,376 | the same bridge, Unix half |
-| `d3d9.dll` | 1,576,960 | Wine's d3d9 with winevideo's video-bridge patches |
+| file | size | what it is | packaged |
+| --- | --- | --- | --- |
+| `winegstreamer.dll` | 2,330,624 | Wine's GStreamer bridge, PE half | yes |
+| `winegstreamer.so` | 222,376 | the same bridge, Unix half | yes |
+| `d3d9.dll` | 1,576,960 | Wine's d3d9 with winevideo's video-bridge patches | **no, deliberately** |
 
-**The winegstreamer pair is load-bearing and travels nowhere.** It was built
-because codecs that were present would not show. Both halves have to match each
-other and the engine they were built against, which is why `built-for.json`
-exists and why neither half can be shipped without the other.
+**The winegstreamer pair is load-bearing.** It was built because codecs that were
+present would not show. Both halves have to match each other and the engine they
+were built against, which is why `built-for.json` exists and why neither half can
+be shipped without the other.
 
-**The d3d9 is not.** It was built with winevideo's `0008` and `0009` patches for
-the Nioh work and it did not fix Nioh — recorded in `docs/codecs-inside-the-engine.md`
-at the time: *"with the complete bridge in the engine the title still dies with
-zero calls to it"*. The bridge those titles actually use is
-`runtime/p5s-video-bridge.c`, which ships as `GfeSDK.dll` and `amd_ags_x64.dll`
-in the game folder and intercepts `OpenSharedResource` itself. Worse, this build
-displaces something: RaccoonBot's patcher installs **d9vk** as the engine's
-`d3d9.dll`, 3,848,151 bytes, and ours is sitting on top of it. It should go back.
-
-**What this means for a user elsewhere.** The titles whose fix names the
-D3D9-to-D3D11 bridge get that bridge from the game folder, so they are not
-waiting on the d3d9; every other title never touches D3D9 at all. What they and every codec-dependent title may be
-waiting on is the winegstreamer pair, and that has never been tested against an
-engine without it.
+**The d3d9 is not, and is left out on purpose.** It was built with winevideo's
+`0008` and `0009` patches for the Nioh work and it did not fix Nioh — recorded in
+`docs/codecs-inside-the-engine.md` at the time: *"with the complete bridge in the
+engine the title still dies with zero calls to it"*. The bridge those titles
+actually use is `runtime/p5s-video-bridge.c`, which ships as `GfeSDK.dll` and
+`amd_ags_x64.dll` in the game folder and intercepts `OpenSharedResource` itself.
+Worse, this build displaces something: RaccoonBot's patcher installs **d9vk** as
+the engine's `d3d9.dll`, 3,848,151 bytes, and ours is sitting on top of it. It
+should go back. Packaging it would push that same displacement onto every machine
+that ran the patcher.
 
 This page has been wrong about these files twice, in opposite directions, before
 anyone looked for the build tree that `docs/codecs-inside-the-engine.md` names.
-Both claims were made from file sizes.
+Both claims were made from file sizes. **Do not decide whose a binary is by
+comparing sizes.**
+
+### The payload folder
+
+`runtime/engine-payload/` holds the two load-bearing halves laid out the way a
+CrossOver engine is, so a patcher building its own copy can overlay the tree
+without a mapping table of its own:
+
+    wine/x86_64-windows/winegstreamer.dll   ->  <CX>/lib/wine/x86_64-windows/winegstreamer.dll
+    wine/x86_64-unix/winegstreamer.so       ->  <CX>/lib/wine/x86_64-unix/winegstreamer.so
+    built-for.json                          ->  not copied; read it first
+
+This is the shape RaccoonBot's patcher already consumes for d9vk, so the overlay
+belongs in the same pass that produces the patched CrossOver — not in a later
+step against an engine that is already built and possibly already running.
+
+**The guard is not paperwork.** The two halves speak an interface that changes
+between wine revisions; onto a different wine they do not degrade, they stop
+loading media — failing in the exact shape of the fault they were built to
+repair. And the version alone does not identify an engine: the patched fork and
+a stock CrossOver both report `26.3.0.39832`, which is how this project once
+wrote into a stock install during a test. The app name is the part that tells
+them apart. `install-engine-media.sh` checks both, and any patcher consuming the
+payload directly should check both too.
 
 ## What a launcher has to copy
 
@@ -105,4 +125,30 @@ Both claims were made from file sizes.
 - Category 3 is not per-title: `stage-codecs.sh` travels in the same bundle and
   is run against the engine, not a game. The manifest's `codec` field says which
   titles need it.
-- Category 4 is the open question above.
+- Category 4 travels too, and is **not** under `games` — nothing about it is
+  per-title, and a nameless row in a list keyed by title is a row someone will
+  try to match against a game folder. It has its own top-level block, which says
+  where each file goes and what it was built for:
+
+```json
+"engine": {
+  "script": "install-engine-media.sh",
+  "scope": "engine",
+  "files":  ["engine-winegstreamer.dll", "engine-winegstreamer.so", "engine-built-for.json"],
+  "install": [
+    {"file": "engine-winegstreamer.dll", "dest": "lib/wine/x86_64-windows/winegstreamer.dll"},
+    {"file": "engine-winegstreamer.so",  "dest": "lib/wine/x86_64-unix/winegstreamer.so"}
+  ],
+  "builtFor": {"app": "Crossover_patched.app", "version": "26.3.0.39832",
+               "wine": "wine-11.0-8726-g2e2f5fca349"}
+}
+```
+
+  The bundle is flat, so `files` are flat names and `install` carries the
+  destinations. A patcher that would rather overlay a tree than read a mapping
+  has `runtime/engine-payload/` for exactly that; the two are the same bytes.
+
+**Without category 4, a machine elsewhere is not merely missing a title's fix.**
+Every codec-dependent fix in categories 1 and 2 assumes the engine can decode at
+all, and that assumption is what this pair provides. It has never been tested
+against an engine without it.

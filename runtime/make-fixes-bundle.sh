@@ -232,6 +232,8 @@ if (-f "$repo/runtime/install-engine-media.sh" && -f "$repo/runtime/engine-built
     $engine_block = sprintf(
       qq(\n  "engine": {"script":"install-engine-media.sh","scope":"engine",)
       . qq("files":["engine-winegstreamer.dll","engine-winegstreamer.so","engine-built-for.json"],)
+      . qq("install":[{"file":"engine-winegstreamer.dll","dest":"lib/wine/x86_64-windows/winegstreamer.dll"},)
+      . qq({"file":"engine-winegstreamer.so","dest":"lib/wine/x86_64-unix/winegstreamer.so"}],)
       . qq("builtFor":{"app":"%s","version":"%s","wine":"%s"},)
       . qq("why":"Wine's GStreamer bridge, both halves, built here because codecs that were present would not show. The two halves must match each other and the engine; the installer refuses any other. Not per-title: it is shared by every bottle on that engine."},),
       $ea // "", $ev // "", $wb // "");

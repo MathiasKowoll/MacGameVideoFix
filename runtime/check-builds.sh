@@ -286,8 +286,25 @@ else
   echo "  bundle: not built"
 fi
 
+# The payload folder is the same bytes as the flat engine-* files, laid out the
+# way an engine is so a patcher can overlay it. Two copies drift; that is the
+# whole reason this check exists.
+echo
+payload_drift=0
+for pair in "engine-winegstreamer.dll:wine/x86_64-windows/winegstreamer.dll" \
+            "engine-winegstreamer.so:wine/x86_64-unix/winegstreamer.so" \
+            "engine-built-for.json:built-for.json"; do
+  flat="$HERE/${pair%%:*}"
+  laid="$HERE/engine-payload/${pair##*:}"
+  if [ ! -f "$flat" ] || [ ! -f "$laid" ]; then
+    echo "  payload missing: ${pair##*:}"; payload_drift=$((payload_drift + 1)); continue
+  fi
+  cmp -s "$flat" "$laid" || { echo "  payload drifted: ${pair##*:}"; payload_drift=$((payload_drift + 1)); }
+done
+[ "$payload_drift" = 0 ] && echo "  payload: engine-payload/ matches the flat engine-* files"
+
 echo
 echo "  $checked rebuilt and compared, $drifted drifted, $missing_source unattributed"
 [ "$drifted" = 0 ] && [ "$bundle_drift" = 0 ] && [ "$missing_source" = 0 ] \
-  && [ "$decl_drift" = 0 ] && [ "$name_leak" = 0 ] || exit 1
+  && [ "$decl_drift" = 0 ] && [ "$name_leak" = 0 ] && [ "$payload_drift" = 0 ] || exit 1
 exit 0
