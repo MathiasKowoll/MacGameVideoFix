@@ -219,5 +219,6 @@ Each row links to a page with the findings and the fix for that title.
   comparison, the open defect on 26.3, and what was tried and did not work.
   These pages hold the per-title findings; that one holds what is shared.
 - [Running the scripts directly](Running-the-scripts.md) — for working from a
+- [What ships, and where it goes](What-ships-and-where-it-goes.md) — every binary, its origin, and which of four places it belongs to.
   clone: reproducing a fix by hand, or building a proxy for a title that has none.
   Nothing here is needed to use a release.
