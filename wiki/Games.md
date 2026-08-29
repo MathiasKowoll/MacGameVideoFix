@@ -52,11 +52,12 @@ Apple's Game Porting Toolkit is what actually draws these games, and CrossOver
 ships it inside the bundle rather than as something you pick: 26.3 carries
 D3DMetal 3.0, Preview 27.0 carries 4.0b2 and uses it unless
 `CX_GRAPHICS_BACKEND_VERSION` says otherwise. So "this only works on Preview"
-has, for at least two titles here, meant "this needs the newer toolkit" and
+has, for three of the rows here, meant "this needs the newer toolkit" and
 nothing about Wine at all.
 
-The two rows in bold are where that stops being a footnote. **NINJA GAIDEN 4
-runs on 3.0 and stalls on 4.0b2. Life is Strange runs on 4.0b2 and crashes on
+Those three rows in bold are where that stops being a footnote, and they fall
+into two camps pointing opposite ways. **NINJA GAIDEN 4 runs on 3.0 and stalls
+on 4.0b2. Life is Strange -- both packages -- runs on 4.0b2 and crashes on
 3.0.** Opposite requirements, same machine, so there is no single toolkit that
 serves the whole table and no version of CrossOver that is simply "better".
 Both were measured by moving the toolkit under a fixed CrossOver, which is the
@@ -77,19 +78,24 @@ D3DMetal with the D3D12 renderer, which is also what keeps PSO precompilation
 -- `-dx11` dodges some of these faults and costs permanent shader-compilation
 stutter.
 
-**Which CrossOver, and what "Preview" means.** Every measurement here was taken
-against CrossOver 26.3 and `crossover-preview-arm64-20260821`, and the CrossOver
-column says which of the two a title was measured on rather than which it might
-work on. **Seventeen of the nineteen run on stable 26.3**, which inverts where
-this project started: stable was the exception and is now the rule, and the
-toolkit -- not the engine -- turned out to be the axis that decides most of
-these titles.
+**Which CrossOver, and what "Preview" means.** Every measurement here was
+taken against CrossOver 26.3 and `crossover-preview-arm64-20260821`, and the
+CrossOver column says which of the two a title was measured on rather than
+which it might work on. **Nineteen of the twenty-one run on stable 26.3**,
+which inverts where this project started: stable was the exception and is now
+the rule, and the toolkit -- not the engine -- turned out to be the axis that
+decides most of these titles.
 
-The two exceptions point in opposite directions. The Kingdom Hearts pair has
-only ever been launched on Preview, so its rows record an absence rather than a
-result and nothing is claimed either way. NINJA GAIDEN 4 is the reverse: it runs
-on stock 26.3 and stalls on Preview, and what stalls it is the toolkit, which
-executes command lists concurrently with no lever to turn that off.
+The two that are missing point one way and are not a result: the Kingdom
+Hearts pair has only ever been launched on Preview, so its rows record an
+absence rather than a finding and nothing is claimed either way.
+
+Two run on stable and stall on Preview, which is the interesting direction:
+Beast of Reincarnation and NINJA GAIDEN 4. What stalls NINJA GAIDEN 4 is the
+toolkit, which executes command lists concurrently with no lever to turn that
+off. Beast of Reincarnation is on that list for a different reason -- it needs
+winevideo since the game update of 2026-08-24 -- and the shared lesson is that
+"runs on Preview" was never the safe assumption this project began with.
 
 Two lessons paid for by rows that were wrong for a while, and are worth more
 than the statuses they corrected:

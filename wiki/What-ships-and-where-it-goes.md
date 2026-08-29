@@ -84,10 +84,38 @@ be shipped without the other.
 engine the title still dies with zero calls to it"*. The bridge those titles
 actually use is `runtime/p5s-video-bridge.c`, which ships as `GfeSDK.dll` and
 `amd_ags_x64.dll` in the game folder and intercepts `OpenSharedResource` itself.
-Worse, this build displaces something: RaccoonBot's patcher installs **d9vk** as
-the engine's `d3d9.dll`, 3,848,151 bytes, and ours is sitting on top of it. It
-should go back. Packaging it would push that same displacement onto every machine
-that ran the patcher.
+And it occupies a path something else wants. RaccoonBot's patcher writes **d9vk**
+to `lib/wine/x86_64-windows/d3d9.dll`, which is exactly where this one sits.
+
+Measured on this machine rather than assumed, because the first version of this
+paragraph said ours was sitting on top of d9vk and that was wrong:
+
+| | x86_64-windows | i386-windows |
+| --- | --- | --- |
+| in the engine now | 1,576,960 — ours | 185,424 — wine's own |
+| `d3d9.dll.stock` beside it | 192,080 — wine's own | — |
+| what d9vk would be | 3,848,151 | 4,050,110 |
+
+**d9vk is not in the engine at all**, in either architecture. So ours did not
+displace it; the legible sequence is that wine's original was backed up, ours
+was written over it, and d9vk was either never applied or applied and then
+overwritten. Ours should still come out — but taking it out is not by itself
+enough, and the honest repair is to re-patch the engine from the application
+rather than to copy a file over by hand.
+
+That gap may also be a lead. NINJA GAIDEN Sigma is a D3D9 title that fails with
+`DxvkAdapter: Failed to create device`, MoltenVK reporting `transformFeedback`,
+`bufferDeviceAddress`, `timelineSemaphore` and `depthClipEnable` all zero —
+which is the same diagnosis NINJA GAIDEN 3's page gives. A properly installed
+d9vk is the other road for that title, and nobody has been able to try it,
+because the engine has not had d9vk in it.
+
+**None of this is the NINJA GAIDEN 3 fix**, which is a separate `d3d9.dll` that
+happens to share the name. That one is d9vk (3,832,944 bytes, third-party, in
+category 2 above), and it goes into the **bottle's** `drive_c/windows/system32`
+with per-executable registry overrides — never into the engine, so it reaches
+one title without changing D3D9 for anything else on the machine. Two files, the
+same filename, different origins and different destinations.
 
 This page has been wrong about these files twice, in opposite directions, before
 anyone looked for the build tree that `docs/codecs-inside-the-engine.md` names.

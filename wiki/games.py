@@ -13,6 +13,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 import pathlib
 import re
+import textwrap
 import sys
 
 # game, engine, symptom, fix, backend, dx, crossover, status, page
@@ -136,13 +137,15 @@ Apple's Game Porting Toolkit is what actually draws these games, and CrossOver
 ships it inside the bundle rather than as something you pick: 26.3 carries
 D3DMetal 3.0, Preview 27.0 carries 4.0b2 and uses it unless
 `CX_GRAPHICS_BACKEND_VERSION` says otherwise. So "this only works on Preview"
-has, for at least two titles here, meant "this needs the newer toolkit" and
+has, for {gptk_n} of the rows here, meant "this needs the newer toolkit" and
 nothing about Wine at all.
 
-The two rows in bold are where that stops being a footnote. **NINJA GAIDEN 4
-runs on 3.0 and stalls on 4.0b2. Life is Strange runs on 4.0b2 and crashes on
-3.0.** Opposite requirements, same machine, so there is no single toolkit that
-serves the whole table and no version of CrossOver that is simply "better".
+Those {gptk_n} rows in bold are where that stops being a footnote, and they
+fall into two camps pointing opposite ways. **NINJA GAIDEN 4 runs on 3.0 and
+stalls on 4.0b2. Life is Strange -- both packages -- runs on 4.0b2 and crashes
+on 3.0.** Opposite requirements, same machine, so there is no single toolkit
+that serves the whole table and no version of CrossOver that is simply
+"better".
 Both were measured by moving the toolkit under a fixed CrossOver, which is the
 only way to separate the two.
 
@@ -164,16 +167,21 @@ stutter.
 **Which CrossOver, and what "Preview" means.** Every measurement here was taken
 against CrossOver 26.3 and `crossover-preview-arm64-20260821`, and the CrossOver
 column says which of the two a title was measured on rather than which it might
-work on. **Seventeen of the nineteen run on stable 26.3**, which inverts where
+work on. **{on_stable} of the {corpus} run on stable 26.3**, which inverts where
 this project started: stable was the exception and is now the rule, and the
 toolkit -- not the engine -- turned out to be the axis that decides most of
 these titles.
 
-The two exceptions point in opposite directions. The Kingdom Hearts pair has
-only ever been launched on Preview, so its rows record an absence rather than a
-result and nothing is claimed either way. NINJA GAIDEN 4 is the reverse: it runs
-on stock 26.3 and stalls on Preview, and what stalls it is the toolkit, which
-executes command lists concurrently with no lever to turn that off.
+The {off_stable} that are missing point one way and are not a result: the
+Kingdom Hearts pair has only ever been launched on Preview, so its rows record
+an absence rather than a finding and nothing is claimed either way.
+
+{stalls_n} run on stable and stall on Preview, which is the interesting
+direction: {stalls_list}. What stalls NINJA GAIDEN 4 is the toolkit, which
+executes command lists concurrently with no lever to turn that off. Beast of
+Reincarnation is on that list for a different reason -- it needs winevideo since
+the game update of 2026-08-24 -- and the shared lesson is that "runs on Preview"
+was never the safe assumption this project began with.
 
 Two lessons paid for by rows that were wrong for a while, and are worth more
 than the statuses they corrected:
@@ -221,6 +229,56 @@ being crashed on, mislabelled, or thrown away.
 Every row is a title we deliberately took on, and every claim on the linked
 page comes from a measurement on an installed copy.
 """
+
+
+WORDS = ("zero one two three four five six seven eight nine ten eleven twelve "
+         "thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty "
+         "twenty-one twenty-two twenty-three twenty-four twenty-five twenty-six "
+         "twenty-seven twenty-eight twenty-nine thirty").split()
+
+
+def _word(n):
+    """The count as this project writes counts: a word while there is one."""
+    return WORDS[n] if n < len(WORDS) else str(n)
+
+
+def _note():
+    """Fill the note's counts from the rows, so it cannot say nineteen at 21.
+
+    This paragraph sat inside the generated block as a literal for two titles
+    longer than it was true. Being inside the markers is what made it look safe
+    -- hand_counts() skips generated blocks precisely because they are supposed
+    to be rewritten from the rows every run, and this one was not.
+    """
+    # "Preview -- not tried on 26.3" contains "26.3" and means the opposite, so
+    # the test is what was measured, not which strings appear.
+    measured = [g for g in GAMES if "not tried on 26.3" not in g[6]]
+    stalls = [g for g in GAMES if "Preview stalls" in g[6]]
+    names = [g[0] for g in stalls]
+    listed = (" and ".join(names) if len(names) < 3
+              else ", ".join(names[:-1]) + " and " + names[-1])
+    gptk_req = [g for g in GAMES if "only" in gptk(g[6], g[0])]
+    values = dict(
+        gptk_n=_word(len(gptk_req)),
+        on_stable=_word(len(measured)).capitalize(),
+        corpus=_word(len(GAMES)),
+        off_stable=_word(len(GAMES) - len(measured)),
+        stalls_n=_word(len(stalls)).capitalize(),
+        stalls_list=listed,
+    )
+    # Substituting a word of a different length leaves the paragraph ragged, so
+    # the ones that take a value are rewrapped and the rest are left exactly as
+    # they were written. Only prose is touched: a bullet reflowed into the
+    # paragraph above it would be a worse bug than a long line.
+    out = []
+    for block in NOTE.split("\n\n"):
+        if "{" not in block or block.lstrip().startswith(("- ", "* ", "|", "    ")):
+            out.append(block)
+            continue
+        out.append(textwrap.fill(" ".join(block.split()).format(**values),
+                                 width=78, break_long_words=False,
+                                 break_on_hyphens=False))
+    return "\n\n".join(out)
 
 
 # --------------------------------------------------------------- the stack
@@ -516,7 +574,7 @@ def table():
         f"| [{g}]({page}.md) | {engine} | {sym} | {fix} | {backend} | {dx} "
         f"| {gptk(cx, g)} | {cx} | {status} |\n"
         for g, engine, sym, fix, backend, dx, cx, status, page in GAMES)
-    return f"{BEGIN}\n\n{HEAD}{rows}{NOTE}\n{END}"
+    return f"{BEGIN}\n\n{HEAD}{rows}{_note()}\n{END}"
 
 
 # ------------------------------------------------------------------ README
@@ -546,15 +604,15 @@ def readme_table():
 # ------------------------------------------------------- hand-counted claims
 #
 # A number written into prose is a claim that was true once. This repository has
-# now been caught by that five separate times in one day -- "three titles need a
-# codec" when it was seven, "six of the eighteen run on stable" when it was
-# seventeen of nineteen, "four sources" when there were five, "the other nine"
-# when there were twelve, "what the nine titles have in common" over a table of
+# now been caught by that five separate times in one day -- "three titles need a  # count-ok
+# codec" when it was seven, "six of the eighteen run on stable" when it was  # count-ok
+# seventeen of nineteen, "four sources" when there were five, "the other nine"  # count-ok
+# when there were twelve, "what the nine titles have in common" over a table of  # count-ok
 # nineteen. Each one was written beside a generated table that already knew
 # better.
 #
 # So this refuses them. Outside the generated blocks, a sentence that counts the
-# things this file counts is an error, not a style preference: say "the titles
+# things this file counts is an error, not a style preference: say "the titles  # count-ok
 # marked X in the table" and let the table do the counting.
 #
 # It cannot know the right number -- that is the point. It knows that a number
@@ -570,21 +628,21 @@ CORPUS = r"(?:titles?|games?|entries|rows|fixes)"
 # in two places from the moment it is written and only one of them is kept up to
 # date.
 CLAIMS = [
-    # "Six of the eighteen", "Three of the nine"
+    # "Six of the eighteen", "Three of the nine"  # count-ok
     re.compile(rf"\b{COUNTED}\s+of\s+the\s+{COUNTED}\b", re.I),
-    # "seven titles here", "nine games here"
+    # "seven titles here", "nine games here"  # count-ok
     re.compile(rf"\b{COUNTED}\s+(?:of\s+the\s+)?{CORPUS}\s+here\b", re.I),
-    # "what the nine titles have in common", "the nine have in common"
+    # "what the nine titles have in common", "the nine have in common"  # count-ok
     re.compile(rf"\bthe\s+{COUNTED}\s+(?:{CORPUS}\s+)?have\s+in\s+common\b", re.I),
-    # "The other nine run on", "the other five titles need"
+    # "The other nine run on", "the other five titles need"  # count-ok
     re.compile(rf"\bthe\s+other\s+{COUNTED}\s+(?:{CORPUS}\s+)?(?:run|need|are|use|go)\b", re.I),
-    # "the mechanism these six share", "these six run"
+    # "the mechanism these six share", "these six run"  # count-ok
     re.compile(rf"\bthese\s+{COUNTED}\s+(?:share|run|need|are|use)\b", re.I),
-    # "Three also run on stable", "Seventeen of the nineteen run on stable"
+    # "Three also run on stable", "Seventeen of the nineteen run on stable"  # count-ok
     re.compile(rf"\b{COUNTED}\s+(?:\w+\s+){{0,2}}?(?:also\s+)?run\s+on\s+stable\b", re.I),
-    # "Six games borrow a decoder", "Three titles need a codec"
+    # "Six games borrow a decoder", "Three titles need a codec"  # count-ok
     re.compile(rf"\b{COUNTED}\s+{CORPUS}\s+(?:borrow|need|require|play|ship)\b", re.I),
-    # "the only title here", "Persona 5 Strikers, and only it"
+    # "the only title here", "Persona 5 Strikers, and only it"  # count-ok
     re.compile(r"\bonly\s+title\s+here\b", re.I),
     re.compile(r"\band\s+only\s+it\b", re.I),
 ]
@@ -626,7 +684,7 @@ def hand_counts(paths):
 #
 # Emitted rather than copied. The fixes bundle ships the installers and not this
 # file, so the data has to travel -- but travelling as a second hand-written
-# list is how "three titles need a codec" became wrong while seven did.
+# list is how "three titles need a codec" became wrong while seven did.  # count-ok
 #
 # A generation is reported ONLY where it is a requirement, never where it is
 # merely what the title happened to be measured on. "3.0 and 4.0b2" means both
@@ -821,7 +879,13 @@ def main():
     # those outright. It runs on every check, not only when a page is stale --
     # the counts go wrong when the ROWS change, which is exactly when the pages
     # are rewritten and look fine.
-    scanned = pages + [here.parent / "app" / "MacGameVideoFix.swift"]
+    # This file too. The counts it writes into the generated block are counts
+    # of the title set like any other, and being inside the markers is what let
+    # "Seventeen of the nineteen" survive two new titles: the block is only  # count-ok
+    # rewritten from the rows where it actually reads them, and that sentence
+    # did not. Scanning the source catches a literal the rendered page cannot.
+    scanned = pages + [here.parent / "app" / "MacGameVideoFix.swift",
+                       pathlib.Path(__file__).resolve()]
     counts = hand_counts([q for q in scanned if q.exists()])
     for q, n, frag, line in counts:
         rel = q.relative_to(here.parent)
