@@ -86,6 +86,25 @@ missing_source=0
 for dll in "$HERE"/*.dll; do
   name="$(basename "$dll")"
 
+  # Third-party binaries we redistribute rather than build. They cannot be
+  # rebuilt from a source in this repository, so the proxy test below says
+  # nothing useful about them -- and reported as unknown they read like drift.
+  # What is checked instead is that they still hash to what was published.
+  case "$name" in
+    ng3-*.dll)
+      want="$(grep -E "\`$name\`" "$HERE/ng3-THIRD-PARTY-LICENCES.md" 2>/dev/null | grep -oE '[0-9a-f]{64}' | tail -1)"
+      have="$(shasum -a256 "$dll" | cut -d' ' -f1)"
+      if [ -z "$want" ]; then
+        printf '  %-32s ?  third-party, and no sha256 recorded for it\n' "$name"
+      elif [ "$want" = "$have" ]; then
+        printf '  %-32s ok   third-party, matches its recorded sha256\n' "$name"
+      else
+        printf '  %-32s DRIFTED  third-party, does not match its recorded sha256\n' "$name"
+        drift=1
+      fi
+      continue ;;
+  esac
+
   stem="$(LC_ALL=C strings -a "$dll" | grep -aoE '^[A-Za-z0-9_]+_real\.' | head -1 | sed 's/_real\.$//')"
   mark="$(LC_ALL=C strings -a "$dll" | grep -aoE '[A-Za-z0-9_-]+\.log' | head -1)"
   if [ -z "$stem" ] || [ -z "$mark" ]; then
@@ -221,8 +240,17 @@ for f in sorted((root/"runtime").glob("install-*.sh")):
         got[name] = (exe, f.name)
 
 bad = []
+note = []
 for name, (exe, script) in sorted(got.items()):
     if name not in want:
+        # A bottle-scoped installer is deliberately not in the app: the app asks
+        # for a game folder and cannot know the bottle. Saying so beats a
+        # warning that invites someone to "fix" it by wiring in an argument the
+        # app does not have.
+        if "MGVF-SCOPE: bottle" in (root/"runtime"/script).read_text():
+            note.append(f"{name}: bottle-scoped, so not in the app by design "
+                        f"({script}) -- a launcher runs it")
+            continue
         bad.append(f"declared but not a game the app knows: {name}"); continue
     if want[name] != (exe, script):
         bad.append(f"{name}: declares {exe} via {script}, app says {want[name][0]} via {want[name][1]}")
@@ -230,6 +258,8 @@ for name in sorted(want):
     if name not in got:
         bad.append(f"the app has {name} and no installer declares it")
 
+for n in note:
+    print(f"  declaration: {n}")
 for b in bad:
     print(f"  declaration: {b}")
 sys.exit(1 if bad else 0)
