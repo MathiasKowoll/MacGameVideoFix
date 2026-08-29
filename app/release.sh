@@ -63,7 +63,30 @@ codesign --verify "$APP" 2>/dev/null || die "the bundle's signature does not ver
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP" || die "could not package the app"
 say "MacGameVideoFix-$VERSION.zip  $(( $(stat -f%z "$ZIP") / 1024 )) KB"
 
-# The fixes bundle, which is the asset a launcher actually downloads.
+
+if [ "$DRY" = 1 ]; then
+  echo
+  say "--check: nothing was tagged, pushed or uploaded."
+  exit 0
+fi
+
+echo "[5/5] tag, push, upload"
+git -C "$ROOT" tag -a "$TAG" -m "$TAG" 2>/dev/null || say "$TAG already exists, reusing it"
+git -C "$ROOT" push -q origin "$TAG" || die "could not push $TAG"
+gh release view "$TAG" >/dev/null 2>&1 \
+  || gh release create "$TAG" --title "MacGameVideoFix $VERSION" --notes "See the commit for what changed." >/dev/null \
+  || die "could not create the release"
+gh release upload "$TAG" "$ZIP" --clobber >/dev/null || die "could not upload the app"
+
+# Built AFTER the tag, not before.
+#
+# make-fixes-bundle.sh names its output from git describe, so packing it first
+# produced fixes-v4.11.1-8-g7a263a7.tar.gz on a release meant to be 4.11.2. That
+# was patched once by making this script FIND the tarball instead of assuming
+# its name, which removed the error and left the wrong name -- the asset was
+# then renamed by hand on two releases, and renaming things by hand is what this
+# file exists to stop. The consumer matches on the fixes- prefix so nothing was
+# broken; it was just wrong, twice, in a way somebody would eventually rely on.
 #
 # This step used to live in somebody's habit, exactly like the app once did.
 # 4.11.0 went out with the app attached and no bundle, because the guard added
@@ -80,20 +103,6 @@ BUNDLE="$(ls "$OUT"/fixes-*.tar.gz 2>/dev/null | head -1)"
 [ -n "$BUNDLE" ] && [ -f "$BUNDLE" ] || die "make-fixes-bundle.sh produced no tarball in $OUT"
 [ -f "$BUNDLE.sha256" ] || die "the fixes bundle has no checksum beside it"
 say "fixes-v$VERSION.tar.gz  $(( $(stat -f%z "$BUNDLE") / 1024 )) KB"
-
-if [ "$DRY" = 1 ]; then
-  echo
-  say "--check: nothing was tagged, pushed or uploaded."
-  exit 0
-fi
-
-echo "[5/5] tag, push, upload"
-git -C "$ROOT" tag -a "$TAG" -m "$TAG" 2>/dev/null || say "$TAG already exists, reusing it"
-git -C "$ROOT" push -q origin "$TAG" || die "could not push $TAG"
-gh release view "$TAG" >/dev/null 2>&1 \
-  || gh release create "$TAG" --title "MacGameVideoFix $VERSION" --notes "See the commit for what changed." >/dev/null \
-  || die "could not create the release"
-gh release upload "$TAG" "$ZIP" --clobber >/dev/null || die "could not upload the app"
 gh release upload "$TAG" "$BUNDLE" "$BUNDLE.sha256" --clobber >/dev/null \
   || die "could not upload the fixes bundle"
 say "$TAG published with the app, the fixes bundle and its checksum"
