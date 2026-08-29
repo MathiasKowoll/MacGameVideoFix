@@ -3403,6 +3403,20 @@ struct Bottle: Identifiable {
         }
     }
 
+    /// DEAD as of 4.12.3: defined and called from nowhere.
+    ///
+    /// It is left rather than deleted because its siblings are not dead --
+    /// `hasEngineIni` and `removeEngineIni` still earn their place, cleaning up
+    /// an Engine.ini written by an earlier version of this fix on somebody's
+    /// machine. Only the writing half is obsolete: the console variable is set
+    /// in-process now, by `ue5-media-fix.c` locating
+    /// `Electra.Win.H264UseOldOutputPath` by name in the game's own binary,
+    /// which works whether or not anything wrote a file.
+    ///
+    /// Found while auditing what a launcher would lack if this app were not
+    /// installed at all -- a real question, since a person may have only
+    /// RaccoonBot. The answer turned out to be nothing, and this was the one
+    /// candidate that looked like a gap until it was read.
     @discardableResult
     private func writeEngineIni(project: String) -> String? {
         guard let path = engineIni(project: project) else {
