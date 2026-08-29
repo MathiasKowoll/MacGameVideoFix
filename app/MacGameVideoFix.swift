@@ -4400,6 +4400,27 @@ struct ContentView: View {
              + "cutscene. Matching them undoes the choice."
     }
 
+    /// The bottles this screen may touch: the one chosen in the wizard, and no
+    /// other.
+    ///
+    /// Pointing a bottle at a staged codec writes GST_PLUGIN_PATH into its
+    /// cxbottle.conf, which is a change to somebody's configuration. Offering
+    /// every bottle on the machine made that a decision the person had to get
+    /// right, on a screen that does not explain what a bottle is. The rest of
+    /// this app already installs only where the wizard's picker says; this makes
+    /// that one rule rather than a rule with an exception.
+    ///
+    /// It falls back to the whole list when the chosen name is not among them --
+    /// a bottle since renamed or deleted. An empty picker would leave somebody
+    /// unable to configure anything with no way to see why, which is worse than
+    /// the openness this narrows.
+    private var codecBottles: [Codecs.BottleState] {
+        guard let picked = UserDefaults.standard.string(forKey: "setup.bottle"),
+              !picked.isEmpty else { return runner.codecs }
+        let mine = runner.codecs.filter { $0.name == picked }
+        return mine.isEmpty ? runner.codecs : mine
+    }
+
     private var bottlesSheet: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Bottles and CrossOver")
@@ -4429,7 +4450,7 @@ struct ContentView: View {
                         Text("Bottle").font(.callout)
                         Picker("", selection: $pickedBottle) {
                             Text("Choose…").tag(String?.none)
-                            ForEach(runner.codecs) { b in
+                            ForEach(codecBottles) { b in
                                 Text(b.name).tag(String?.some(b.name))
                             }
                         }
