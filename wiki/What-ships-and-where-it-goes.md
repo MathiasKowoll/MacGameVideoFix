@@ -87,10 +87,9 @@ in the game folder and intercepts `OpenSharedResource` itself. Worse, this build
 displaces something: RaccoonBot's patcher installs **d9vk** as the engine's
 `d3d9.dll`, 3,848,151 bytes, and ours is sitting on top of it. It should go back.
 
-**What this means for a user elsewhere.** Eighteen of the twenty-one titles are
-unaffected either way. The three that use the D3D9-to-D3D11 bridge — Nioh,
-Nioh 2, Persona 5 Strikers — get their bridge from the game folder, so they are
-not waiting on the d3d9. What they and every codec-dependent title may be
+**What this means for a user elsewhere.** The titles whose fix names the
+D3D9-to-D3D11 bridge get that bridge from the game folder, so they are not
+waiting on the d3d9; every other title never touches D3D9 at all. What they and every codec-dependent title may be
 waiting on is the winegstreamer pair, and that has never been tested against an
 engine without it.
 
