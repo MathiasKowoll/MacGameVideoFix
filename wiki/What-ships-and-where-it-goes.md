@@ -183,16 +183,28 @@ worth stating rather than leaving to be discovered.
   CrossOver for every bottle and every game, and invalidates the code signature
   — a decision for a person, not something to apply on a title's behalf.
 
-## The GStreamer prerequisite, which applies to everyone
+## The GStreamer prerequisite, and how it stopped applying to everyone
 
-**Every route needs GStreamer installed on the user's machine.** Nothing in this
-project, and nothing in RaccoonBot, redistributes a decoder. The routes differ in
-*where the plugins are put*, not in *where they come from*.
+**It applied to every route until 2026-08-29**, because nothing in this project
+and nothing in RaccoonBot redistributed a decoder: the routes differed in where
+the plugins were *put*, never in where they *came from*, and both ends took them
+from a framework the user had to install.
+
+That is no longer the whole story, and the third row below is why. The section
+keeps the history because the reasoning is what justifies the change, and
+because this page has already been wrong about it twice.
 
 | | where the plugins are placed | where they come from | user must install GStreamer |
 | --- | --- | --- | --- |
 | **Our installers** — category 3 | a staged directory per engine, `GST_PLUGIN_PATH` | the user's framework | **yes** |
-| **RaccoonBot** | inside the engine it builds | the user's framework | **yes** |
+| **A patcher, before this change** | inside the engine it builds | the user's framework | **yes** |
+| **A patcher, from the payload** | inside the engine it builds | `runtime/engine-payload/lib64` | **no** |
+
+**The third row is the decision taken on 2026-08-29** and the reason the rest of
+this section is worth reading rather than skipping: a dependency on the user
+having installed exactly 1.24.13 fails silently in both directions. Absent gives
+a black cutscene; a different 1.24.x is worse, because it looks installed. The
+payload pins it.
 
 This page said the opposite for a few hours, and then said something different
 and also wrong, so the measurement is written down rather than the conclusion.
@@ -249,41 +261,83 @@ Do not create a `lib64` on a 27-based engine — the block in its `wine` that se
 `GST_PLUGIN_SYSTEM_PATH` *replaces* the path rather than appending, so a
 half-filled `lib64` hides the engine's own twenty plugins.
 
-### The engine on this machine is running codecs from a GStreamer that is gone
+### Where the engine's codecs actually came from: winevideo
 
-Worth recording because it is invisible and will confuse the next person.
+Answered by hashing every CrossOver on the machine instead of reasoning about
+sizes, after two of us concluded they came from "a GStreamer that is gone".
 
-| | bytes | architectures |
+`CrossOver-winevideo-0.5.app` carries the identical files. All eight, byte for
+byte:
+
+| file | bytes | same as winevideo 0.5 |
 | --- | --- | --- |
-| framework's `libgstlibav.dylib` | 600,496 | x86_64 + arm64 |
-| its x86_64 slice | 282,624 | x86_64 |
-| **the engine's copy** | **267,696** | **x86_64, matching neither** |
+| `libgstlibav.dylib` | 267,696 | yes |
+| `libgstmatroska.dylib` | 366,768 | yes |
+| `libgstvpx.dylib` | 110,416 | yes |
+| `libavcodec.60.dylib` | 13,607,312 | yes |
+| `libavformat.60.dylib` | 1,995,760 | yes |
+| `libavutil.58.dylib` | 750,560 | yes |
+| `libswresample.4.dylib` | 172,000 | yes |
+| `libavfilter.9.dylib` | 153,664 | yes |
 
-The copying does no thinning and no relinking, so the engine's plugin is not a
-processed version of what is installed today — it came from a GStreamer that is
-no longer on this machine, on 26 August.
+Both engines carry 21 plugins where stock 26.3 carries 18. Stock CrossOver has
+no `libgstlibav` at all, and CrossOver Preview has none either — so the only
+build on this machine that ships these decoders is winevideo's, and on 26 August
+they were copied from it into the patched engine.
 
-**And it works.** Devil May Cry 5 was played on 2026-08-29 and its video plays.
-That title is codec-only: no proxy, no bridge, nothing of this project inside
-the process, so the only thing that can have decoded it is the engine's own
-plugin. The arrangement is therefore proven — plugins placed inside an engine
-reach a game — using a binary nobody can now identify the source of.
+**So there is a third source, and it is the one that was actually used.** The
+table above describes the two routes that take plugins from the user's own
+GStreamer framework. Neither is where these came from. winevideo redistributes
+the decoders inside its CrossOver build, and this engine inherited them.
 
-That cuts against re-patching rather than for it, and the tension is worth
-stating instead of resolving quietly. Re-patching would fix three things: d9vk
-missing in both architectures, our `d3d9` sitting in its path, and codecs whose
-provenance is unknown. It would also replace a decoder that is demonstrably
-working with a 1.24.13 one that has not been tried in this engine. Neither
-choice is free, and "unknown provenance" is a reason to record a hash before
-changing anything, not a reason to change it tonight.
+This matters for the bundling question. If the decoders that are demonstrably
+working came out of a CrossOver build rather than a framework install, then
+"the user must install GStreamer 1.24.13" is the prerequisite for the *staging*
+and *patcher* routes, and not a description of how this machine got working
+video. It also means the files are already being redistributed by somebody, in
+a build this project uses.
 
-**What this does not prove is portability.** A title working here says the
-placement works; it says nothing about a machine whose user has never installed
-GStreamer, where the same engine ends up with eighteen plugins and no `libav`.
+**And the argument against re-patching weakens.** These are not untraceable
+after all: they are winevideo's, identifiable by hash, and recoverable from
+`CrossOver-winevideo-0.5.app` if a re-patch replaced them with framework copies
+and something stopped working. What was a one-way door is a reversible one.
 
-So the working set is recorded here, since it is the only place it exists. These
-are the three plugins in `Crossover_patched.app` that played Devil May Cry 5 on
-2026-08-29:
+The hashes are recorded below anyway, because the cheapest moment to write down
+what works is before changing it.
+
+### So they travel now
+
+Since they are winevideo's and identifiable, they can be carried rather than
+borrowed. Twelve files, 21,632,848 bytes, are in `runtime/engine-payload/lib64`
+with their sha256s in `CODEC-LICENCES.md`, and `check-builds.sh` fails when one
+of them drifts — verified by altering a byte and watching it fail, because a
+check that has never failed is not known to work.
+
+The list is the **transitive closure** of what the three plugins need and stock
+CrossOver does not already carry, walked with `otool -L`: that is why `liborc`,
+`libvpx`, `libz`, `libbz2` and `libswresample` are in it, and it is what makes a
+copy of the tree leave no dangling `@rpath`. Adding a plugin later means walking
+it again, not appending a filename.
+
+They are LGPL and BSD, dynamically linked and each replaceable on its own, which
+is the mechanism the licence asks for. `CODEC-LICENCES.md` carries the notices
+and the corresponding-source offer.
+
+**This does not retire the framework route.** Our own installers still stage
+from the user's GStreamer, because MacGameVideoFix installs onto a CrossOver
+somebody else owns and does not modify it. The payload is for whoever builds
+the engine.
+
+### And it plays
+
+Devil May Cry 5 was played on 2026-08-29 and its video runs. That title is the
+cleanest possible subject: codec-only, no proxy, no bridge, nothing of this
+project inside the process. The engine's own plugin is the only thing that can
+have decoded it.
+
+So the arrangement is proven — plugins placed inside an engine reach a game —
+and now the plugins are identified as well. The set that works, recorded because
+the cheapest moment to write down a working configuration is before changing it:
 
 | plugin | bytes | sha256 |
 | --- | --- | --- |
@@ -291,8 +345,10 @@ are the three plugins in `Crossover_patched.app` that played Devil May Cry 5 on
 | `libgstmatroska.dylib` | 366,768 | `9e7d08da9252f30113732981c214323faa13f12648cf3a6bbb48ee88bce0c1b2` |
 | `libgstvpx.dylib` | 110,416 | `2afef0cee64b0bd606660aaf2294dae7d68049e235814fa99dbd3fd1f1b7c14c` |
 
-If a re-patch changes a title that used to work, this is what to compare against
-— and if it changes nothing, this table is what says so rather than memory.
+**It proves nothing about portability.** A title working here says the placement
+works, on a machine that has both winevideo's build and GStreamer 1.24.13. A
+user who has neither still gets eighteen plugins and no `libav`, and that is the
+question the bundling proposal answers and this test does not touch.
 
 ## What a launcher has to copy
 

@@ -303,8 +303,31 @@ for pair in "engine-winegstreamer.dll:wine/x86_64-windows/winegstreamer.dll" \
 done
 [ "$payload_drift" = 0 ] && echo "  payload: engine-payload/ matches the flat engine-* files"
 
+# The codecs are other people's binaries copied out of winevideo's build, so
+# they are checked the way the NINJA GAIDEN 3 DLLs are: against a recorded
+# hash. Three of these sat in an engine for days while nobody could say where
+# they came from, which is the whole argument for the table.
+codec_bad=0
+LIC="$HERE/engine-payload/CODEC-LICENCES.md"
+if [ -f "$LIC" ]; then
+  while IFS='|' read -r _ rel bytes sha _; do
+    rel="$(echo "$rel" | tr -d ' `')"; sha="$(echo "$sha" | tr -d ' `')"
+    case "$rel" in lib64/*) ;; *) continue ;; esac
+    f="$HERE/engine-payload/$rel"
+    if [ ! -f "$f" ]; then
+      echo "  codec missing: $rel"; codec_bad=$((codec_bad + 1)); continue
+    fi
+    have="$(shasum -a 256 "$f" | cut -d' ' -f1)"
+    [ "$have" = "$sha" ] || { echo "  codec drifted: $rel"; codec_bad=$((codec_bad + 1)); }
+  done < "$LIC"
+  [ "$codec_bad" = 0 ] && echo "  codecs: all match the sha256s in CODEC-LICENCES.md"
+else
+  echo "  codecs: no CODEC-LICENCES.md"; codec_bad=1
+fi
+
 echo
 echo "  $checked rebuilt and compared, $drifted drifted, $missing_source unattributed"
 [ "$drifted" = 0 ] && [ "$bundle_drift" = 0 ] && [ "$missing_source" = 0 ] \
-  && [ "$decl_drift" = 0 ] && [ "$name_leak" = 0 ] && [ "$payload_drift" = 0 ] || exit 1
+  && [ "$decl_drift" = 0 ] && [ "$name_leak" = 0 ] && [ "$payload_drift" = 0 ] \
+  && [ "$codec_bad" = 0 ] || exit 1
 exit 0

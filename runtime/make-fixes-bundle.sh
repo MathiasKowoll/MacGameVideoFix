@@ -71,6 +71,19 @@ echo "      $count installers, $(( $(ls "$stage" | wc -l) - count )) files they 
 # It travels because it is a script the launcher runs, the same as the others.
 cp "$REPO/runtime/stage-codecs.sh" "$stage/"
 
+# The decoders, flat like everything else here, with their destinations in the
+# manifest. They travel because the reader that consumes this bundle took the
+# manifest route rather than overlaying runtime/engine-payload/, and a payload
+# only one of the two routes can see is a payload half the launchers will miss.
+#
+# Basenames are unique across the set, so flat costs nothing. CODEC-LICENCES.md
+# travels with them: they are other people's LGPL and BSD binaries and the
+# notices are part of redistributing them, not paperwork to add later.
+if [ -d "$REPO/runtime/engine-payload/lib64" ]; then
+  find "$REPO/runtime/engine-payload/lib64" -name '*.dylib' -exec cp {} "$stage/" \;
+  cp "$REPO/runtime/engine-payload/CODEC-LICENCES.md" "$stage/" 2>/dev/null
+fi
+
 echo "[2/4] refusing anything that still needs python"
 if grep -l 'python3' "$stage"/*.sh >/dev/null 2>&1; then
   echo "error: these installers still call python3, which a clean Mac does not have:" >&2
@@ -223,6 +236,27 @@ for my $title (sort keys %cfg) {
 # on it, which is a wider blast radius than anything in "games", and a launcher
 # should be able to see that difference without inferring it.
 my $engine_block = "";
+my $codec_json = "";
+{
+  # Read from the licence table rather than from the directory: the table is
+  # what check-builds.sh verifies, so a file present but unrecorded should not
+  # travel as though it had been checked.
+  my $lic = "$repo/runtime/engine-payload/CODEC-LICENCES.md";
+  if (open my $lf, '<', $lic) {
+    my @rows;
+    while (my $line = <$lf>) {
+      next unless $line =~ m{^\|\s*`(lib64/[^`]+)`\s*\|};
+      my $rel = $1;
+      (my $base = $rel) =~ s{.*/}{};
+      push @rows, sprintf(qq({"file":"%s","dest":"%s"}), $base, $rel);
+    }
+    close $lf;
+    if (@rows) {
+      $codec_json = sprintf(qq("codecs":{"licences":"CODEC-LICENCES.md","why":"Decoders stock CrossOver does not ship: seven titles need one. Copied verbatim from winevideo's CrossOver build, verified by sha256 in the licence file. The transitive closure, so a copy leaves no dangling rpath. 26.3 keeps plugins in lib64/gstreamer-1.0; 27 keeps them in lib/<arch>/gstreamer-1.0 and replaces GST_PLUGIN_SYSTEM_PATH rather than appending, so do not invent a lib64 there.","install":[%s]},),
+        join(",", @rows));
+    }
+  }
+}
 if (-f "$repo/runtime/install-engine-media.sh" && -f "$repo/runtime/engine-built-for.json") {
     open my $bf, '<', "$repo/runtime/engine-built-for.json" or die;
     my $j = do { local $/; <$bf> };
@@ -234,6 +268,7 @@ if (-f "$repo/runtime/install-engine-media.sh" && -f "$repo/runtime/engine-built
       . qq("files":["engine-winegstreamer.dll","engine-winegstreamer.so","engine-built-for.json"],)
       . qq("install":[{"file":"engine-winegstreamer.dll","dest":"lib/wine/x86_64-windows/winegstreamer.dll"},)
       . qq({"file":"engine-winegstreamer.so","dest":"lib/wine/x86_64-unix/winegstreamer.so"}],)
+      . $codec_json
       . qq("builtFor":{"app":"%s","version":"%s","wine":"%s"},)
       . qq("why":"Wine's GStreamer bridge, both halves, built here because codecs that were present would not show. The two halves must match each other and the engine; the installer refuses any other. Not per-title: it is shared by every bottle on that engine."},),
       $ea // "", $ev // "", $wb // "");
