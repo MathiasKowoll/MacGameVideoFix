@@ -22,7 +22,7 @@
 		</data>
 		<key>Resources/amd_ags_x64-nioh3.dll</key>
 		<data>
-		OM5dxRyCkOFrImj1sqhJs/GDzno=
+		3Q3JNEg1XvCEo9AYX+VUdbIAb5s=
 		</data>
 		<key>Resources/amd_ags_x64.dll</key>
 		<data>
@@ -30,11 +30,11 @@
 		</data>
 		<key>Resources/dinput8-kh.dll</key>
 		<data>
-		GtEdYmbHyhM/HNAhMYaBirsG/bY=
+		qAdzJKozNK4InABTROn4So1lKX0=
 		</data>
 		<key>Resources/dinput8-nier.dll</key>
 		<data>
-		uG7oHZUE0MBqJcxQVzUfbY3gWD8=
+		qAdzJKozNK4InABTROn4So1lKX0=
 		</data>
 		<key>Resources/dstorage-ng4.dll</key>
 		<data>
@@ -94,7 +94,7 @@
 		</data>
 		<key>Resources/libxess.dll</key>
 		<data>
-		yCDtm8y/0VszoOOA1pQ6Y2FeQwE=
+		cMx05ttDBVm/IQwtfhDBrqnVRrU=
 		</data>
 		<key>Resources/pak-hide-videos.py</key>
 		<data>
@@ -147,7 +147,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			KT6JBgJugbr3grlewlcOhfR6g0hdroV3bwxPQ9z/Slg=
+			hBTPRMJ0qHZjFFlrVBjGsGSI5q55aIQfb0/wK+qJ1kM=
 			</data>
 		</dict>
 		<key>Resources/amd_ags_x64.dll</key>
@@ -161,14 +161,14 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			udK/xgH3Xwx2sCQ6yzRTUO4+vdhMiMIaTkWBf6olduA=
+			S1VhrRtIUoP+itJgSlpcyPnEWzXy6vpnaNAoi6iEGM4=
 			</data>
 		</dict>
 		<key>Resources/dinput8-nier.dll</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			PDlGmdvppJl+i6f6s4CPFi6O5hGno1i1jaZSb3cTWs0=
+			S1VhrRtIUoP+itJgSlpcyPnEWzXy6vpnaNAoi6iEGM4=
 			</data>
 		</dict>
 		<key>Resources/dstorage-ng4.dll</key>
@@ -273,7 +273,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			qmwwEcDehyyU27O2AZKF0rWf/cRer1aiWsSM46sGpBI=
+			zHkyrAs2I+9Cisk2bEhRm8f5Sc7ehCQDW6/8fhTmB60=
 			</data>
 		</dict>
 		<key>Resources/pak-hide-videos.py</key>

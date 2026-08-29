@@ -2072,15 +2072,29 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
          */
         {
             /*
-             * Both KINGDOM HEARTS launchers, named rather than matched on
-             * "Launcher": four titles ship this bridge, and a substring rule
-             * would arm the filter inside whatever else one day happens to be
-             * called that. Measured on 1.5+2.5 first; 2.8 was reported doing
-             * the same thing and is the same Mono launcher pattern.
+             * The KINGDOM HEARTS package, named one by one rather than matched
+             * on a substring: four titles ship this bridge, and a rule like
+             * "contains Launcher" would arm it inside whatever else one day
+             * happens to be called that.
+             *
+             * It began as the two launchers, measured from a dump of 1.5+2.5.
+             * The game executables are here because the same dialog appears on
+             * leaving a title back to the menu, and the log shows this bridge
+             * is loaded in them too -- so the process is reachable and the
+             * fault has the same shape. The handler's own conditions are what
+             * keep this safe, not the shortness of this list: a write to zero
+             * from inside ntdll is a shutdown fault wherever it happens, and
+             * anything else still reaches winedbg.
              */
             static const char *const launchers[] = {
                 "KINGDOM HEARTS HD 1.5+2.5 Launcher.exe",
                 "KINGDOM HEARTS HD 2.8 Launcher.exe",
+                "KINGDOM HEARTS FINAL MIX.exe",
+                "KINGDOM HEARTS Re_Chain of Memories.exe",
+                "KINGDOM HEARTS II FINAL MIX.exe",
+                "KINGDOM HEARTS Birth by Sleep FINAL MIX.exe",
+                "KINGDOM HEARTS Theater.exe",
+                "KINGDOM HEARTS Dream Drop Distance.exe",
             };
             size_t i;
             for (i = 0; i < sizeof(launchers) / sizeof(launchers[0]); ++i)
