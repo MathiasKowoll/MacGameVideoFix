@@ -261,9 +261,38 @@ Worth recording because it is invisible and will confuse the next person.
 
 The copying does no thinning and no relinking, so the engine's plugin is not a
 processed version of what is installed today — it came from a GStreamer that is
-no longer on this machine, on 26 August. Re-patching would replace it with the
-1.24.13 ones. That is the third reason to re-patch, after the missing d9vk and
-our `d3d9` sitting in its path.
+no longer on this machine, on 26 August.
+
+**And it works.** Devil May Cry 5 was played on 2026-08-29 and its video plays.
+That title is codec-only: no proxy, no bridge, nothing of this project inside
+the process, so the only thing that can have decoded it is the engine's own
+plugin. The arrangement is therefore proven — plugins placed inside an engine
+reach a game — using a binary nobody can now identify the source of.
+
+That cuts against re-patching rather than for it, and the tension is worth
+stating instead of resolving quietly. Re-patching would fix three things: d9vk
+missing in both architectures, our `d3d9` sitting in its path, and codecs whose
+provenance is unknown. It would also replace a decoder that is demonstrably
+working with a 1.24.13 one that has not been tried in this engine. Neither
+choice is free, and "unknown provenance" is a reason to record a hash before
+changing anything, not a reason to change it tonight.
+
+**What this does not prove is portability.** A title working here says the
+placement works; it says nothing about a machine whose user has never installed
+GStreamer, where the same engine ends up with eighteen plugins and no `libav`.
+
+So the working set is recorded here, since it is the only place it exists. These
+are the three plugins in `Crossover_patched.app` that played Devil May Cry 5 on
+2026-08-29:
+
+| plugin | bytes | sha256 |
+| --- | --- | --- |
+| `libgstlibav.dylib` | 267,696 | `b748843c176a4715d111036674cf6859d8f43fc6b4e98a3abaa5750d57233ac9` |
+| `libgstmatroska.dylib` | 366,768 | `9e7d08da9252f30113732981c214323faa13f12648cf3a6bbb48ee88bce0c1b2` |
+| `libgstvpx.dylib` | 110,416 | `2afef0cee64b0bd606660aaf2294dae7d68049e235814fa99dbd3fd1f1b7c14c` |
+
+If a re-patch changes a title that used to work, this is what to compare against
+— and if it changes nothing, this table is what says so rather than memory.
 
 ## What a launcher has to copy
 
