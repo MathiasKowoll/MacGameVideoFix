@@ -106,21 +106,30 @@ fi
 
 [ -d "$FRAMEWORK" ] || {
   echo "error: GStreamer.framework is not installed." >&2
-  echo "       Install the macOS *runtime* package, 1.24 series:" >&2
-  echo "       https://gstreamer.freedesktop.org/data/pkg/osx/1.24.14/" >&2
-  echo "       1.24.14 is the version this was verified with." >&2
+  echo "       Install the macOS *runtime* package:" >&2
+  echo "       https://gstreamer.freedesktop.org/data/pkg/osx/1.24.13/" >&2
+  echo "       1.24.13 is what is installed and working here, and it is the" >&2
+  echo "       version winevideo names. A launcher that owns its engine may" >&2
+  echo "       require it exactly, so prefer 1.24.13 over a later 1.24." >&2
   exit 1
 }
 
 # Which GStreamer this is, from the library rather than a plist -- the version
 # is encoded in its compatibility number as 1.MINOR.PATCH.
 #
-# winevideo names 1.24.13 exactly. What actually has to hold is looser: the
-# plugin has to be ABI-compatible with the CrossOver core it is re-homed onto,
-# and GStreamer guarantees that across 1.x. 1.24.14 is what is measured working
-# here. Anything outside 1.24 is untested, so it is reported rather than
-# refused -- refusing something that might work is as unhelpful as staying
-# quiet about something that might not.
+# winevideo names 1.24.13 exactly, and 1.24.13 is what is installed and
+# measured working here -- pkgutil says so for every gstreamer package on this
+# machine. This text used to name 1.24.14 as "the version this was verified
+# with", which was never true of this install and pointed a user at a version
+# RaccoonBot refuses: it requires 1.24.13 exactly, so following our own
+# instructions could have broken the other route on the same machine.
+#
+# What actually has to hold is looser: the plugin has to be ABI-compatible with
+# the CrossOver core it is re-homed onto, and GStreamer guarantees that across
+# 1.x. So anything outside 1.24 is reported rather than refused -- refusing
+# something that might work is as unhelpful as staying quiet about something
+# that might not. Advising a version and accepting a range are different jobs,
+# and the advice should name what both routes accept.
 # The framework is a universal binary, so otool prints a header line per
 # architecture; matching on "compatibility version" skips those.
 compat="$(otool -L "$FRAMEWORK/lib/libgstreamer-1.0.0.dylib" 2>/dev/null \
