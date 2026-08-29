@@ -70,6 +70,23 @@ if [ -n "${MGVF_BOTTLE:-}" ] && [ ! -d "${MGVF_BOTTLE%/}/drive_c" ]; then
   exit 1
 fi
 
+# A program driving these scripts must say which bottle. A person need not.
+#
+# Unset used to mean "scan", for everybody. That is fine for someone at a
+# terminal with one bottle, and it is exactly how a launcher build that forgets
+# to pass MGVF_BOTTLE fails: silently, by writing where it was never told to.
+# MGVF_FRONTEND is already set by anything that drives these scripts from a
+# user interface, so it is the honest test for "is a program asking".
+if [ -n "${MGVF_FRONTEND:-}" ] && [ -z "${MGVF_BOTTLE:-}" ]; then
+  echo "error: MGVF_FRONTEND=${MGVF_FRONTEND} is set but MGVF_BOTTLE is not." >&2
+  echo "       A launcher must name the bottle it means. Scanning for one is" >&2
+  echo "       how a KINGDOM HEARTS override ended up in the Battle.net bottle." >&2
+  echo "       Pass MGVF_BOTTLE as an absolute path to the bottle directory," >&2
+  echo "       the one holding drive_c. Note the name: MGVF_BOTTLES, plural," >&2
+  echo "       is a different setting that ADDS a root to search." >&2
+  exit 1
+fi
+
 
 engine_bottle_roots() {
   local a conf r

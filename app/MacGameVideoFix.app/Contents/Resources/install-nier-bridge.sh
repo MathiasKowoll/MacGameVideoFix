@@ -115,14 +115,18 @@ find_bottles() {
     done < <(bottle_roots)
   fi
   [ "$hit" = 1 ] && return 0
-  # Not a Steam layout, or no bottle claims the library: fall back to any
-  # bottle that could supply a dinput8 at all.
-  while IFS= read -r root; do
-    for b in "$root"/*/; do
-      [ -f "$b/drive_c/windows/system32/dinput8.dll" ] || continue
-      printf '%s\n' "${b%/}"; return 0
-    done
-  done < <(bottle_roots)
+  # NO BLIND FALLBACK.
+  #
+  # This used to return the first bottle on the machine that had a dinput8 in
+  # it, for a game outside a Steam layout. "Could supply a dinput8" is true of
+  # nearly every bottle, so what it actually returned was whichever sorted
+  # first -- and it wrote a KINGDOM HEARTS override into the Battle.net bottle,
+  # which has no Steam library at all and no connection to this game. Found by
+  # the RaccoonBot session and confirmed here: the AppDefaults section for
+  # KINGDOM HEARTS Dream Drop Distance.exe is still in that bottle's user.reg.
+  #
+  # A guess that writes into somebody's registry is worse than a refusal, so
+  # this refuses and says how to answer the question it could not.
   return 1
 }
 # The first of them, for the things that need exactly one: the copy of the
