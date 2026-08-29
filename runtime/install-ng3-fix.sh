@@ -60,6 +60,7 @@
 # here winegstreamer's PE half sits on this engine's Unix half, and only the PE
 # half can be overridden per application.
 #
+# MGVF-SCOPE: bottle
 # MGVF-GAME: NINJA GAIDEN 3: Razor's Edge | NINJA GAIDEN 3 Razor's Edge.exe |
 # MGVF-WHY: Will not start at all: "Insufficient VRAM. Please close all running applications." It is a Direct3D 9 title and CrossOver's DXVK cannot create a Vulkan device for it. Needs d9vk plus winevideo's DirectShow filters, applied to this executable only.
 #

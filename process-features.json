@@ -89,6 +89,15 @@
       "env": {},
       "symptom": "Crashes when the first video starts"
     },
+    "NINJA GAIDEN 3 Razor's Edge.exe": {
+      "title": "NINJA GAIDEN 3: Razor's Edge",
+      "backend": "dxvk",
+      "codec": "",
+      "gptk": "",
+      "env": {},
+      "symptom": "Will not start: \"Insufficient VRAM\"",
+      "needs_engine": "winevideo"
+    },
     "NINJAGAIDEN4-Steam.exe": {
       "title": "NINJA GAIDEN 4",
       "backend": "d3dmetal",

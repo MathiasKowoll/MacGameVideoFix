@@ -128,7 +128,18 @@ for my $f (sort glob("$repo/runtime/install-*.sh")) {
     my $kept    = $grab->(qr/^REAL="[^"]*?\/([^"\/]+)"/m);
     my $why     = $grab->(qr/^# MGVF-WHY: (.+)$/m);
     my $script  = $f; $script =~ s{.*/}{};
-    my $reg     = ($s =~ /reg\.exe/ ? "true" : "false");
+    # reg.exe was the only way this project wrote the registry until NINJA
+    # GAIDEN 3, which appends its AppDefaults key to user.reg directly -- so the
+    # old test called it false and a launcher would not have known to bring the
+    # bottle down first. Both spellings count.
+    my $reg     = (($s =~ /reg\.exe/ || $s =~ /user\.reg/) ? "true" : "false");
+
+    # What the installer's first argument IS. Everything here took a game folder
+    # until NINJA GAIDEN 3, and a launcher could safely assume it; that one takes
+    # a bottle, because its DLLs go into the bottle's system32 and its override
+    # is a registry key, neither reachable from the folder a user drops on a
+    # window. Absent means folder, so no existing entry changes meaning.
+    my $scope   = $grab->(qr/^# MGVF-SCOPE: (\S+)$/m) || "folder";
     my $esc = sub { my ($t) = @_; $t //= ""; $t =~ s/(["\\])/\\$1/g; $t };
 
     # One entry per TITLE, not per script: four of these serve more than one
@@ -148,8 +159,8 @@ for my $f (sort glob("$repo/runtime/install-*.sh")) {
             $c = { backend => "", gptk => "", env => "{}" };
         }
         push @games, sprintf(
-          qq({"name":"%s","exe":"%s","script":"%s","carrier":"%s","keptAs":"%s","carrierDir":"%s","writesRegistry":%s,"backend":"%s","gptk":"%s","codec":"%s","env":%s,"why":"%s","files":[%s]}),
-          $esc->($name), $esc->($exe), $script, $esc->($carrier), $esc->($kept),
+          qq({"name":"%s","exe":"%s","script":"%s","scope":"%s","carrier":"%s","keptAs":"%s","carrierDir":"%s","writesRegistry":%s,"backend":"%s","gptk":"%s","codec":"%s","env":%s,"why":"%s","files":[%s]}),
+          $esc->($name), $esc->($exe), $script, $scope, $esc->($carrier), $esc->($kept),
           $esc->($dir // ""), $reg, $esc->($c->{backend}), $esc->($c->{gptk}), $esc->($c->{codec}), $c->{env},
           $esc->($why), join(",", map { qq("$_") } @files));
     }
@@ -171,7 +182,7 @@ for my $title (sort keys %cfg) {
     }
     my $esc = sub { my ($t) = @_; $t //= ""; $t =~ s/(["\\])/\\$1/g; $t };
     push @games, sprintf(
-      qq({"name":"%s","exe":"%s","script":"","carrier":"","keptAs":"","carrierDir":"","writesRegistry":false,"backend":"%s","gptk":"%s","codec":"%s","env":%s,"why":"%s","files":[]}),
+      qq({"name":"%s","exe":"%s","script":"","scope":"folder","carrier":"","keptAs":"","carrierDir":"","writesRegistry":false,"backend":"%s","gptk":"%s","codec":"%s","env":%s,"why":"%s","files":[]}),
       $esc->($title), $esc->($exe), $esc->($c->{backend}), $esc->($c->{gptk}),
       $esc->($c->{codec}), $c->{env},
       $esc->("The whole fix is the staged codec: nothing is installed beside the game."));

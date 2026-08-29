@@ -46,6 +46,10 @@ GAMES = [
      "Video never starts; sound only", "Staged VC-1 codec, and a D3D9 to D3D11 bridge",
      "**DXMT**", "11", "26.3 and Preview",
      "Fixed", "Persona-5-Strikers"),
+    ("NINJA GAIDEN 3: Razor's Edge", "Koei Tecmo, in-house",
+     "Will not start: \"Insufficient VRAM\"", "d9vk, and winevideo's DirectShow filters",
+     "**DXVK**", "9", "26.3",
+     "Fixed", "Games"),
     ("Nioh", "Koei Tecmo, in-house",
      "Cutscene refuses to play, then crashes", "Staged WMV3 codec, and the same D3D9 to D3D11 bridge",
      "**DXMT**", "11", "26.3 and Preview",
@@ -658,7 +662,13 @@ def config_json():
             elif "4.0b2 only" in want:
                 gen = "4"
         out[g] = {
-            "backend": "dxmt" if "DXMT" in backend.upper() else "d3dmetal",
+            # Three now, not two. NINJA GAIDEN 3 is the first title here that
+            # needs DXVK, and the old two-way test called it d3dmetal -- which
+            # is the one backend that cannot start it. A launcher acting on that
+            # would have set the thing that fails.
+            "backend": ("dxmt" if "DXMT" in backend.upper()
+                        else "dxvk" if "DXVK" in backend.upper()
+                        else "d3dmetal"),
             "gptk": gen,
             # Which plugin stage-codecs.sh has to put in front of CrossOver for
             # this title. It travelled as prose inside `why` -- "needs the
