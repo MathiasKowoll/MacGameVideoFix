@@ -58,38 +58,45 @@ entire fix and no DLL is installed beside the game at all.
 **Where they go:** into the CrossOver application's own
 `lib64/gstreamer-1.0`. They are shared by every bottle that engine runs.
 
-## 4. Replaced in the engine here — and it is not what it looked like
+## 4. Built here, installed into the engine, and packaged nowhere
 
-One file in the engine on this machine has been replaced by this project's work
-and travels in no bundle: **`d3d9.dll`**, 1,576,960 bytes, built here with
-winevideo's two video-bridge patches for the Nioh work. Confirmed by comparing
-it byte for byte against the copy kept aside when it was built.
+Three files, all produced by this project, all sitting in the engine on this
+machine, none of them in any bundle. `scripts/build-winegstreamer.sh` builds
+them from a wine tree under `~/Development/mgvf-winegstreamer-build`, and
+`built-for.json` beside them records what they were built against:
 
-What it replaced is the part that matters. RaccoonBot patches CrossOver itself
-and installs **d9vk** as the engine's `d3d9.dll` — `Libs/d9vk/x64/d3d9_builtin.dll`,
-3,848,151 bytes. So a user who has never touched this machine does not have
-"Wine's d3d9 without our patches". They have Direct3D 9 translated to Vulkan, a
-different implementation entirely, and the D3D9-to-D3D11 bridge that Nioh, Nioh 2
-and Persona 5 Strikers depend on does not exist there in the form it was measured
-against.
+    engine 26.3.0.39832, wine-11.0-8726-g2e2f5fca349, patches 0002 0003 0006 0008
 
-Those three are published as fixed and were measured with the build above in
-place. Whether they work against d9vk has not been tested in either direction.
-Restoring d9vk and launching Nioh settles it in one run, and until that is done
-this page should not be read as saying those three are safe. The other eighteen
-titles do not touch D3D9 and are unaffected — including NINJA GAIDEN 3, which
-carries its own d9vk in the bundle and activates it for one executable.
+| file | size | what it is |
+| --- | --- | --- |
+| `winegstreamer.dll` | 2,330,624 | Wine's GStreamer bridge, PE half |
+| `winegstreamer.so` | 222,376 | the same bridge, Unix half |
+| `d3d9.dll` | 1,576,960 | Wine's d3d9 with winevideo's video-bridge patches |
 
-**`winegstreamer.dll` is not ours.** It appears in this category in an earlier
-version of this page because it sat beside `d3d9.dll` with a `.stock` copy next
-to it, and that was a guess presented as a finding. RaccoonBot's patcher
-installs a patched `winegstreamer` of its own, built to load GStreamer out of
-the framework; the copy here matches neither its current one nor anything this
-project built. Nothing here is responsible for it.
+**The winegstreamer pair is load-bearing and travels nowhere.** It was built
+because codecs that were present would not show. Both halves have to match each
+other and the engine they were built against, which is why `built-for.json`
+exists and why neither half can be shipped without the other.
 
-This repository already carries this failure once under another name:
-`dwo-video-bridge.c` shipped keyed on an environment variable nothing ever set,
-so it answered no on every machine but the one it was measured on.
+**The d3d9 is not.** It was built with winevideo's `0008` and `0009` patches for
+the Nioh work and it did not fix Nioh — recorded in `docs/codecs-inside-the-engine.md`
+at the time: *"with the complete bridge in the engine the title still dies with
+zero calls to it"*. The bridge those titles actually use is
+`runtime/p5s-video-bridge.c`, which ships as `GfeSDK.dll` and `amd_ags_x64.dll`
+in the game folder and intercepts `OpenSharedResource` itself. Worse, this build
+displaces something: RaccoonBot's patcher installs **d9vk** as the engine's
+`d3d9.dll`, 3,848,151 bytes, and ours is sitting on top of it. It should go back.
+
+**What this means for a user elsewhere.** Eighteen of the twenty-one titles are
+unaffected either way. The three that use the D3D9-to-D3D11 bridge — Nioh,
+Nioh 2, Persona 5 Strikers — get their bridge from the game folder, so they are
+not waiting on the d3d9. What they and every codec-dependent title may be
+waiting on is the winegstreamer pair, and that has never been tested against an
+engine without it.
+
+This page has been wrong about these files twice, in opposite directions, before
+anyone looked for the build tree that `docs/codecs-inside-the-engine.md` names.
+Both claims were made from file sizes.
 
 ## What a launcher has to copy
 
