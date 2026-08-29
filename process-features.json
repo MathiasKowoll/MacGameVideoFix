@@ -63,7 +63,7 @@
       "codec": "",
       "gptk": "",
       "env": {},
-      "symptom": "Cutscene runs with sound, picture solid green"
+      "symptom": "Cutscene runs with sound, picture solid green; a crash dialog on leaving"
     },
     "KINGDOM HEARTS HD 1.5+2.5 Launcher.exe": {
       "title": "KINGDOM HEARTS HD 1.5+2.5 ReMIX",
@@ -71,7 +71,7 @@
       "codec": "",
       "gptk": "",
       "env": {},
-      "symptom": "Cutscene runs with sound, picture solid green"
+      "symptom": "Cutscene runs with sound, picture solid green; a crash dialog on leaving"
     },
     "MortalShell2-Win64-Shipping.exe": {
       "title": "Mortal Shell 2",

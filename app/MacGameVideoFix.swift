@@ -55,6 +55,28 @@ private func runStreaming(_ executable: String,
         // into its own log, so "run this script" is the wrong thing to read
         // next to a button that does it.
         env["MGVF_FRONTEND"] = "app"
+        // The bottle the user picked in this app, and no other.
+        //
+        // Without this the installers look for every bottle whose Steam library
+        // holds the game and write the registry override into all of them --
+        // including bottles belonging to another product, which this app has no
+        // business touching. One KINGDOM HEARTS run enumerated four bottles,
+        // failed on somebody else's, and reported the whole install as an error
+        // while it had in fact succeeded here.
+        //
+        // Set here rather than threaded through the views because this is the
+        // one place every script invocation passes, --status included. A status
+        // that scanned every bottle could answer "installed" from a bottle this
+        // app did not install into.
+        //
+        // A stale name -- a bottle since renamed or deleted -- is deliberately
+        // still passed: the script refuses it by name and says so. Falling back
+        // to scanning would put the fix somewhere the user did not choose and
+        // say nothing, which is the behaviour this exists to end.
+        if let picked = UserDefaults.standard.string(forKey: "setup.bottle"),
+           !picked.isEmpty {
+            env["MGVF_BOTTLE"] = Bottle.root.appendingPathComponent(picked).path
+        }
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
         proc.environment = env
 
@@ -216,7 +238,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .nierReplicant:     return "Crashes when the first video starts"
         case .woLong:            return "Cutscene runs with sound, picture black"
         case .kingdomHearts28,
-             .kingdomHearts1525: return "Cutscene runs with sound, picture solid green"
+             .kingdomHearts1525: return "Cutscene runs with sound, picture solid green; a crash dialog on leaving"
         case .tmntSplinteredFate: return "Opens a window, then closes silently"
         case .tormentedSouls2:    return "Fatal error before the first frame"
         case .ninjaGaiden4:       return "Says the VP9 codec is missing, then exits"
