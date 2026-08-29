@@ -321,6 +321,67 @@ million — a thirtyfold reduction, measured twice — and moves neither the fra
 rate nor the length of the black screen. Real waste, no benefit. It is not a fix
 for this game and is not shipped as one.
 
+## Not yet an installer: NINJA GAIDEN 3: Razor's Edge
+
+Absent from the table because the fix is not ours to ship yet — it is four
+DLL substitutions, three of them other people's work. Written down here because
+it is measured, complete, and reproducible.
+
+**Why it is the odd one of the Master Collection.** SIGMA and SIGMA 2 import
+`d3d11.dll` and start fine. Razor's Edge is **Direct3D 9 only** — `d3d9.dll`
+and `d3dx9_43.dll`, no d3d11 anywhere — and that is the whole reason the other
+two work under DXVK and this one would not start at all.
+
+**The message it shows is a red herring.** Under CrossOver's own DXVK it says
+*"Insufficient VRAM. Please close all running applications."* Its own log says
+what really happened, eleven times: `DxvkAdapter: Failed to create device`,
+after reporting `transformFeedback: 0` and `timelineSemaphore: 0`. MoltenVK does
+not offer those and that DXVK requires them. Nothing to do with memory — DXVK
+reports the machine's full 49152 MiB two lines earlier.
+
+**Its videos are not Media Foundation.** 24 files in `databin/movie`, all ASF
+containers, **WMV3** video and **WMAv2** audio at 1280x720, played through
+**DirectShow** — `quartz` and `qasf`. An afternoon went into instrumenting
+`MFTEnumEx`, both source readers and `MFCreateFile` before the winevideo
+developer said where to look. The codec was measured with ffprobe; the path
+was not, and the difference cost hours.
+
+**The recipe.** Four overrides, all per-executable under
+`HKCU\Software\Wine\AppDefaults\NINJA GAIDEN 3 Razor's Edge.exe\DllOverrides`,
+so no other title is affected, with the DLLs placed in
+`drive_c/windows/system32`:
+
+| value | `native,builtin` | where it comes from |
+| --- | --- | --- |
+| `*d3d9` | d9vk | `Sikarugir-App/d9vk`, `d9vk-macOS-async-v1.10.3-20250511` |
+| `*qasf` | patched | winevideo 0.5 payload |
+| `*quartz` | patched | winevideo 0.5 payload |
+| `*winegstreamer` | patched | winevideo 0.5 payload |
+
+That d9vk is the **same DXVK version** CrossOver ships, 1.10.3, built
+differently for macOS. "DXVK 1.10.3 does not work on Apple silicon" was written
+here first and was wrong: CrossOver's build does not, this one does.
+
+**Result.** The game starts, renders at 60 fps, reaches its menu, and **its
+in-game cutscenes play**. The boot movie decodes its first frame and freezes;
+one click skips it and the game carries on. Nioh was re-run afterwards and is
+unaffected, which matters because these DLLs sit in a shared `system32` and only
+the per-app override keeps them out of everything else.
+
+**What is left, and why it may stay left.** Adding winevideo's `winegstreamer`
+changed nothing observable. That fits: it is split into a PE half and a Unix
+`.so`, and only the PE half can be overridden per application, so the two halves
+no longer match. Chasing the boot movie means transplanting more of another
+engine into this one. **winevideo 0.5 runs this title properly**, because there
+all of these are one coherent build — that is the honest answer for anyone who
+wants the intro as well.
+
+**Before this ships**, someone has to decide how the third-party binaries reach
+a user: downloaded from their own source with the checksum the winevideo
+contract already publishes, or copied out of a winevideo install the user
+already has. Redistributing them inside this project's bundle is a different
+question from either.
+
 ## Withdrawn: METAL GEAR SOLID 4
 
 This title shipped a fix here between 2026-08-27 and 2026-08-28. It has been
