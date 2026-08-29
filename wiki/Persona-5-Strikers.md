@@ -54,10 +54,13 @@ ship.
 
 The official GStreamer.framework has VC-1 in `libgstlibav` (ffmpeg). Install
 the macOS **runtime** package from
-[gstreamer.freedesktop.org](https://gstreamer.freedesktop.org/data/pkg/osx/1.24.14/) — **1.24.14**, which is the only version
-measured here. winevideo names 1.24.13 for the same titles, and the requirement
-is likely to be the 1.24 series rather than that exact release, since the plugin
-only has to be ABI-compatible with the CrossOver core it is re-homed onto — but
+[gstreamer.freedesktop.org](https://gstreamer.freedesktop.org/data/pkg/osx/1.24.13/) — **1.24.13**, which is what
+winevideo names, what is installed and working here now, and what RaccoonBot
+requires exactly. 1.24.14 is named in older notes because that is what was
+installed when they were written; both have been measured working. The
+requirement is likely to be the 1.24 series rather than one exact release, since
+the plugin only has to be ABI-compatible with the CrossOver core it is re-homed
+onto — but
 no other release has been tried. Nothing is redistributed: the decoder is borrowed
 from an install you already have, which is also how winevideo does it. Loading
 that plugin in place crashes: dyld ends up with two copies of libgstreamer and

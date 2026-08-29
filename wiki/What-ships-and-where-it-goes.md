@@ -183,46 +183,75 @@ worth stating rather than leaving to be discovered.
   CrossOver for every bottle and every game, and invalidates the code signature
   — a decision for a person, not something to apply on a title's behalf.
 
-## The GStreamer prerequisite, and who it applies to
+## The GStreamer prerequisite, which applies to everyone
 
-There are two ways the decoders reach a running game, and only one of them
-needs anything installed on the user's machine. Getting this wrong in either
-direction is easy, so it is stated as a table.
+**Every route needs GStreamer installed on the user's machine.** Nothing in this
+project, and nothing in RaccoonBot, redistributes a decoder. The routes differ in
+*where the plugins are put*, not in *where they come from*.
 
-| | where the plugins come from | needs GStreamer.framework |
-| --- | --- | --- |
-| **Our installers** — category 3 | copied out of `/Library/Frameworks/GStreamer.framework`, staged per engine, pointed at by `GST_PLUGIN_PATH` | **yes** |
-| **A launcher that owns its engine** | placed inside the engine it builds | **no** |
+| | where the plugins are placed | where they come from | user must install GStreamer |
+| --- | --- | --- | --- |
+| **Our installers** — category 3 | a staged directory per engine, `GST_PLUGIN_PATH` | the user's framework | **yes** |
+| **RaccoonBot** | inside the engine it builds | the user's framework | **yes** |
 
-MacGameVideoFix installs onto whatever CrossOver a person already has and does
-not modify it, so staging is the only route open to it — and `stage-codecs.sh`
-refuses with instructions when the framework is absent, naming the macOS
-*runtime* package of the 1.24 series.
+This page said the opposite for a few hours, and then said something different
+and also wrong, so the measurement is written down rather than the conclusion.
+`RaccoonBot.app` contains **zero** files named `libgst*`, `libav*` or `libsw*`.
+Its `Resources` carry 153 MB of other people's toolkits — d3dMetal 3 and 4,
+d9vk, dxvk, three MoltenVK builds, mesa, Rosetta x87, wine — and not one codec.
+Its `EngineCodecs` copies from
+`/Library/Frameworks/GStreamer.framework/Versions/1.0/lib` and reports
+`frameworkMissing` when it is absent.
 
-**RaccoonBot is in the second row**, and has been since 2026-08-26. It builds
-its own engine, so it puts the plugins inside it, and its users need nothing
-installed. `docs/codecs-inside-the-engine.md` records that arrangement and why
-it is the better one: a staged plugin brings its own copy of the GStreamer core,
-so a process ends up with two — ours at 1.24.13 and the engine's at 1.28 —
-whereas a plugin placed inside binds to the engine's own.
+The first version of this section made the framework a flat prerequisite, which
+was right. The second removed it for launchers that own their engine, on the
+strength of `docs/codecs-inside-the-engine.md` saying RaccoonBot had "moved to
+this arrangement" — but that document describes where the files are *placed*,
+and I read it as saying where they *come from*. Owning the engine changes the
+destination, not the source.
 
-The engine on this machine shows the difference plainly. Stock CrossOver 26.3
-carries 18 plugins with no `libgstlibav`, no `libgstmatroska` and no
-`libgstvpx`; Preview adds matroska and no more; the patched engine has 21,
-including all three, with `libav*` and its dependencies beside them.
+**Install 1.24.13, not a later 1.24.** It is what winevideo names, what is
+installed and working here (`pkgutil` says so for every GStreamer package on
+this machine), and what RaccoonBot requires *exactly*. Our own `stage-codecs.sh`
+accepts the 1.24 series, because a plugin only has to be ABI-compatible with the
+core it is re-homed onto — but its instructions used to name 1.24.14, which
+would have sent a user to a release the other route on the same machine refuses.
+Accepting a range and advising a version are different jobs.
 
-**`winegstreamer` is not what supplies them.** It is Wine's *bridge* to
-GStreamer — `otool -L` shows it linking `libgstreamer-1.0`, `libgstvideo`,
-`libgstaudio`, `libgsttag` and `libglib`, and no decoder at all. It is what
-lets a Windows process reach whatever plugins are present; the plugins are a
-separate question, answered by the table above. Both halves are needed, and
-neither substitutes for the other.
+**Without it, nothing announces the problem.** The engine ends up as stock 26.3
+is — eighteen plugins, no `libgstlibav`, no `libgstmatroska`, no `libgstvpx` —
+and the first sign is a black cutscene in a title whose fix is installed and
+reporting healthy. A launcher should check for the framework and say so plainly
+before a user reaches that point.
 
-**The destination differs by engine, and guessing it breaks things.** 26.3 keeps
+**`winegstreamer` is not what supplies them.** `otool -L` shows it linking
+`libgstreamer-1.0`, `libgstvideo`, `libgstaudio`, `libgsttag` and `libglib`, and
+no decoder at all. It is the bridge from a Windows process to whatever plugins
+are present. Both halves are needed and neither substitutes for the other, which
+makes "the engine has winegstreamer, so it has codecs" the one wrong turn to
+design against.
+
+**The destination differs by engine, and guessing it does damage.** 26.3 keeps
 plugins in `lib64/gstreamer-1.0`; 27 keeps them in `lib/<arch>/gstreamer-1.0`.
-Do not invent a `lib64` on a 27-based engine — the block in its `wine` that sets
-`GST_PLUGIN_SYSTEM_PATH` *replaces* the path rather than adding to it, so a
-half-filled `lib64` would hide the engine's own twenty plugins.
+Do not create a `lib64` on a 27-based engine — the block in its `wine` that sets
+`GST_PLUGIN_SYSTEM_PATH` *replaces* the path rather than appending, so a
+half-filled `lib64` hides the engine's own twenty plugins.
+
+### The engine on this machine is running codecs from a GStreamer that is gone
+
+Worth recording because it is invisible and will confuse the next person.
+
+| | bytes | architectures |
+| --- | --- | --- |
+| framework's `libgstlibav.dylib` | 600,496 | x86_64 + arm64 |
+| its x86_64 slice | 282,624 | x86_64 |
+| **the engine's copy** | **267,696** | **x86_64, matching neither** |
+
+The copying does no thinning and no relinking, so the engine's plugin is not a
+processed version of what is installed today — it came from a GStreamer that is
+no longer on this machine, on 26 August. Re-patching would replace it with the
+1.24.13 ones. That is the third reason to re-patch, after the missing d9vk and
+our `d3d9` sitting in its path.
 
 ## What a launcher has to copy
 

@@ -904,8 +904,10 @@ title needs and what was measured, by the game playing. WMV3 and WMA are in the
 same plugin and are expected to work; neither has been exercised here, because
 ffmpeg ships no encoder for either and no test bitstream could be made.
 
-**Why 1.24.14.** It is the version this was verified with. Others may well be
-fine — winevideo names 1.24.13 for the same titles — and the requirement is
+**Why 1.24.13.** It is what winevideo names, what is installed here now, and
+what a launcher that owns its engine may require exactly rather than as a
+series. 1.24.14 was what this was first verified with and is named in older
+notes; both work. Others may well be fine, and the requirement is
 likely to be the 1.24 series rather than that exact release, since the plugin
 only has to be ABI-compatible with the CrossOver GStreamer core it is re-homed
 onto. No other release has been tried, so that last part is an inference from

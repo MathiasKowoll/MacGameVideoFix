@@ -189,9 +189,13 @@ first launch. Right click it and choose **Open**, then confirm.
   of this file, and why this project targets Preview is in the
   [disclaimer](#why-this-targets-crossover-preview).
 - **For Persona 5 Strikers only:** the official GStreamer runtime package,
-  [1.24.14](https://gstreamer.freedesktop.org/data/pkg/osx/1.24.14/)
-  (`gstreamer-1.0-1.24.14-universal.pkg`; the development package is not
-  needed), installed at `/Library/Frameworks`. The Codec column of the wiki's stack table says which titles need
+  [1.24.13](https://gstreamer.freedesktop.org/data/pkg/osx/1.24.13/)
+  (`gstreamer-1.0-1.24.13-universal.pkg`; the development package is not
+  needed), installed at `/Library/Frameworks`. Prefer that exact release over a
+  later 1.24: it is what winevideo names, what is installed and working here,
+  and what a launcher that owns its engine may require exactly. Earlier notes
+  in this repository name 1.24.14 because that is what was installed when they
+  were written. The Codec column of the wiki's stack table says which titles need
   a codec CrossOver does not ship, and nothing is redistributed — the decoder is
   borrowed from an install you already have. Where it comes from, and why it is
   staged rather than patched in, is in

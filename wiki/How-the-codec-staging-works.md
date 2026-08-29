@@ -157,9 +157,11 @@ corrects the path for that run.
 
 Worth checking separately: the framework the plugin comes from should be the
 same GStreamer series as the core it plugs into. `stage-codecs.sh` compares them
-and says which engines match. As this was written the framework was 1.24.14
-while Preview shipped 1.28.5 — a series apart, which usually works and is not
-the closest fit.
+and says which engines match. This has been 1.24.14 and is now 1.24.13, while
+Preview ships 1.28.5 — a series apart, which usually works and is not the
+closest fit. Advise 1.24.13: a launcher that places the plugins inside its own
+engine may require that release exactly, so recommending a later 1.24 can break
+the other route on the same machine.
 
 ## What the script does, step by step
 
