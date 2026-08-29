@@ -297,13 +297,20 @@ and *patcher* routes, and not a description of how this machine got working
 video. It also means the files are already being redistributed by somebody, in
 a build this project uses.
 
-**And the argument against re-patching weakens.** These are not untraceable
-after all: they are winevideo's, identifiable by hash, and recoverable from
-`CrossOver-winevideo-0.5.app` if a re-patch replaced them with framework copies
-and something stopped working. What was a one-way door is a reversible one.
+**And the argument against re-patching disappears entirely.** It was that
+re-patching would swap a working decoder for a framework copy that had never run
+here. It would not: the payload was taken from the same winevideo build the
+engine's own copies came from, so a re-patch installs the identical bytes.
+Measured rather than reasoned — all twelve files in the engine being played on
+compare equal to the twelve in `runtime/engine-payload/lib64`.
+
+So the three reasons to re-patch stand undiminished — d9vk missing in both
+architectures, our `d3d9` occupying its path, codecs arriving by a route nobody
+recorded — and the cost that was set against them is zero for the codecs.
 
 The hashes are recorded below anyway, because the cheapest moment to write down
-what works is before changing it.
+what works is before changing it, and because "it was identical when we checked"
+is only worth something if somebody wrote down what it was identical to.
 
 ### So they travel now
 
