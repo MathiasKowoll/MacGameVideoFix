@@ -72,8 +72,12 @@ say "MacGameVideoFix-$VERSION.zip  $(( $(stat -f%z "$ZIP") / 1024 )) KB"
 # with one entry.
 "$ROOT/runtime/make-fixes-bundle.sh" "$OUT" >/dev/null \
   || die "could not build the fixes bundle"
-BUNDLE="$OUT/fixes-v$VERSION.tar.gz"
-[ -f "$BUNDLE" ] || die "the fixes bundle is not where it should be: $BUNDLE"
+# Found rather than named: make-fixes-bundle.sh names its output from git
+# describe, so before the tag exists it comes out as fixes-v4.11.0-2-gabc1234
+# and an exact name misses it. The tag is written in the next step, not this
+# one, so this will always be the case on a first publish.
+BUNDLE="$(ls "$OUT"/fixes-*.tar.gz 2>/dev/null | head -1)"
+[ -n "$BUNDLE" ] && [ -f "$BUNDLE" ] || die "make-fixes-bundle.sh produced no tarball in $OUT"
 [ -f "$BUNDLE.sha256" ] || die "the fixes bundle has no checksum beside it"
 say "fixes-v$VERSION.tar.gz  $(( $(stat -f%z "$BUNDLE") / 1024 )) KB"
 
