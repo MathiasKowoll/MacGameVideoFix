@@ -44,6 +44,7 @@
 # runtime/check-builds.sh checks these against the app's own table, so the two
 # copies cannot drift apart in silence.
 #
+# MGVF-SCOPE: folder
 # MGVF-GAME: DYNASTY WARRIORS: ORIGINS | DWORIGINS.exe | 
 # MGVF-GAME: Wo Long: Fallen Dynasty | WoLong.exe | 
 # MGVF-WHY: The player needs D3D11 video interfaces D3DMetal lacks, and the decoded frame carried across to its D3D12 renderer.

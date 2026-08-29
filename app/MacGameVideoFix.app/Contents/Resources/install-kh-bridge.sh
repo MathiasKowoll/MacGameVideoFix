@@ -49,6 +49,7 @@
 # runtime/check-builds.sh checks these against the app's own table, so the two
 # copies cannot drift apart in silence.
 #
+# MGVF-SCOPE: folder
 # MGVF-GAME: KINGDOM HEARTS Dream Drop Distance | KINGDOM HEARTS Dream Drop Distance.exe | 
 # MGVF-GAME: KINGDOM HEARTS HD 1.5+2.5 ReMIX | KINGDOM HEARTS HD 1.5+2.5 Launcher.exe | 
 # MGVF-WHY: Cutscenes run with sound and a solid green picture: the luma and chroma planes never reach the game's own textures.

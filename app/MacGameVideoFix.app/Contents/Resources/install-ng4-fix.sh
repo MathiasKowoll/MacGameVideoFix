@@ -56,6 +56,7 @@
 # runtime/check-builds.sh checks these against the app's own table, so the two
 # copies cannot drift apart in silence.
 #
+# MGVF-SCOPE: folder
 # MGVF-GAME: NINJA GAIDEN 4 | NINJAGAIDEN4-Steam.exe | 
 # MGVF-WHY: The game asks Media Foundation whether anything decodes VP9 and quits if the answer is zero. Needs the staged Matroska demuxer too.
 

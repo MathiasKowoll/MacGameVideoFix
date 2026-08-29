@@ -33,6 +33,7 @@
 # runtime/check-builds.sh checks these against the app's own table, so the two
 # copies cannot drift apart in silence.
 #
+# MGVF-SCOPE: folder
 # MGVF-GAME: Mortal Shell 2 | MortalShell2-Win64-Shipping.exe | Engine/Binaries/ThirdParty/Ogg/Win64
 # MGVF-GAME: Beast of Reincarnation | BeastOfReincarnation-Win64-Shipping.exe | Engine/Binaries/ThirdParty/Ogg/Win64
 # MGVF-GAME: Life is Strange: Reunion | Iris-Win64-Shipping.exe | Engine/Binaries/ThirdParty/Ogg/Win64
