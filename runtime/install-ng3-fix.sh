@@ -82,6 +82,53 @@ REG="$BOTTLE/user.reg"
 KEY="[Software\\\\Wine\\\\AppDefaults\\\\$EXE\\\\DllOverrides]"
 DLLS="d3d9.dll qasf.dll quartz.dll winegstreamer.dll"
 
+# The registry is asked, not edited.
+#
+# The first version of this script appended the AppDefaults key to user.reg with
+# a text editor, and therefore had to refuse to run while a wineserver was
+# alive: the server holds the registry in memory and writes it back on exit,
+# silently undoing anything written underneath it. Kingdom Hearts and NieR had
+# already solved this here by going through reg.exe inside the bottle, and
+# NieR's script even says why. Doing it their way costs nothing and removes the
+# requirement to bring the bottle down -- which for a launcher means quitting
+# Steam and ending the prefix before it can even tell a user whether their game
+# needs the fix.
+wine_in_bottle() {
+  local bottle="$1" cx="$2"
+  shift 2
+  CX_BOTTLE_PATH="$(dirname "$bottle")" \
+    "$cx/bin/wine" --bottle "$(basename "$bottle")" "$@"
+}
+
+find_crossover() {
+  local c
+  for c in "$HOME/Applications/Crossover_patched.app" \
+           "$HOME/Applications/CrossOver"*.app \
+           "/Applications/CrossOver.app" \
+           "/Applications/CrossOver"*.app; do
+    [ -x "$c/Contents/SharedSupport/CrossOver/bin/wine" ] || continue
+    echo "$c/Contents/SharedSupport/CrossOver"; return 0
+  done
+  return 1
+}
+
+# A query that fails is not evidence of a missing key -- an unreachable bottle
+# answers nothing at all, and reading that as "the override is gone" reports a
+# working game as broken. So ask for something that must exist first.
+reachable() {
+  wine_in_bottle "$1" "$2" --cx-app reg.exe query "HKEY_CURRENT_USER\\Software" \
+    >/dev/null 2>&1
+}
+
+KEY="HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$EXE\\DllOverrides"
+
+override_present() {
+  local cx="$1"
+  wine_in_bottle "$BOTTLE" "$cx" --cx-app reg.exe query "$KEY" /v "*d3d9" \
+    >/dev/null 2>&1
+}
+
+
 [ -d "$BOTTLE/drive_c" ] || { echo "error: not a bottle: $BOTTLE" >&2; exit 1; }
 
 # Named literally, because make-fixes-bundle.sh works out what an installer
@@ -129,16 +176,24 @@ src_for() {
 }
 
 status() {
-  local n=0 d
+  local n=0 d key=0 cx
   for d in $DLLS; do [ -f "$SYS/$d.mgvf-stock" ] && n=$((n+1)); done
-  local key=0
-  grep -q "AppDefaults\\\\\\\\$EXE" "$REG" 2>/dev/null && key=1
+
+  # Ask the bottle. If it cannot answer -- no CrossOver that matches its engine,
+  # or a prefix that will not run reg.exe -- fall back to reading user.reg,
+  # which is stale while a server is up but is better than calling an
+  # unanswerable question a missing key.
+  if cx="$(find_crossover)" && reachable "$BOTTLE" "$cx" && override_present "$cx"; then
+    key=1
+  elif ! cx="$(find_crossover)" || ! reachable "$BOTTLE" "$cx"; then
+    grep -q "AppDefaults\\\\$EXE" "$REG" 2>/dev/null && key=1
+  fi
+
   # The same four words the other eleven installers answer with, so a launcher
-  # can read every fix the same way instead of testing for a carrier file here
-  # and asking a script there. half is a real state and not a rounding of
+  # can read every fix the same way. half is a real state and not a rounding of
   # broken: the DLLs are in place and the override is not, which is what an
-  # install interrupted between its two halves leaves behind, and it is fixed
-  # by running install again rather than by restoring first.
+  # install interrupted between its two halves leaves behind, and it is fixed by
+  # installing again rather than by restoring first.
   if [ "$key" = 1 ] && [ "$n" -eq 4 ]; then
     echo installed
   elif [ "$key" = 0 ] && [ "$n" -gt 0 ]; then
@@ -155,17 +210,6 @@ export MGVF_EXE="$EXE"
 case "$ACTION" in
   --status) status; exit 0 ;;
   --restore)
-      # Only where something is written. --status answers a question and changes
-      # nothing, and a launcher asks it while the bottle is very much alive -- so
-      # refusing it there would make the one call that must always work the one call
-      # that fails. Install and restore both edit the registry, and a live wineserver
-      # holds it in memory and writes it back on exit, undoing them in silence.
-      if pgrep -f wineserver >/dev/null 2>&1; then
-        echo "error: wine is running. Quit the game and CrossOver first -- a live" >&2
-        echo "       wineserver holds the registry in memory and writes it back on" >&2
-        echo "       exit, silently undoing anything written here." >&2
-        exit 1
-      fi
       for d in $DLLS; do
         if [ -f "$SYS/$d.mgvf-stock" ]; then
           mv -f "$SYS/$d.mgvf-stock" "$SYS/$d"
@@ -173,29 +217,17 @@ case "$ACTION" in
           rm -f "$SYS/$d"
         fi
       done
-      # Slurp the file, drop our key and everything up to the next one.
-      # perl, deliberately: the interpreter this project banned from installers
-      # is, on a clean Mac, the xcrun dispatcher -- it opens a dialog and fails.
-      # make-fixes-bundle.sh refuses any installer that names it, comments
-      # included, which is why this note does not.
-      /usr/bin/perl -0777 -i -pe '
-        my $e = quotemeta($ENV{MGVF_EXE});
-        s/\Q[Software\\\\Wine\\\\AppDefaults\\\\\E$e\Q\\\\DllOverrides]\E.*?(?=\n\[|\z)//s;
-      ' "$REG" && echo "removed the per-application overrides"
+      if cx="$(find_crossover)" && reachable "$BOTTLE" "$cx"; then
+        wine_in_bottle "$BOTTLE" "$cx" --cx-app reg.exe delete "$KEY" /f \
+          >/dev/null 2>&1 && echo "removed the per-application overrides"
+      else
+        echo "warning: the bottle could not be asked; the overrides are still" >&2
+        echo "         in its registry. The DLLs have been put back, so nothing" >&2
+        echo "         of ours is loaded, but the key remains." >&2
+      fi
       echo "restored"
       exit 0 ;;
   install)
-      # Only where something is written. --status answers a question and changes
-      # nothing, and a launcher asks it while the bottle is very much alive -- so
-      # refusing it there would make the one call that must always work the one call
-      # that fails. Install and restore both edit the registry, and a live wineserver
-      # holds it in memory and writes it back on exit, undoing them in silence.
-      if pgrep -f wineserver >/dev/null 2>&1; then
-        echo "error: wine is running. Quit the game and CrossOver first -- a live" >&2
-        echo "       wineserver holds the registry in memory and writes it back on" >&2
-        echo "       exit, silently undoing anything written here." >&2
-        exit 1
-      fi
       ;;
   *) usage ;;
 esac
@@ -219,19 +251,26 @@ for d in $DLLS; do
   echo "  $d  <- ${s#$HOME/}"
 done
 
-if /usr/bin/grep -q "AppDefaults\\\\\\\\$EXE" "$REG" 2>/dev/null; then
-  echo "  the overrides were already there"
-else
-  {
-    echo ""
-    echo "[Software\\\\Wine\\\\AppDefaults\\\\$EXE\\\\DllOverrides] 1787796931"
-    echo "#time=1dd35c9efa56bbc"
-    for n in d3d9 qasf quartz winegstreamer; do
-      echo "\"*$n\"=\"native,builtin\""
-    done
-  } >> "$REG"
-  echo "  overrides written for this executable only"
-fi
+cx="$(find_crossover)" || { echo "error: no CrossOver found in /Applications" >&2; exit 1; }
+reachable "$BOTTLE" "$cx" || {
+  echo "error: this bottle cannot run reg.exe, so the override cannot be" >&2
+  echo "       written. The DLLs are in place; nothing loads them yet." >&2
+  exit 1
+}
+for n in d3d9 qasf quartz winegstreamer; do
+  # Written and then asked back, rather than assumed. reg.exe returning 0 is not
+  # proof the value is there: this project has a script whose two halves
+  # disagreed for exactly that reason, printing "installed" while --status said
+  # "broken", for ever.
+  if ! wine_in_bottle "$BOTTLE" "$cx" --cx-app reg.exe add "$KEY" \
+         /v "*$n" /d "native,builtin" /f >/dev/null 2>&1 \
+     || ! wine_in_bottle "$BOTTLE" "$cx" --cx-app reg.exe query "$KEY" \
+         /v "*$n" >/dev/null 2>&1; then
+    echo "error: could not write the override for $n" >&2
+    exit 1
+  fi
+done
+echo "  overrides written for this executable only, through the bottle"
 
 echo "installed"
 echo
