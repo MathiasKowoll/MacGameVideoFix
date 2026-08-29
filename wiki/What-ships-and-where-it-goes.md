@@ -58,30 +58,38 @@ entire fix and no DLL is installed beside the game at all.
 **Where they go:** into the CrossOver application's own
 `lib64/gstreamer-1.0`. They are shared by every bottle that engine runs.
 
-## 4. Replaced in the engine by hand — and this category ships nowhere
+## 4. Replaced in the engine here — and it is not what it looked like
 
-Two files in the engine have been swapped on the machine this work was done on,
-and neither travels in any bundle:
+One file in the engine on this machine has been replaced by this project's work
+and travels in no bundle: **`d3d9.dll`**, 1,576,960 bytes, built here with
+winevideo's two video-bridge patches for the Nioh work. Confirmed by comparing
+it byte for byte against the copy kept aside when it was built.
 
-| file | live here | the engine's own |
-| --- | --- | --- |
-| `d3d9.dll` | 1,576,960 bytes | 192,080 bytes |
-| `winegstreamer.dll` | 2,330,624 bytes | 424,000 bytes |
+What it replaced is the part that matters. RaccoonBot patches CrossOver itself
+and installs **d9vk** as the engine's `d3d9.dll` — `Libs/d9vk/x64/d3d9_builtin.dll`,
+3,848,151 bytes. So a user who has never touched this machine does not have
+"Wine's d3d9 without our patches". They have Direct3D 9 translated to Vulkan, a
+different implementation entirely, and the D3D9-to-D3D11 bridge that Nioh, Nioh 2
+and Persona 5 Strikers depend on does not exist there in the form it was measured
+against.
 
-The `d3d9.dll` was built in this project with winevideo's two video-bridge
-patches, for the Nioh work. A `.stock` copy of each original sits beside it,
-which is how they can be told apart at all.
+Those three are published as fixed and were measured with the build above in
+place. Whether they work against d9vk has not been tested in either direction.
+Restoring d9vk and launching Nioh settles it in one run, and until that is done
+this page should not be read as saying those three are safe. The other eighteen
+titles do not touch D3D9 and are unaffected — including NINJA GAIDEN 3, which
+carries its own d9vk in the bundle and activates it for one executable.
 
-**This is a gap, not a category.** Nioh and Persona 5 Strikers are published as
-fixed, and both need a D3D9-to-D3D11 bridge. If that bridge lives partly in an
-engine file no user receives, then what is published is a fix verified only
-where it was made. It has not been measured either way: restoring the stock
-`d3d9.dll` and launching Nioh would settle it in one run, and until that is done
-this page should not be read as saying those titles are safe.
+**`winegstreamer.dll` is not ours.** It appears in this category in an earlier
+version of this page because it sat beside `d3d9.dll` with a `.stock` copy next
+to it, and that was a guess presented as a finding. RaccoonBot's patcher
+installs a patched `winegstreamer` of its own, built to load GStreamer out of
+the framework; the copy here matches neither its current one nor anything this
+project built. Nothing here is responsible for it.
 
-This project already has this failure recorded once under another name —
+This repository already carries this failure once under another name:
 `dwo-video-bridge.c` shipped keyed on an environment variable nothing ever set,
-so it answered "no" on every machine but the one it was measured on.
+so it answered no on every machine but the one it was measured on.
 
 ## What a launcher has to copy
 
