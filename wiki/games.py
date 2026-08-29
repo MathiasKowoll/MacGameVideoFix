@@ -49,7 +49,7 @@ GAMES = [
     ("NINJA GAIDEN 3: Razor's Edge", "Koei Tecmo, in-house",
      "Will not start: \"Insufficient VRAM\"", "d9vk, and winevideo's DirectShow filters",
      "**DXVK**", "9", "26.3",
-     "Fixed", "Games"),
+     "Fixed", "Ninja-Gaiden-3-Razors-Edge"),
     ("Nioh", "Koei Tecmo, in-house",
      "Cutscene refuses to play, then crashes", "Staged WMV3 codec, and the same D3D9 to D3D11 bridge",
      "**DXMT**", "11", "26.3 and Preview",

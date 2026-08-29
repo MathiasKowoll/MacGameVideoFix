@@ -20,7 +20,7 @@ otherwise.
 | [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | Video bridge, D3D11 to D3D12 | D3DMetal | 12 | 4.0b2 | 26.3 and Preview | Fixed |
 | [Beast of Reincarnation](Beast-of-Reincarnation.md) | Unreal Engine 5 | Startup video plays with sound, no picture | Console variable puts Electra on its CPU path; **needs winevideo** | D3DMetal | 12 | 3.0 | 26.3 with winevideo -- Preview stalls | Fixed |
 | [Persona 5 Strikers](Persona-5-Strikers.md) | Koei Tecmo, in-house | Video never starts; sound only | Staged VC-1 codec, and a D3D9 to D3D11 bridge | **DXMT** | 11 | 3.0 and 4.0b2 | 26.3 and Preview | Fixed |
-| [NINJA GAIDEN 3: Razor's Edge](Games.md) | Koei Tecmo, in-house | Will not start: "Insufficient VRAM" | d9vk, and winevideo's DirectShow filters | **DXVK** | 9 | 3.0 | 26.3 | Fixed |
+| [NINJA GAIDEN 3: Razor's Edge](Ninja-Gaiden-3-Razors-Edge.md) | Koei Tecmo, in-house | Will not start: "Insufficient VRAM" | d9vk, and winevideo's DirectShow filters | **DXVK** | 9 | 3.0 | 26.3 | Fixed |
 | [Nioh](Nioh.md) | Koei Tecmo, in-house | Cutscene refuses to play, then crashes | Staged WMV3 codec, and the same D3D9 to D3D11 bridge | **DXMT** | 11 | 4.0b2 | 26.3 and Preview | Fixed |
 | [Nioh 2](Nioh-2.md) | Koei Tecmo, in-house | Cutscene refuses to play, then crashes | Same codec and same bridge as Nioh, unchanged | **DXMT** | 11 | 4.0b2 | 26.3 and Preview | Fixed |
 | [Nioh 3](Nioh-3.md) | Koei Tecmo, in-house | Failed to play movie | The DYNASTY WARRIORS bridge, unchanged | D3DMetal | 12 | 4.0b2 | 26.3 and Preview | Fixed |
@@ -156,7 +156,7 @@ file at all.
 | [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) | D3DMetal | 12 | 4.0b2 | `libxess.dll` | `libxess_real.dll` | `dwo-video-bridge.c` | `libgstmatroska` | — | — |
 | [Beast of Reincarnation](Beast-of-Reincarnation.md) | D3DMetal | 12 | 3.0 | `libogg_64.dll` | `libogg_64_real.dll` | `ue5-media-fix.c` | — | — | — |
 | [Persona 5 Strikers](Persona-5-Strikers.md) | **DXMT** | 11 | 3.0 and 4.0b2 | `amd_ags_x64.dll` | `amd_ags_x64_real.dll` | `p5s-video-bridge.c` | `libgstlibav` | `BEAST_FORCE_NV12`, `BEAST_REFUSE_D3D_MANAGER` | — |
-| [NINJA GAIDEN 3: Razor's Edge](Games.md) | **DXVK** | 9 | 3.0 | — | — | — | not measured | — | — |
+| [NINJA GAIDEN 3: Razor's Edge](Ninja-Gaiden-3-Razors-Edge.md) | **DXVK** | 9 | 3.0 | — | — | — | not measured | — | — |
 | [Nioh](Nioh.md) | **DXMT** | 11 | 4.0b2 | `GfeSDK.dll` | `GfeSDK_real.dll` | `p5s-video-bridge.c` | `libgstlibav` | `BEAST_FORCE_NV12`, `BEAST_REFUSE_D3D_MANAGER` | — |
 | [Nioh 2](Nioh-2.md) | **DXMT** | 11 | 4.0b2 | `GfeSDK.dll` | `GfeSDK_real.dll` | `p5s-video-bridge.c` | `libgstlibav` | `BEAST_FORCE_NV12`, `BEAST_REFUSE_D3D_MANAGER` | — |
 | [Nioh 3](Nioh-3.md) | D3DMetal | 12 | 4.0b2 | `amd_ags_x64.dll` | `amd_ags_x64_real.dll` | `dwo-video-bridge.c` | — | — | — |
@@ -322,67 +322,6 @@ probes before deciding sits upstream of every door listed above.
 million — a thirtyfold reduction, measured twice — and moves neither the frame
 rate nor the length of the black screen. Real waste, no benefit. It is not a fix
 for this game and is not shipped as one.
-
-## Not yet an installer: NINJA GAIDEN 3: Razor's Edge
-
-Absent from the table because the fix is not ours to ship yet — it is four
-DLL substitutions, three of them other people's work. Written down here because
-it is measured, complete, and reproducible.
-
-**Why it is the odd one of the Master Collection.** SIGMA and SIGMA 2 import
-`d3d11.dll` and start fine. Razor's Edge is **Direct3D 9 only** — `d3d9.dll`
-and `d3dx9_43.dll`, no d3d11 anywhere — and that is the whole reason the other
-two work under DXVK and this one would not start at all.
-
-**The message it shows is a red herring.** Under CrossOver's own DXVK it says
-*"Insufficient VRAM. Please close all running applications."* Its own log says
-what really happened, eleven times: `DxvkAdapter: Failed to create device`,
-after reporting `transformFeedback: 0` and `timelineSemaphore: 0`. MoltenVK does
-not offer those and that DXVK requires them. Nothing to do with memory — DXVK
-reports the machine's full 49152 MiB two lines earlier.
-
-**Its videos are not Media Foundation.** 24 files in `databin/movie`, all ASF
-containers, **WMV3** video and **WMAv2** audio at 1280x720, played through
-**DirectShow** — `quartz` and `qasf`. An afternoon went into instrumenting
-`MFTEnumEx`, both source readers and `MFCreateFile` before the winevideo
-developer said where to look. The codec was measured with ffprobe; the path
-was not, and the difference cost hours.
-
-**The recipe.** Four overrides, all per-executable under
-`HKCU\Software\Wine\AppDefaults\NINJA GAIDEN 3 Razor's Edge.exe\DllOverrides`,
-so no other title is affected, with the DLLs placed in
-`drive_c/windows/system32`:
-
-| value | `native,builtin` | where it comes from |
-| --- | --- | --- |
-| `*d3d9` | d9vk | `Sikarugir-App/d9vk`, `d9vk-macOS-async-v1.10.3-20250511` |
-| `*qasf` | patched | winevideo 0.5 payload |
-| `*quartz` | patched | winevideo 0.5 payload |
-| `*winegstreamer` | patched | winevideo 0.5 payload |
-
-That d9vk is the **same DXVK version** CrossOver ships, 1.10.3, built
-differently for macOS. "DXVK 1.10.3 does not work on Apple silicon" was written
-here first and was wrong: CrossOver's build does not, this one does.
-
-**Result.** The game starts, renders at 60 fps, reaches its menu, and **its
-in-game cutscenes play**. The boot movie decodes its first frame and freezes;
-one click skips it and the game carries on. Nioh was re-run afterwards and is
-unaffected, which matters because these DLLs sit in a shared `system32` and only
-the per-app override keeps them out of everything else.
-
-**What is left, and why it may stay left.** Adding winevideo's `winegstreamer`
-changed nothing observable. That fits: it is split into a PE half and a Unix
-`.so`, and only the PE half can be overridden per application, so the two halves
-no longer match. Chasing the boot movie means transplanting more of another
-engine into this one. **winevideo 0.5 runs this title properly**, because there
-all of these are one coherent build — that is the honest answer for anyone who
-wants the intro as well.
-
-**Before this ships**, someone has to decide how the third-party binaries reach
-a user: downloaded from their own source with the checksum the winevideo
-contract already publishes, or copied out of a winevideo install the user
-already has. Redistributing them inside this project's bundle is a different
-question from either.
 
 ## Withdrawn: METAL GEAR SOLID 4
 
