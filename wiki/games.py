@@ -75,7 +75,7 @@ GAMES = [
      "Cutscene runs with sound, picture solid green; a crash dialog on leaving",
      "Software decode with the planes written into the game's own textures, and the shutdown fault swallowed",
      "D3DMetal", "11 + 12", "Preview -- **stalls on 26.3**, see the page",
-     "Fixed", "Kingdom-Hearts"),
+     "**In progress**", "Kingdom-Hearts"),
     ("KINGDOM HEARTS HD 1.5+2.5 ReMIX", "Square Enix, in-house",
      "Cutscene runs with sound, picture solid green; a crash dialog on leaving",
      "The Dream Drop Distance fix, unchanged -- six executables, same route",
@@ -175,8 +175,15 @@ these titles.
 The {off_stable} that does not is a **result and not an absence**, which is the
 distinction this column exists to keep: {off_stable_list}. Its fix installs,
 loads and decodes -- and the game stops anyway, before the fiftieth sample and
-without reaching a menu. The row still says Fixed because it was measured fixed
-on Preview; what changed is that stable has now been tried and answered.
+without reaching a menu.
+
+**That row is the only one not marked Fixed, and "In progress" means what it
+says**: it was measured working on Preview and is measured not working here, and
+until somebody understands why, offering it as a fix would be telling a user
+something that is true of the files and false of the game. The package holds
+three entries rather than two -- Dream Drop Distance, 0.2 Birth by Sleep and the
+Back Cover film -- and 0.2 has never been covered by any installer here at all,
+because its executable lives in a subfolder this one does not reach.
 
 {stalls_n} run on stable and stall on Preview, which is the opposite direction:
 {stalls_list}. What stalls NINJA GAIDEN 4 is the toolkit, which executes command
@@ -601,10 +608,18 @@ README_BEGIN, README_END = "<!-- readme-games:begin -->", "<!-- readme-games:end
 
 
 def readme_table():
+    """The README's table now carries Status.
+
+    It did not, so a row could be measured not working and still read here as
+    one of the fixed ones -- the caveat rode entirely in the CrossOver cell,
+    which a person skimming a list of games will not parse. The README is the
+    front door; a title under investigation has to say so where somebody
+    decides whether to try it.
+    """
     rows = "".join(
-        f"| [**{g}**]({WIKI}/{page}) | {sym} | {cx} |\n"
+        f"| [**{g}**]({WIKI}/{page}) | {sym} | {cx} | {status} |\n"
         for g, engine, sym, fix, backend, dx, cx, status, page in GAMES)
-    head = "| Game | Symptom | CrossOver |\n| --- | --- | --- |\n"
+    head = "| Game | Symptom | CrossOver | Status |\n| --- | --- | --- | --- |\n"
     return f"{README_BEGIN}\n\n{head}{rows}\n{README_END}"
 
 

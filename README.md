@@ -27,29 +27,29 @@ from the list, drop its folder on it, press Apply.
 
 <!-- readme-games:begin -->
 
-| Game | Symptom | CrossOver |
-| --- | --- | --- |
-| [**Mortal Shell 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Mortal-Shell-2) | Crash on the first cutscene | 26.3 and Preview |
-| [**Life is Strange: Reunion**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Reunion) | Freezes after a while, anywhere | 26.3 and Preview |
-| [**Life is Strange: Double Exposure**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Double-Exposure) | Freezes after a while, anywhere | 26.3 and Preview |
-| [**DYNASTY WARRIORS: ORIGINS**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Dynasty-Warriors-Origins) | Cutscene runs with sound, picture black | 26.3 and Preview |
-| [**Beast of Reincarnation**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Beast-of-Reincarnation) | Startup video plays with sound, no picture | 26.3 with winevideo -- Preview stalls |
-| [**Persona 5 Strikers**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Persona-5-Strikers) | Video never starts; sound only | 26.3 and Preview |
-| [**NINJA GAIDEN 3: Razor's Edge**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Ninja-Gaiden-3-Razors-Edge) | Will not start: "Insufficient VRAM" | 26.3 |
-| [**Nioh**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Nioh) | Cutscene refuses to play, then crashes | 26.3 and Preview |
-| [**Nioh 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Nioh-2) | Cutscene refuses to play, then crashes | 26.3 and Preview |
-| [**Nioh 3**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Nioh-3) | Failed to play movie | 26.3 and Preview |
-| [**Wo Long: Fallen Dynasty**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Wo-Long-Fallen-Dynasty) | Cutscene runs with sound, picture black | 26.3 and Preview |
-| [**NieR Replicant ver.1.22474487139**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/NieR-Replicant) | Crashes when the first video starts | 26.3 and Preview |
-| [**KINGDOM HEARTS Dream Drop Distance**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Kingdom-Hearts) | Cutscene runs with sound, picture solid green; a crash dialog on leaving | Preview -- **stalls on 26.3**, see the page |
-| [**KINGDOM HEARTS HD 1.5+2.5 ReMIX**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Kingdom-Hearts) | Cutscene runs with sound, picture solid green; a crash dialog on leaving | 26.3 and Preview |
-| [**TMNT: Splintered Fate**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/TMNT-Splintered-Fate) | Opens a window, then closes silently | 26.3 and Preview |
-| [**Tormented Souls 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Tormented-Souls-2) | Fatal error before the first frame | 26.3 and Preview |
-| [**Devil May Cry 5**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/RE-Engine-VC1) | Crashes when a skill preview video plays | 26.3 and Preview |
-| [**RESIDENT EVIL 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/RE-Engine-VC1) | Crashes when a video plays | 26.3 and Preview |
-| [**RESIDENT EVIL 3**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/RE-Engine-VC1) | Crashes when a video plays | 26.3 and Preview |
-| [**NINJA GAIDEN 4**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Ninja-Gaiden-4) | Says the VP9 codec is missing, then exits | 26.3 only -- Preview stalls before video |
-| [**RESONANCE: A PLAGUE TALE LEGACY**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Resonance-A-Plague-Tale-Legacy) | Fatal error: Shader Model 6.7 is not supported | 26.3 |
+| Game | Symptom | CrossOver | Status |
+| --- | --- | --- | --- |
+| [**Mortal Shell 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Mortal-Shell-2) | Crash on the first cutscene | 26.3 and Preview | Fixed |
+| [**Life is Strange: Reunion**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Reunion) | Freezes after a while, anywhere | 26.3 and Preview | Fixed |
+| [**Life is Strange: Double Exposure**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Double-Exposure) | Freezes after a while, anywhere | 26.3 and Preview | Fixed |
+| [**DYNASTY WARRIORS: ORIGINS**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Dynasty-Warriors-Origins) | Cutscene runs with sound, picture black | 26.3 and Preview | Fixed |
+| [**Beast of Reincarnation**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Beast-of-Reincarnation) | Startup video plays with sound, no picture | 26.3 with winevideo -- Preview stalls | Fixed |
+| [**Persona 5 Strikers**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Persona-5-Strikers) | Video never starts; sound only | 26.3 and Preview | Fixed |
+| [**NINJA GAIDEN 3: Razor's Edge**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Ninja-Gaiden-3-Razors-Edge) | Will not start: "Insufficient VRAM" | 26.3 | Fixed |
+| [**Nioh**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Nioh) | Cutscene refuses to play, then crashes | 26.3 and Preview | Fixed |
+| [**Nioh 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Nioh-2) | Cutscene refuses to play, then crashes | 26.3 and Preview | Fixed |
+| [**Nioh 3**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Nioh-3) | Failed to play movie | 26.3 and Preview | Fixed |
+| [**Wo Long: Fallen Dynasty**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Wo-Long-Fallen-Dynasty) | Cutscene runs with sound, picture black | 26.3 and Preview | Fixed |
+| [**NieR Replicant ver.1.22474487139**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/NieR-Replicant) | Crashes when the first video starts | 26.3 and Preview | Fixed |
+| [**KINGDOM HEARTS Dream Drop Distance**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Kingdom-Hearts) | Cutscene runs with sound, picture solid green; a crash dialog on leaving | Preview -- **stalls on 26.3**, see the page | **In progress** |
+| [**KINGDOM HEARTS HD 1.5+2.5 ReMIX**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Kingdom-Hearts) | Cutscene runs with sound, picture solid green; a crash dialog on leaving | 26.3 and Preview | Fixed |
+| [**TMNT: Splintered Fate**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/TMNT-Splintered-Fate) | Opens a window, then closes silently | 26.3 and Preview | Fixed |
+| [**Tormented Souls 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Tormented-Souls-2) | Fatal error before the first frame | 26.3 and Preview | Fixed |
+| [**Devil May Cry 5**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/RE-Engine-VC1) | Crashes when a skill preview video plays | 26.3 and Preview | Fixed |
+| [**RESIDENT EVIL 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/RE-Engine-VC1) | Crashes when a video plays | 26.3 and Preview | Fixed |
+| [**RESIDENT EVIL 3**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/RE-Engine-VC1) | Crashes when a video plays | 26.3 and Preview | Fixed |
+| [**NINJA GAIDEN 4**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Ninja-Gaiden-4) | Says the VP9 codec is missing, then exits | 26.3 only -- Preview stalls before video | Fixed |
+| [**RESONANCE: A PLAGUE TALE LEGACY**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Resonance-A-Plague-Tale-Legacy) | Fatal error: Shader Model 6.7 is not supported | 26.3 | Fixed |
 
 <!-- readme-games:end -->
 
