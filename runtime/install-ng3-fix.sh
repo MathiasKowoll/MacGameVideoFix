@@ -76,6 +76,17 @@ usage() { sed -n '3,12p' "$0" >&2; exit 1; }
 
 BOTTLE="${1%/}"
 ACTION="${2:-install}"
+# A read-only caller sets MGVF_STATUS_ONLY=1. The default above is the
+# DESTRUCTIVE branch, so without this the read-only property of a survey rests
+# on the literal --status never being lost from one line of one caller.
+# Structural beats positional.
+#
+# Four installers were missing this while the other nine had it, so a launcher
+# setting the variable got a read-only guarantee that silently did not cover
+# them. Found by the RaccoonBot session, which set the variable and then went
+# and checked which scripts actually read it rather than trusting that they did.
+if [ "${MGVF_STATUS_ONLY:-0}" = 1 ]; then ACTION=--status; fi
+
 EXE="NINJA GAIDEN 3 Razor's Edge.exe"
 SYS="$BOTTLE/drive_c/windows/system32"
 REG="$BOTTLE/user.reg"
