@@ -94,8 +94,8 @@ videos".
 | [Nioh 3](Nioh-3.md) | Koei Tecmo, in-house | Failed to play movie | The DYNASTY WARRIORS bridge, unchanged | D3DMetal | 12 | 4.0b2 | 26.3 and Preview | Fixed |
 | [Wo Long: Fallen Dynasty](Wo-Long-Fallen-Dynasty.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | The DYNASTY WARRIORS bridge, unchanged | D3DMetal | 12 | 4.0b2 | 26.3 and Preview | Fixed |
 | [NieR Replicant ver.1.22474487139](NieR-Replicant.md) | Toylogic, in-house | Crashes when the first video starts | Software decode, and the frame written into the game's target | D3DMetal | 11 | 4.0b2 | 26.3 and Preview | Fixed |
-| [KINGDOM HEARTS Dream Drop Distance](Kingdom-Hearts.md) | Square Enix, in-house | Cutscene runs with sound, picture solid green; a crash dialog on leaving | Software decode with the planes written into the game's own textures, and the shutdown fault swallowed | D3DMetal | 11 + 12 | 4.0b2 | Preview -- not tried on 26.3 | Fixed |
-| [KINGDOM HEARTS HD 1.5+2.5 ReMIX](Kingdom-Hearts.md) | Square Enix, in-house | Cutscene runs with sound, picture solid green; a crash dialog on leaving | The Dream Drop Distance fix, unchanged -- six executables, same route | D3DMetal | 11 + 12 | 4.0b2 | Preview -- not tried on 26.3 | Fixed |
+| [KINGDOM HEARTS Dream Drop Distance](Kingdom-Hearts.md) | Square Enix, in-house | Cutscene runs with sound, picture solid green; a crash dialog on leaving | Software decode with the planes written into the game's own textures, and the shutdown fault swallowed | D3DMetal | 11 + 12 | 3.0 and 4.0b2 | Preview -- **stalls on 26.3**, see the page | Fixed |
+| [KINGDOM HEARTS HD 1.5+2.5 ReMIX](Kingdom-Hearts.md) | Square Enix, in-house | Cutscene runs with sound, picture solid green; a crash dialog on leaving | The Dream Drop Distance fix, unchanged -- six executables, same route | D3DMetal | 11 + 12 | 3.0 and 4.0b2 | 26.3 and Preview | Fixed |
 | [TMNT: Splintered Fate](TMNT-Splintered-Fate.md) | Rebirth, in-house | Opens a window, then closes silently | A guard on the D3D12 call that ends the process instead of failing | D3DMetal | 12 | 4.0b2 | 26.3 and Preview | Fixed |
 | [Tormented Souls 2](Tormented-Souls-2.md) | Unreal Engine 5 | Fatal error before the first frame | 16:9 modes added to a list that offered none | D3DMetal | 12 | 4.0b2 | 26.3 and Preview | Fixed |
 | [Devil May Cry 5](RE-Engine-VC1.md) | RE Engine | Crashes when a skill preview video plays | Staged VC-1 codec. Nothing installed beside the game | D3DMetal | 12 | 3.0 and 4.0b2 | 26.3 and Preview | Fixed |
@@ -149,19 +149,22 @@ stutter.
 **Which CrossOver, and what "Preview" means.** Every measurement here was
 taken against CrossOver 26.3 and `crossover-preview-arm64-20260821`, and the
 CrossOver column says which of the two a title was measured on rather than
-which it might work on. **Nineteen of the twenty-one run on stable 26.3**,
-which inverts where this project started: stable was the exception and is now
-the rule, and the toolkit -- not the engine -- turned out to be the axis that
+which it might work on. **Twenty of the twenty-one run on stable 26.3**, which
+inverts where this project started: stable was the exception and is now the
+rule, and the toolkit -- not the engine -- turned out to be the axis that
 decides most of these titles.
 
-The two that are missing point one way and are not a result: the Kingdom
-Hearts pair has only ever been launched on Preview, so its rows record an
-absence rather than a finding and nothing is claimed either way.
+The one that does not is a **result and not an absence**, which is the
+distinction this column exists to keep: KINGDOM HEARTS Dream Drop Distance.
+Its fix installs, loads and decodes -- and the game stops anyway, before the
+fiftieth sample and without reaching a menu. The row still says Fixed because
+it was measured fixed on Preview; what changed is that stable has now been
+tried and answered.
 
-Two run on stable and stall on Preview, which is the interesting direction:
-Beast of Reincarnation and NINJA GAIDEN 4. What stalls NINJA GAIDEN 4 is the
+Two run on stable and stall on Preview, which is the opposite direction: Beast
+of Reincarnation and NINJA GAIDEN 4. What stalls NINJA GAIDEN 4 is the
 toolkit, which executes command lists concurrently with no lever to turn that
-off. Beast of Reincarnation is on that list for a different reason -- it needs
+off. Beast of Reincarnation is there for a different reason -- it needs
 winevideo since the game update of 2026-08-24 -- and the shared lesson is that
 "runs on Preview" was never the safe assumption this project began with.
 

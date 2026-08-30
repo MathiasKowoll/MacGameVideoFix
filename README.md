@@ -41,8 +41,8 @@ from the list, drop its folder on it, press Apply.
 | [**Nioh 3**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Nioh-3) | Failed to play movie | 26.3 and Preview |
 | [**Wo Long: Fallen Dynasty**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Wo-Long-Fallen-Dynasty) | Cutscene runs with sound, picture black | 26.3 and Preview |
 | [**NieR Replicant ver.1.22474487139**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/NieR-Replicant) | Crashes when the first video starts | 26.3 and Preview |
-| [**KINGDOM HEARTS Dream Drop Distance**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Kingdom-Hearts) | Cutscene runs with sound, picture solid green; a crash dialog on leaving | Preview -- not tried on 26.3 |
-| [**KINGDOM HEARTS HD 1.5+2.5 ReMIX**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Kingdom-Hearts) | Cutscene runs with sound, picture solid green; a crash dialog on leaving | Preview -- not tried on 26.3 |
+| [**KINGDOM HEARTS Dream Drop Distance**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Kingdom-Hearts) | Cutscene runs with sound, picture solid green; a crash dialog on leaving | Preview -- **stalls on 26.3**, see the page |
+| [**KINGDOM HEARTS HD 1.5+2.5 ReMIX**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Kingdom-Hearts) | Cutscene runs with sound, picture solid green; a crash dialog on leaving | 26.3 and Preview |
 | [**TMNT: Splintered Fate**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/TMNT-Splintered-Fate) | Opens a window, then closes silently | 26.3 and Preview |
 | [**Tormented Souls 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Tormented-Souls-2) | Fatal error before the first frame | 26.3 and Preview |
 | [**Devil May Cry 5**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/RE-Engine-VC1) | Crashes when a skill preview video plays | 26.3 and Preview |

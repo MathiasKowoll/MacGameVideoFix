@@ -400,3 +400,38 @@ installed against an engine whose app name and version match `built-for.json`,
 and the plugins by whichever of the two routes applies — staged from the user's
 own GStreamer, or placed inside an engine the launcher builds. Neither half has
 been tested without the other.
+
+## What a launcher has to pass
+
+Copying the files is half of it. These four environment variables are the
+interface between the bundle and whatever drives it, and three of them were
+added the night a launcher's install wrote a KINGDOM HEARTS override into the
+Battle.net bottle.
+
+| variable | what it does |
+| --- | --- |
+| `MGVF_BOTTLE` | **The one bottle to touch.** Absolute path to the bottle *directory*, the one holding `drive_c`. A trailing slash is stripped. An invalid value is an error, never a fallback. |
+| `MGVF_FRONTEND` | Any non-empty value means *a program is driving this, not a person*. With it set, an unset `MGVF_BOTTLE` is an **error** rather than a scan. |
+| `MGVF_STATUS_ONLY` | `1` forces `--status` whatever argument was given. Makes a survey pass structurally read-only. |
+| `MGVF_BOTTLES` | **Plural, and older.** *Adds* a root to search. One character from `MGVF_BOTTLE` and the opposite meaning. |
+
+**`MGVF_` names this bundle, not an application.** All four are read by the
+scripts, which travel in the tarball; the app reads none of them and only sets
+two. Somebody who has only a launcher and never installs MacGameVideoFix has the
+scripts and the contract works unchanged.
+
+**Why the frontend flag exists.** Unset used to mean "scan", for everybody. That
+is fine for a person at a terminal and is exactly how a launcher build that
+forgets to pass a bottle fails: silently, writing where it was never told to.
+A person with neither variable still gets the scan.
+
+**Verifying an install.** `--status` answers `installed`, `half`, `broken` or
+`absent`, and it already checks **every** executable the fix covers — six for
+KINGDOM HEARTS 1.5+2.5, two for 2.8 — so a launcher that reads it gets the whole
+answer without reading `overrides` itself.
+
+**What `--status` does not answer** is whether the game works. It reports files
+and registry keys. KINGDOM HEARTS 2.8 answers `installed` and does not play; the
+manifest carries no field to distinguish that, and anything rendering a green
+tick from `--status` alone will eventually render a true statement about the
+files and a false one about the game.

@@ -74,12 +74,12 @@ GAMES = [
     ("KINGDOM HEARTS Dream Drop Distance", "Square Enix, in-house",
      "Cutscene runs with sound, picture solid green; a crash dialog on leaving",
      "Software decode with the planes written into the game's own textures, and the shutdown fault swallowed",
-     "D3DMetal", "11 + 12", "Preview -- not tried on 26.3",
+     "D3DMetal", "11 + 12", "Preview -- **stalls on 26.3**, see the page",
      "Fixed", "Kingdom-Hearts"),
     ("KINGDOM HEARTS HD 1.5+2.5 ReMIX", "Square Enix, in-house",
      "Cutscene runs with sound, picture solid green; a crash dialog on leaving",
      "The Dream Drop Distance fix, unchanged -- six executables, same route",
-     "D3DMetal", "11 + 12", "Preview -- not tried on 26.3",
+     "D3DMetal", "11 + 12", "26.3 and Preview",
      "Fixed", "Kingdom-Hearts"),
     ("TMNT: Splintered Fate", "Rebirth, in-house",
      "Opens a window, then closes silently",
@@ -172,16 +172,18 @@ this project started: stable was the exception and is now the rule, and the
 toolkit -- not the engine -- turned out to be the axis that decides most of
 these titles.
 
-The {off_stable} that are missing point one way and are not a result: the
-Kingdom Hearts pair has only ever been launched on Preview, so its rows record
-an absence rather than a finding and nothing is claimed either way.
+The {off_stable} that does not is a **result and not an absence**, which is the
+distinction this column exists to keep: {off_stable_list}. Its fix installs,
+loads and decodes -- and the game stops anyway, before the fiftieth sample and
+without reaching a menu. The row still says Fixed because it was measured fixed
+on Preview; what changed is that stable has now been tried and answered.
 
-{stalls_n} run on stable and stall on Preview, which is the interesting
-direction: {stalls_list}. What stalls NINJA GAIDEN 4 is the toolkit, which
-executes command lists concurrently with no lever to turn that off. Beast of
-Reincarnation is on that list for a different reason -- it needs winevideo since
-the game update of 2026-08-24 -- and the shared lesson is that "runs on Preview"
-was never the safe assumption this project began with.
+{stalls_n} run on stable and stall on Preview, which is the opposite direction:
+{stalls_list}. What stalls NINJA GAIDEN 4 is the toolkit, which executes command
+lists concurrently with no lever to turn that off. Beast of Reincarnation is
+there for a different reason -- it needs winevideo since the game update of
+2026-08-24 -- and the shared lesson is that "runs on Preview" was never the safe
+assumption this project began with.
 
 Two lessons paid for by rows that were wrong for a while, and are worth more
 than the statuses they corrected:
@@ -250,9 +252,14 @@ def _note():
     -- hand_counts() skips generated blocks precisely because they are supposed
     to be rewritten from the rows every run, and this one was not.
     """
-    # "Preview -- not tried on 26.3" contains "26.3" and means the opposite, so
-    # the test is what was measured, not which strings appear.
-    measured = [g for g in GAMES if "not tried on 26.3" not in g[6]]
+    # Two cells contain "26.3" and mean the opposite of running on it: "not
+    # tried on 26.3" is an absence, and "stalls on 26.3" is a result. Neither
+    # row runs on stable, and a substring test for "26.3" counts both as if
+    # they did. The test is therefore what was measured AND what happened.
+    measured = [g for g in GAMES
+                if "not tried on 26.3" not in g[6] and "stalls on 26.3" not in g[6]]
+    untried  = [g for g in GAMES if "not tried on 26.3" in g[6]]
+    stalling = [g for g in GAMES if "stalls on 26.3" in g[6]]
     stalls = [g for g in GAMES if "Preview stalls" in g[6]]
     names = [g[0] for g in stalls]
     listed = (" and ".join(names) if len(names) < 3
@@ -263,6 +270,7 @@ def _note():
         on_stable=_word(len(measured)).capitalize(),
         corpus=_word(len(GAMES)),
         off_stable=_word(len(GAMES) - len(measured)),
+        off_stable_list=(" and ".join(g[0] for g in untried + stalling) or "none"),
         stalls_n=_word(len(stalls)).capitalize(),
         stalls_list=listed,
     )

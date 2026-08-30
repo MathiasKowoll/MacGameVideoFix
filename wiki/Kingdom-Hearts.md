@@ -199,6 +199,70 @@ CrossOver upgrade.
 Like NieR Replicant, this one writes a registry key so Wine prefers the copy
 beside the game over its own `dinput8`. It is scoped to this executable alone.
 
+## The launcher's crash dialog, and why it is in this DLL
+
+Both packages' launchers start the game correctly and then fault while tearing
+themselves down. Wine's AeDebug runs `winedbg`, and the user gets a **Program
+Error** dialog for a program that did its job. Measured from the dump:
+
+    Unhandled exception: page fault on write access to 0x0000000000000000
+    ntdll+0x38d55: movq $0, (%rax)     rax = 0
+    backtrace: five frames, every one of them ntdll
+
+All five are in ntdll's shutdown chain, and the dump's own process list already
+shows the game running. The launcher hands off and then dies clearing up.
+
+**Why not the registry.** `AeDebug` lives in HKLM and is bottle-wide. Turning it
+off would silence crash reporting for every other game in that bottle to spare
+one dialog. This DLL is already loaded into that exact process — the dump shows
+a `wine_dinput_worker` thread in it — so it is the narrowest place to act.
+
+**Why a vectored handler and not a top-level filter.** A top-level filter was
+tried first and never ran: the log said `filter armed` and never said it fired,
+while the dialog still appeared — which settles it, because that filter called
+`TerminateProcess`. Disassembly of this engine's
+`kernelbase!UnhandledExceptionFilter` explains it: the filter is consulted at
+`0x174066820` and the whole AeDebug path only begins at `0x17406682a`, so a
+non-zero return **would** have stopped it. The function is never reached from
+that depth of shutdown. That also rules out the other two gates in the same
+function — the hardcoded exe-name hack and the `GetErrorMode` check — and is why
+`SetErrorMode(SEM_NOGPFAULTERRORBOX)` is deliberately **not** added as a belt: it
+would only fire where the handler declines on purpose.
+
+**The gate is tight, and one condition is load-bearing.** One of the package's
+executables, an access violation, a **write**, to address zero, **and the fault
+coming from inside ntdll**. That last one is not pedantry: these launchers are
+.NET run under Mono, and Mono implements `NullReferenceException` by faulting on
+a write to zero and catching it. Those are normal and frequent in this process.
+The module the fault came from is the only thing separating them, and without it
+the handler would kill the launcher while it was working.
+
+Measured 2026-08-29 on 1.5+2.5: armed seven times, fired six, every firing the
+launcher on its way out — with the video fix decoding in the same session.
+
+## KINGDOM HEARTS HD 2.8 does not work on this engine
+
+Recorded because the table above still says Fixed, which was measured on
+CrossOver Preview and is not what a 26.3-based engine does today.
+
+With the fix installed and demonstrably working — NV12 restored, three samples
+delivered with **none empty**, one frame written — the stream stops before the
+fiftieth sample and the game never passes the Disney logo. Reproduced twice,
+identical both times: three samples, one frame, stop.
+
+**And the symptom is not the one this fix is for.** Not a green picture with
+sound, but a stall. Without the fix it is the same stall, so the fix is not
+making it worse; it simply is not the thing standing in the way.
+
+Where it stops is **not known**. The log does not have the resolution to say
+whether the game stopped asking or this code stopped answering, and two readings
+of it were offered and withdrawn on the night — the second because
+`sample buffer QI` has a six-entry print cap, so its absence from later lines is
+a logging limit and not a stopping point. `ReadSample` logs 1, 2, 3 and then 50,
+so seeing only three means fewer than fifty were read; that part stands.
+
+Settling it needs instrumenting that path on purpose.
+
 ## Caveats
 
 Do not use this on a game with anti-cheat. The fix patches a running process.
