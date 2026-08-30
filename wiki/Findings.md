@@ -536,7 +536,7 @@ that makes `-dx11` a poor answer to the Life is Strange freeze.
 **VP9 here never goes through Media Foundation,** which is why this fault needs
 nothing from CrossOver's media stack. It was measured rather than argued: the
 game was played through on CrossOver 26.3 carrying no winevideo, and again on
-CrossOver-winevideo 26.3, the same version differing only in the GStreamer
+26.3 **with winevideo**, the same version differing only in the GStreamer
 plugins. The fix worked either way. That paired run is the only controlled
 comparison in the project, and several claims elsewhere lean on it — it was made
 on [Mortal Shell 2](Mortal-Shell-2.md) and no other title.

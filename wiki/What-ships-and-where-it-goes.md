@@ -266,8 +266,8 @@ half-filled `lib64` hides the engine's own twenty plugins.
 Answered by hashing every CrossOver on the machine instead of reasoning about
 sizes, after two of us concluded they came from "a GStreamer that is gone".
 
-`CrossOver-winevideo-0.5.app` carries the identical files. All eight, byte for
-byte:
+They come from **[winevideo](https://github.com/Jfishin/winevideo)**, whose 0.5
+release carries the identical files. All eight, byte for byte:
 
 | file | bytes | same as winevideo 0.5 |
 | --- | --- | --- |

@@ -41,7 +41,7 @@ Nothing on disk changes. The original VP9 files are left exactly as they are.
 ## winevideo
 
 **Not required — measured.** The game was played through on CrossOver 26.3
-carrying no winevideo, and again on CrossOver-winevideo 26.3: the same version,
+carrying no winevideo, and again on 26.3 **with winevideo**: the same version,
 differing only in the GStreamer plugins. The fix worked either way. That
 paired run is the controlled comparison the rest of these pages lean on, and it
 was made on this title and no other. `crossover-preview-arm64-20260821` was

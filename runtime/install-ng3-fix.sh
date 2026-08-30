@@ -159,6 +159,10 @@ NG3_LICENCES="$HERE/ng3-THIRD-PARTY-LICENCES.md"
 roots() {
   echo "$HERE"
   local c
+  # A SEARCH PATTERN, not a citation. winevideo is
+  # https://github.com/Jfishin/winevideo and that is what documentation should
+  # name; this glob only guesses where somebody filed their build, because the
+  # script has to find it on disk. Leave it matching loosely.
   for c in "$HOME/Applications/CrossOver-winevideo-"*.app \
            "/Applications/CrossOver-winevideo-"*.app \
            "/Applications/winevideo Patcher.app"; do

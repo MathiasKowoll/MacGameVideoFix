@@ -1,7 +1,8 @@
 # The codecs in this payload, and their licences
 
 Twelve files, 21,632,848 bytes, copied verbatim from
-`CrossOver-winevideo-0.5.app` on 2026-08-29. Not built here and not modified:
+**winevideo** 0.5 (https://github.com/Jfishin/winevideo) on 2026-08-29. Not
+built here and not modified:
 byte-identical to that build, which is what the hashes below are for.
 
 **Why they are here.** Stock CrossOver 26.3 ships eighteen GStreamer plugins and
