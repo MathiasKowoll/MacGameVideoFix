@@ -52,7 +52,7 @@
 # MGVF-SCOPE: folder
 # MGVF-GAME: KINGDOM HEARTS Dream Drop Distance | KINGDOM HEARTS Dream Drop Distance.exe | 
 # MGVF-GAME: KINGDOM HEARTS HD 1.5+2.5 ReMIX | KINGDOM HEARTS HD 1.5+2.5 Launcher.exe | 
-# MGVF-WHY: Cutscenes run with sound and a solid green picture: the luma and chroma planes never reach the game's own textures.
+# MGVF-WHY: Cutscenes run with sound and a solid green picture: the luma and chroma planes never reach the game's own textures. The same DLL also swallows the shutdown fault that makes Wine open a crash dialog when a launcher or a title closes, so one install fixes both.
 
 set -euo pipefail
 
