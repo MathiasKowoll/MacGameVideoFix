@@ -1,6 +1,6 @@
 # KINGDOM HEARTS
 
-Seven titles across two packages, one fault and one fix. The first of them was
+Seven titles across two packages, one fault and one fix.  <!-- count-ok: titles inside these two packages, not entries in the table --> The first of them was
 the first game here that wanted the decoder's own surface rather than a
 picture, and the test that had settled the previous title's fault gave the
 opposite answer, which is what made the route clear.

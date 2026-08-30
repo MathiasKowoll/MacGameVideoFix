@@ -650,6 +650,12 @@ CLAIMS = [
     re.compile(rf"\b{COUNTED}\s+(?:\w+\s+){{0,2}}?(?:also\s+)?run\s+on\s+stable\b", re.I),
     # "Six games borrow a decoder", "Three titles need a codec"  # count-ok
     re.compile(rf"\b{COUNTED}\s+{CORPUS}\s+(?:borrow|need|require|play|ship)\b", re.I),
+    # "Twenty entries, and more games than that" -- a bare count opening a
+    # sentence, which every pattern above missed because none of them fire
+    # without a following verb or the word "here". It sat in the README saying
+    # twenty while the table held twenty-one, and it took somebody asking why a
+    # different game was missing to notice it.
+    re.compile(rf"^\s*{COUNTED}\s+{CORPUS}\b", re.I),
     # "the only title here", "Persona 5 Strikers, and only it"  # count-ok
     re.compile(r"\bonly\s+title\s+here\b", re.I),
     re.compile(r"\band\s+only\s+it\b", re.I),

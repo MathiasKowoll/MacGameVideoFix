@@ -12,8 +12,8 @@ Makes Windows games show their cutscenes under CrossOver on Apple Silicon.
 > stops the rest is in the translation stack shipped with it rather than in
 > anything installed beside the game.
 
-Twenty entries, and more games than that: the two KINGDOM HEARTS packages
-hold seven playable titles between them.
+More games than rows: the two KINGDOM HEARTS packages hold seven playable
+titles between them.
 
 Most of these are video faults, which is what the name says. Three are not.
 Splintered Fate, Tormented Souls 2 and RESONANCE never reach a cutscene because
@@ -134,7 +134,7 @@ published page or in a bug report.
 
 ### Which folder to pick, by hand
 
-One game at a time, which is what the drop zone is for and the fallback when a
+One game at a time, which is what the drop zone is for and the fallback when a  <!-- count-ok: how the drop zone works, not a count of anything -->
 scan does not turn a title up.
 
 For **DYNASTY WARRIORS: ORIGINS**, the folder holding `DWORIGINS.exe` — usually

@@ -1102,7 +1102,7 @@ that Rosetta 2, D3DMetal or Wine now serve poorly or not at all. The defect is
 usually not in the game — it is in how far the stack has to reach back to meet
 it.
 
-Two games sit outside the fixable set for exactly this reason, and both are
+Two games sit outside the fixable set for exactly this reason, and both are  <!-- count-ok: the two are listed immediately below; counting them is the reader's -->
 written up separately because a bug filed against the translation layer for
 either would be misdirected:
 
