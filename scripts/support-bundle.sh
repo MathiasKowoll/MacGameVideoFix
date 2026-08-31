@@ -1370,14 +1370,14 @@ echo "GSTREAMER.FRAMEWORK"
   || p3 "(not a requirement here -- printed because section 2's decoder question is" \
         " answered by what this Mac has, not by the DLL)"
 if [ ! -d "$FRAMEWORK" ]; then
-  p3 "NOT INSTALLED at /Library/Frameworks/GStreamer.framework -- 1.24.14 is verified"
+  p3 "NOT INSTALLED at /Library/Frameworks/GStreamer.framework -- 1.24.13 is verified"
 else
   compat="$(gst_compat)"
   if [ -n "${compat:-}" ] && [ "$compat" -gt 0 ] 2>/dev/null; then
     kv version "1.$((compat / 100)).$((compat % 100))  (compat $compat)"
     [ "$((compat / 100))" = 24 ] || \
       note "OUTSIDE THE 1.24 SERIES -- reported, not refused, so a wrong-series" \
-           "framework shows up as an error nowhere else. 1.24.14 is verified."
+           "framework shows up as an error nowhere else. 1.24.13 is verified."
   else
     kv version "not readable"
   fi

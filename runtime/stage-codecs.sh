@@ -180,12 +180,12 @@ fi
 stage_one() {
   # An engine that already carries these plugins needs nothing staged.
   #
-  # Staging exists because stock CrossOver ships eighteen GStreamer plugins and
+  # Staging exists because stock CrossOver ships 17 GStreamer plugins and
   # none of them decodes VC-1, WMV3 or VP9: the three that do are put in a
   # directory of their own and the bottle is pointed at it with GST_PLUGIN_PATH.
   # That is a per-bottle arrangement with a per-engine directory behind it, and
   # this project now also builds engines that carry the three inside
-  # lib64/gstreamer-1.0, where CrossOver's own eighteen live. For those, staging
+  # lib64/gstreamer-1.0, where CrossOver's own 17 live. For those, staging
   # would put a second copy of each plugin on the search path -- two GStreamer
   # cores in one process is the crash this whole script is written to avoid.
   #

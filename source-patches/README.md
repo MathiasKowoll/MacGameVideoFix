@@ -3,19 +3,30 @@
 `scripts/build-winegstreamer.sh` builds `winegstreamer.dll` and `winegstreamer.so`
 from a CrossOver source tree with a chosen set of patches applied, and the pair
 is installed into the engine. This file records **which patches, whose they are,
-and why each one is applied**, because until now that was only visible as four
-numbers on a command line.
+and why each one is applied**, because until now that was only visible as a list
+of numbers on a command line.
 
     scripts/build-winegstreamer.sh --patches 0002 0003 0006 0008 mgvf-0001
 
-`runtime/engine-built-for.json` records the set that produced the binaries
-currently shipped in `runtime/engine-payload/`.
+Every built pair records the set that produced it. `runtime/engine-payload/`
+carries `built-for.json`; beside `runtime/install-engine-media.sh` there is one
+`engine-built-for*.json` per set -- `engine-built-for.json` and
+`engine-built-for-stock.json` today -- each naming the engine it was built for,
+and the installer chooses between them by the name of the engine it is pointed
+at. All of them record the patch set above.
+
+`build-winegstreamer.sh` resolves each number here first, and only then in the
+fallback directory `MGVF_PATCHES` names, which is where winevideo's patches sit
+when that project is installed. Until these files existed the fallback was the
+only place it looked, so the build could not run on a machine without that
+project installed -- and the command written above, with `mgvf-0001` in the list,
+aborted unless the variable had been exported by hand.
 
 ## Whose patches these are
 
-**0002, 0003, 0006 and 0008 are winevideo's**, from its series of 35. They are
-**carried here, unchanged, with their provenance and their licence**, so that
-building this engine does not require their application to be installed. Each
+**0002, 0003, 0006 and 0008 are winevideo's**, from its 0.5.0 series of 35. They
+are **carried here, unchanged, with their provenance and their licence**, so that
+building this engine does not require that project to be installed. Each
 file opens with a header saying it is not ours. They modify Wine, which is
 LGPL-2.1-or-later, and a patch to LGPL code carries the same terms -- which is
 what makes carrying them permitted. Take them from winevideo rather than from
@@ -42,8 +53,11 @@ that 0003 then advertises: without it the caps mapping has nowhere to land.
 ### 0003 — a real VP9 decoder MFT, advertised through MFTEnumEx
 Adds `CLSID_wg_vp9_decoder`, mirroring the h264 MFT, and wires it into
 `mfplat.c`'s class objects. Its message names the symptom it exists for: a game's
-VP9 capability probe finds no decoder and shows *"Failed to Play VP9"*. That is
-NINJA GAIDEN 4's fault in this project.
+VP9 capability probe finds no decoder and shows *"Failed to Play VP9"*. Their
+message names NINJA GAIDEN 4 as the probe they saw, and that title is here too --
+though what answers its probe in this project is its own carrier DLL rather than
+this patch, and what was actually missing for it was a demuxer.
+`wiki/Ninja-Gaiden-4.md` records what was measured.
 
 ### 0006 — drop D3D awareness on macOS
 No macOS backend can create NV12 D3D11 video textures, so D3D-bound decoder
@@ -65,15 +79,31 @@ through the sample allocator, whose system-memory buffers do implement it.
 reaches that MFT: winegstreamer's **media source** produces its own samples, and
 those were plain memory buffers. METAL GEAR SOLID: Peace Walker asks such a frame
 for `IMF2DBuffer2`, gets `E_NOINTERFACE`, does not check the HRESULT, and
-dereferences the NULL. Full evidence is in the patch's own header.
+dereferences the NULL.
+
+The buffer for a video stream now comes from `MFCreateMediaBufferFromMediaType`,
+which is 2D-capable when the media type carries a subtype and a frame size and
+falls back to a plain buffer when it does not -- the previous behaviour exactly.
+Two guards ride along: a locked linear view SMALLER than the parser produced
+sends that frame back to a plain buffer rather than overrunning the allocation,
+and a LARGER one has its tail filled with luma 0 and chroma 128, because a fresh
+allocation is not blank and zeros are bright green in YUV. Audio stays on
+`MFCreateMemoryBuffer`: it has no geometry and nothing asks it for the interface.
+Full evidence is in the patch's own header.
+
+A green band along the bottom of the frame remains in some of that title's
+cutscenes. It is not caused by this patch -- measured from inside the process,
+the buffer's current, maximum and contiguous lengths all agree, so there is no
+unwritten tail for the fill above to touch -- and it is unexplained.
 
 ## If another of their patches is ever needed
 
 The remaining 31 are not applied here, and several address titles this project
-also carries. Adding one means: name it in `--patches`, record the new set in
-`runtime/engine-built-for.json`, rebuild the payload, and **add a section above
-saying what it is for and which title needs it**. A patch that is applied but not
-described here is indistinguishable from one applied by accident.
+also carries. Adding one means: name it in `--patches`, rebuild the pair, refresh
+`runtime/engine-payload/` and every `built-for` record that describes it, and
+**add a section above saying what it is for and which title needs it**. A patch
+that is applied but not described here is indistinguishable from one applied by
+accident.
 
 They also do not all apply standalone. 0003 needs 0002, and 0008 needs its
 predecessors; testing one against a pristine tree reports a failure that says

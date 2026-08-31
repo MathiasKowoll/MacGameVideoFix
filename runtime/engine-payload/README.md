@@ -23,7 +23,7 @@ version alone does not identify an engine, because a patched fork and a stock
 CrossOver both report `26.3.0.39832`; the app name is what tells them apart.
 
 **The decoders** are the twelve files under `lib64`, copied verbatim from
-winevideo's CrossOver build and not ours. Stock CrossOver 26.3 has eighteen
+winevideo's CrossOver build and not ours. Stock CrossOver 26.3 has 17
 plugins and none of them decodes VC-1, WMV3 or VP9. See `CODEC-LICENCES.md` for
 what each one is, its licence, and its sha256 — `check-builds.sh` verifies them
 against that table.
