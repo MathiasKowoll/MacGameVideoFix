@@ -62,9 +62,67 @@ if [ "${MGVF_STATUS_ONLY:-0}" = 1 ]; then ACTION=--status; fi
 
 
 # Named literally so make-fixes-bundle.sh collects them.
-PE="$HERE/engine-winegstreamer.dll"
-UNIX="$HERE/engine-winegstreamer.so"
-BUILTFOR="$HERE/engine-built-for.json"
+# Which set of engine binaries, when more than one is here.
+#
+# The pair is compiled against one engine's libraries; installing it into a
+# different engine is not degraded, it is an engine that may not load media at
+# all. That is why a mismatch was refused rather than warned about. With one set
+# present, refusing was the whole story. With two -- one for stock CrossOver and
+# one for a patched fork -- refusing while the right one sits beside the wrong
+# one would be obtuse. So: find the set built for THIS engine, and refuse only
+# when there is none.
+#
+# A set is three files with a common suffix: engine-winegstreamer<S>.dll,
+# engine-winegstreamer<S>.so and engine-built-for<S>.json. The empty suffix is a
+# set like any other, so a bundle carrying only one behaves exactly as before.
+choose_set() {
+  want=$1
+  for j in "$HERE"/engine-built-for*.json; do
+    [ -f "$j" ] || continue
+    app=$(/usr/bin/sed -n 's/.*"engine_app": *"\([^"]*\)".*/\1/p' "$j")
+    [ "$app" = "$want" ] || continue
+    sfx=$(basename "$j"); sfx=${sfx#engine-built-for}; sfx=${sfx%.json}
+    if [ -f "$HERE/engine-winegstreamer$sfx.dll" ] && [ -f "$HERE/engine-winegstreamer$sfx.so" ]; then
+      printf '%s\n' "$sfx"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# A copy this project made is not a different engine; it is the same engine under
+# another name, and the name is the only thing the guard can see. So the copy
+# records where it came from, in a file written when it was made, and the set
+# built for the original serves it. Nothing else is accepted: an engine with no
+# marker and no matching name is still refused.
+target_app=$(basename "$APP")
+if ! choose_set "$target_app" >/dev/null 2>&1; then
+  origin="$APP/Contents/SharedSupport/CrossOver/mgvf-origin.json"
+  if [ -f "$origin" ]; then
+    from=$(/usr/bin/sed -n 's/.*"copied_from": *"\([^"]*\)".*/\1/p' "$origin")
+    if [ -n "$from" ] && choose_set "$from" >/dev/null 2>&1; then
+      echo "note: $target_app records itself as a copy of $from made by this project;"
+      echo "      using the set built for $from."
+      target_app=$from
+    fi
+  fi
+fi
+
+if ! SUFFIX=$(choose_set "$target_app"); then
+  echo "error: nothing here was built for $(basename "$APP")." >&2
+  echo "       Sets present:" >&2
+  for j in "$HERE"/engine-built-for*.json; do
+    [ -f "$j" ] || continue
+    echo "         $(/usr/bin/sed -n 's/.*"engine_app": *"\([^"]*\)".*/\1/p' "$j")  ($(basename "$j"))" >&2
+  done
+  echo "       Build one with scripts/build-winegstreamer.sh against this engine," >&2
+  echo "       or point this at an engine these were built for." >&2
+  exit 1
+fi
+
+PE="$HERE/engine-winegstreamer$SUFFIX.dll"
+UNIX="$HERE/engine-winegstreamer$SUFFIX.so"
+BUILTFOR="$HERE/engine-built-for$SUFFIX.json"
 
 CX="$APP/Contents/SharedSupport/CrossOver"
 PE_DEST="$CX/lib/wine/x86_64-windows/winegstreamer.dll"
@@ -119,7 +177,11 @@ fi
 # says nothing about which of them this is. built-for.json records the app name
 # for exactly this reason and it was being ignored.
 want_app="$(/usr/bin/sed -n 's/.*"engine_app": *"\([^"]*\)".*/\1/p' "$BUILTFOR")"
-have_app="$(basename "$APP")"
+# Compared against the identity resolved above, not the bundle's own name: a
+# copy this project made answers to the engine it was copied from, and the
+# check that follows exists to catch a set built for a DIFFERENT engine, not
+# to reject a renamed one it already accepted.
+have_app="$target_app"
 if [ -n "$want_app" ] && [ "$want_app" != "$have_app" ]; then
   echo "error: these were built for $want_app and this is $have_app." >&2
   echo "       Both report the same version, so the name is the only thing that" >&2

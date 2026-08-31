@@ -1,5 +1,5 @@
 {
-  "engine_app": "Crossover_patched.app",
+  "engine_app": "CrossOver.app",
   "engine_version": "26.3.0.39832",
   "wine_build": "wine-11.0-8726-g2e2f5fca349",
   "patches": "0002 0003 0006 0008 mgvf-0001"
