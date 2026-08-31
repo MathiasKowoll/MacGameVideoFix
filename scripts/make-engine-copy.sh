@@ -92,6 +92,18 @@ say "copy      : $DEST"
 
 [ -e "$DEST" ] && [ "$FORCE" = 0 ] && die "$DEST already exists (pass --force to replace it)"
 
+# --force means "replace what is there", and step 1 removes the destination
+# before copying into it. If the source IS the destination -- which is what
+# choosing the copy instead of the original gives you on a second run, since
+# the copy appears in the picker too -- that removes the source, and then
+# there is nothing left to copy from. Compare the resolved paths, not the
+# strings, so a symlink or a trailing slash cannot walk around it.
+if [ -z "$ARCHIVE" ] && [ -d "$FROM" ] && [ -d "$DEST" ] \
+   && [ "$(cd "$FROM" && pwd -P)" = "$(cd "$DEST" && pwd -P)" ]; then
+  die "the source and the copy are the same bundle: $DEST
+       Point this at the CrossOver you installed, not at a copy of it."
+fi
+
 # --- 1. copy -----------------------------------------------------------------
 say "[1/6] copying"
 rm -rf "$DEST"
