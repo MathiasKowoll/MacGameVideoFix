@@ -81,10 +81,10 @@ GAMES = [
     # broken one. When 0.2 works, fold this back into the entry above -- which is
     # how it was, and where it belongs once they behave alike.
     ("KINGDOM HEARTS 0.2 Birth by Sleep", "Unreal Engine 4",
-     "Never reaches the game: the selector's helper spins and no process is created",
-     "None yet -- measured not to be a video fault",
-     "D3DMetal", "11", "**runs on neither** -- see the page",
-     "**In progress**", "Kingdom-Hearts"),
+     "Runs and plays its video. A launcher's launch never creates the process at all",
+     "**None needed** -- nothing of ours is installed for it",
+     "D3DMetal", "11", "26.3 -- launched directly; see the page",
+     "Fixed", "Kingdom-Hearts"),
     ("KINGDOM HEARTS HD 1.5+2.5 ReMIX", "Square Enix, in-house",
      "Cutscene runs with sound, picture solid green; a crash dialog on leaving",
      "The Dream Drop Distance fix, unchanged -- six executables, same route",
@@ -186,13 +186,21 @@ distinction this column exists to keep: {off_stable_list}. Its fix installs,
 loads and decodes -- and the game stops anyway, before the fiftieth sample and
 without reaching a menu.
 
-**That row is the only one not marked Fixed, and "In progress" means what it
-says**: it was measured working on Preview and is measured not working here, and
-until somebody understands why, offering it as a fix would be telling a user
-something that is true of the files and false of the game. The package holds
-three entries rather than two -- Dream Drop Distance, 0.2 Birth by Sleep and the
-Back Cover film -- and 0.2 has never been covered by any installer here at all,
-because its executable lives in a subfolder this one does not reach.
+**The KINGDOM HEARTS 2.8 package holds three entries, not two** -- Dream Drop
+Distance, 0.2 Birth by Sleep and the Back Cover film -- and they do not share a
+fault. Dream Drop Distance needs the bridge and has it. 0.2 needs nothing at
+all: no installer here has ever covered it, its executable lives in a subfolder
+this project does not reach, and launched directly it runs and plays its video,
+four times out of four.
+
+**What fails for 0.2 is being launched by a launcher**, which never creates its
+process. Same executable, same engine, same bottle, same files -- measured. That
+is a launcher's problem rather than a game's.
+
+Its status says Fixed because this column answers "does the title work", and it
+does. Its **Fix** column says "none needed", and that is the half to read before
+concluding anything was shipped for it: nothing was. Every other Fixed row in
+this table names something this project installs; this one names nothing.
 
 {stalls_n} run on stable and stall on Preview, which is the opposite direction:
 {stalls_list}. What stalls NINJA GAIDEN 4 is the toolkit, which executes command

@@ -240,28 +240,45 @@ the handler would kill the launcher while it was working.
 Measured 2026-08-29 on 1.5+2.5: armed seven times, fired six, every firing the
 launcher on its way out — with the video fix decoding in the same session.
 
-## KINGDOM HEARTS HD 2.8 does not work on this engine
+## KINGDOM HEARTS HD 2.8: three entries, and only one of them ours
 
-Recorded because the table above still says Fixed, which was measured on
-CrossOver Preview and is not what a 26.3-based engine does today.
+The package holds **three**, not two: Dream Drop Distance, 0.2 Birth by Sleep,
+and the Back Cover film. They do not share a fault and only one needs this
+project.
 
-With the fix installed and demonstrably working — NV12 restored, three samples
-delivered with **none empty**, one frame written — the stream stops before the
-fiftieth sample and the game never passes the Disney logo. Reproduced twice,
-identical both times: three samples, one frame, stop.
+**Dream Drop Distance** needs the bridge and has it. Measured on a 26.3-based
+engine: four runs of four reached the menu, two of them to `ReadSample [#300]`
+with a luma range of 28..235 — essentially the full dynamic range. And the
+bridge is necessary, isolated with a single variable: same engine, same toolkit,
+patch removed, and the game crashes.
 
-**And the symptom is not the one this fix is for.** Not a green picture with
-sound, but a stall. Without the fix it is the same stall, so the fix is not
-making it worse; it simply is not the thing standing in the way.
+**0.2 Birth by Sleep needs nothing.** No installer here has ever covered it —
+its executable is in `KINGDOM HEARTS 0.2 Birth by Sleep/Binaries/Win64`, and
+`install-kh-bridge.sh` looks only at the top of the package folder. Launched
+directly it runs and plays its video, four times out of four, with nothing of
+ours installed.
 
-Where it stops is **not known**. The log does not have the resolution to say
-whether the game stopped asking or this code stopped answering, and two readings
-of it were offered and withdrawn on the night — the second because
-`sample buffer QI` has a six-entry print cap, so its absence from later lines is
-a logging limit and not a stopping point. `ReadSample` logs 1, 2, 3 and then 50,
-so seeing only three means fewer than fifty were read; that part stands.
+### What actually fails for 0.2, and what it is not
 
-Settling it needs instrumenting that path on purpose.
+Launched **by a launcher**, its process is never created at all. The selector
+sits at 0% CPU, `WaitTitleProject.exe` draws the loading heart at 16% and waits
+in `mach_msg` for an event that does not come, and no `CreateProcessInternalW`
+for the game ever appears in a `WINEDEBUG=+process` trace. Launched by hand from
+the same engine, the same bottle and the same executable, the trace shows the
+process created and the game runs.
+
+So it is a launcher's problem, not a game's. Eliminated by measurement, each
+with one variable at a time: the game itself, this project's patch (absent), the
+three `GST_*` variables a launcher sets, MetalFX, the graphics backend, the
+toolkit generation, which executable is launched, the process tree, and Wine
+tracing — which was the last plausible cause and turned out not to be it either.
+
+**A warning about the instrument, paid for twice.** With a probe DLL beside it,
+0.2 launched; without, it did not — which looked like a finding and was noise
+from whatever the probe changed. And the probe's environment dump lists a fixed
+set of variable names rather than the whole environment, so several hours were
+spent testing against a list that was never complete. Both are the same mistake:
+believing an instrument about a question it was not built to answer.
 
 ## Caveats
 
