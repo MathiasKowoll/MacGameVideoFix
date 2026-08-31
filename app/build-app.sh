@@ -29,8 +29,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleName</key><string>MacGameVideoFix</string>
   <key>CFBundleDisplayName</key><string>MacGameVideoFix</string>
   <key>CFBundleIdentifier</key><string>io.github.mortalshell2macfix</string>
-  <key>CFBundleVersion</key><string>4.12.4</string>
-  <key>CFBundleShortVersionString</key><string>4.12.4</string>
+  <key>CFBundleVersion</key><string>5.0.0</string>
+  <key>CFBundleShortVersionString</key><string>5.0.0</string>
   <key>CFBundleExecutable</key><string>MacGameVideoFix</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
@@ -68,6 +68,35 @@ cp "$ROOT/runtime/install-nioh-bridge.sh" "$ROOT/runtime/install-nioh3-bridge.sh
    "$ROOT/runtime/install-ng4-fix.sh" \
     "$ROOT/runtime/install-resonance-fix.sh" "$ROOT/runtime/NvCloth_x64-resonance.dll" "$RES/"
 cp "$ROOT/runtime/stage-codecs.sh" "$RES/"
+
+# bottles.sh, which install-kh-bridge.sh and install-nier-bridge.sh source.
+#
+# It was never copied. Both scripts died on their first line inside the app, the
+# app read a non-zero exit as "this copy has no carrier DLL for the fix to ride
+# on", and two fixes that were installed and working reported as impossible. The
+# check at the end of this file exists so that the next omission is caught here
+# rather than by somebody reading a wrong sentence in the window.
+cp "$ROOT/runtime/bottles.sh" "$RES/"
+
+# Everything the app needs to build a patched engine of its own: the two scripts,
+# every engine set, and the codecs that go inside the copy. Flat, like the rest of
+# Resources -- make-engine-copy.sh reads the layout rather than assuming one.
+#
+# stage-codecs.sh stays for now. It is what the app falls back to when somebody
+# turns the copy off, and removing it before the copy has been used in anger
+# would leave three titles with no codecs and no way to get them.
+cp "$ROOT/scripts/make-engine-copy.sh" "$RES/"
+cp "$ROOT/runtime/install-engine-media.sh" "$RES/"
+for f in "$ROOT"/runtime/engine-winegstreamer*.dll "$ROOT"/runtime/engine-winegstreamer*.so \
+         "$ROOT"/runtime/engine-built-for*.json; do
+  [ -f "$f" ] && cp "$f" "$RES/"
+done
+for f in "$ROOT"/runtime/engine-payload/lib64/gstreamer-1.0/*.dylib \
+         "$ROOT"/runtime/engine-payload/lib64/*.dylib; do
+  [ -f "$f" ] && cp "$f" "$RES/"
+done
+[ -f "$ROOT/runtime/engine-payload/CODEC-LICENCES.md" ] && \
+  cp "$ROOT/runtime/engine-payload/CODEC-LICENCES.md" "$RES/"
 chmod +x "$RES/transcode-movies.sh" "$RES/pak-hide-videos.py" \
          "$RES/install-p5s-bridge.sh" "$RES/install-nioh-bridge.sh" \
          "$RES/install-nioh3-bridge.sh" "$RES/install-nier-bridge.sh" \
@@ -136,3 +165,25 @@ fi
 
 echo
 echo "built: $APP"
+
+# --- every file an installer names must actually be here ---------------------
+#
+# make-fixes-bundle.sh has always done this and this script never did, which is
+# how bottles.sh went missing for as long as it did. Same rule: a reference to
+# $HERE/<name> is a promise that <name> is beside it.
+missing=0
+for f in "$RES"/install-*.sh; do
+  [ -f "$f" ] || continue
+  for want in $(grep -oE '\$HERE/[A-Za-z0-9._-]+' "$f" | sed 's|\$HERE/||' | sort -u); do
+    if [ ! -e "$RES/$want" ]; then
+      # A name built from a variable leaves its constant half behind; treat it as
+      # a prefix before calling it missing.
+      if ! ls "$RES/$want"* >/dev/null 2>&1; then
+        echo "error: $(basename "$f") wants $want, which is not in the bundle" >&2
+        missing=1
+      fi
+    fi
+  done
+done
+[ "$missing" = 0 ] || exit 1
+echo "==> every file the installers name is present"

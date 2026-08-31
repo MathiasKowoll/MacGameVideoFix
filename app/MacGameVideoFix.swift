@@ -155,20 +155,21 @@ enum Requirements {
     /// This used to read "CrossOver 26.2 or later on Apple Silicon. Nothing
     /// else, for most games", and the comment beside it already conceded the
     /// text was not accurate. It is worse than inaccurate: a version floor
-    /// invites someone on a stable build to read "you are fine", when every fix
-    /// here is measured on Preview and only some entries are
-    /// known to work anywhere else.
+    /// invites someone on a stable build to read "you are fine", when what was
+    /// measured differs per title -- some on 26.3, some on Preview, some on 26.3
+    /// only with an engine this app patched.
     ///
-    /// A floor is the wrong shape for this. What the project supports is one
-    /// build, and the honest sentence says so first.
+    /// A floor is the wrong shape for this. What the project has is a
+    /// measurement per title, and the honest sentence points at it.
     /// GStreamer was mentioned here for a while, in a sentence appended to this
     /// line. It said the right thing and nobody read it: a requirement that
-    /// blocks six games does not belong in a caption, it belongs in a card with
-    /// the button that resolves it. That is what the banner below does now, and
-    /// this line is back to one fact.
+    /// blocks several games does not belong in a caption, it belongs in a card
+    /// with the button that resolves it. That is what the banner below does
+    /// now, and this line is back to one fact.
     static var note: String {
-        "Measured on CrossOver Preview. Most entries also work "
-      + "on stable 26.3; the rest are not verified there."
+        "Measured per title, and the wiki table names which CrossOver: 26.3, "
+      + "Preview, or 26.3 with an engine this app patched. Nothing beyond that "
+      + "table is verified."
     }
 }
 
@@ -400,15 +401,17 @@ enum SupportedGame: String, CaseIterable, Identifiable {
 
     /// Has this title been run on a stable CrossOver, or only on Preview?
     ///
-    /// The same three the published table names, and no more. Every other entry
-    /// was measured on Preview and nowhere else -- which is not a claim that it
-    /// fails on stable, only that nobody has looked. Saying "not verified" is
-    /// the whole point: the alternative is a version floor, which reads as
-    /// permission.
+    /// The titles the switch below names, and no more. The rest were measured
+    /// elsewhere -- which is not a claim that they fail on stable, only that
+    /// nobody has looked here. Saying "not verified" is the whole point: the
+    /// alternative is a version floor, which reads as permission.
     ///
     /// Keep this in step with the CrossOver column in wiki/games.py. They are
     /// two statements of one fact, and the day they disagree the app is the one
-    /// people believe.
+    /// people believe. They disagree today: the table marks stable for titles
+    /// this switch does not name. Nothing in this file reads the property, so it
+    /// publishes nothing, and adding titles to it would be a measurement claim
+    /// rather than a wording fix.
     var verifiedOnStable: Bool {
         switch self {
         case .mortalShell2, .beastOfReincarnation, .personaStrikers: return true
@@ -1573,7 +1576,7 @@ final class Runner: ObservableObject {
             if let v = Codecs.version {
                 note("GStreamer \(v) found"
                      + (Codecs.versionIsTested ? ""
-                        : " — 1.24.14 is the verified one; carrying on with yours"))
+                        : " — 1.24.13 is the verified one; carrying on with yours"))
             }
             status = "Staging the codec…"
             let script = resources.appendingPathComponent("stage-codecs.sh").path
@@ -1820,7 +1823,7 @@ final class Runner: ObservableObject {
 
             // Asked before recognise() rather than inside it. To a function
             // that reports only recognised games, a root it could not open and
-            // a root holding none of the six are the same empty list.
+            // a root holding none of the supported titles are the same empty list.
             let bad = await Task.detached(operation: { SteamLibrary.readability(of: root) }).value
             guard scanIsCurrent(generation) else { return }
             if let bad {
@@ -2121,8 +2124,8 @@ enum Codecs {
     /// The installed version, read from the library's compatibility number
     /// rather than a plist -- it encodes 1.MINOR.PATCH directly.
     ///
-    /// winevideo specifies 1.24.13 for exactly these titles. 1.24.14 is what
-    /// is measured working here, so what actually has to hold is the 1.24
+    /// winevideo specifies 1.24.13 for exactly these titles, and that is the
+    /// version this is measured against. What actually has to hold is the 1.24
     /// series rather than the exact patch: the plugin must be ABI-compatible
     /// with the CrossOver core it is re-homed onto, which GStreamer guarantees
     /// across 1.x. Anything else is reported, not refused.
@@ -2177,7 +2180,7 @@ enum Codecs {
     /// Uses the cached read; asking twice in one body evaluation is free.
     static var versionIsTested: Bool { version?.hasPrefix("1.24") ?? false }
 
-    static let downloadPage = "https://gstreamer.freedesktop.org/data/pkg/osx/1.24.14/"
+    static let downloadPage = "https://gstreamer.freedesktop.org/data/pkg/osx/1.24.13/"
 
     static var stagedRoot: String {
         (NSHomeDirectory() as NSString)
@@ -2369,6 +2372,43 @@ enum Codecs {
     /// Crossover_patched.app, which no search for "CrossOver Preview.app" would
     /// ever have seen -- and staging against the wrong engine does not warn,
     /// it crashes.
+    /// Every CrossOver on this Mac, one entry per install.
+    ///
+    /// `installedEngines()` is keyed by CFBundleVersion because a bottle records
+    /// the version it last ran under, and that is what matches a bottle to an
+    /// engine. It is the wrong shape for a picker: this Mac has several CrossOver
+    /// installs, most of them declaring 26.3.0.39832, so the map collapses and
+    /// the list offered to the user was missing engines -- including the copy
+    /// this app makes, which is the one it is meant to use.
+    ///
+    /// So the picker asks this instead. No deduplication, and the path is the
+    /// identity, because the path is the only thing that is actually unique.
+    static func allEngines() -> [(path: URL, version: String, name: String)] {
+        let fm = FileManager.default
+        var out: [(path: URL, version: String, name: String)] = []
+        for dir in ["/Applications",
+                    (NSHomeDirectory() as NSString).appendingPathComponent("Applications")] {
+            for app in ((try? fm.contentsOfDirectory(
+                            at: URL(fileURLWithPath: dir),
+                            includingPropertiesForKeys: nil)) ?? []).sorted(by: {
+                            $0.lastPathComponent < $1.lastPathComponent }) {
+                guard app.pathExtension == "app",
+                      fm.fileExists(atPath: app.appendingPathComponent(
+                          "Contents/SharedSupport/CrossOver").path),
+                      let plist = NSDictionary(contentsOf: app.appendingPathComponent(
+                          "Contents/Info.plist")),
+                      let version = plist["CFBundleVersion"] as? String
+                else { continue }
+                let ours = fm.fileExists(atPath: app.appendingPathComponent(
+                    "Contents/SharedSupport/CrossOver/mgvf-origin.json").path)
+                let base = app.deletingPathExtension().lastPathComponent
+                out.append((app, version, ours ? "\(base) — patched by this app"
+                                               : "\(base) (\(version))"))
+            }
+        }
+        return out
+    }
+
     static func installedEngines() -> [String: URL] {
         if let c = cachedEngines { return c }
         let fm = FileManager.default
@@ -2399,11 +2439,10 @@ enum Codecs {
                 else { continue }
 
                 // Two installs can declare the SAME CFBundleVersion, and this map
-                // is keyed by it. On the machine this was found on,
-                // CrossOver.app and CrossOver-winevideo-0.5.app both say
-                // 26.3.0.39832 -- one is a build kept for comparing winevideo
-                // against, and it is a real CrossOver, so it cannot simply be
-                // filtered out.
+                // is keyed by it. On the machine this was found on, two installs
+                // both say 26.3.0.39832 -- one is a build kept for comparing
+                // winevideo against, and it is a real CrossOver, so it cannot
+                // simply be filtered out.
                 //
                 // Whichever won was previously decided by directory order, which
                 // is not a decision. When the loser was the one with a staging,
@@ -2419,6 +2458,22 @@ enum Codecs {
                 // directly rather than through staged(forEngine:), which would
                 // call back into here.
                 if let sitting = found[version] {
+                    // An engine this project made wins any tie, before the staging rule
+                    // below is consulted at all.
+                    //
+                    // A copy declares the same CFBundleVersion as the CrossOver it was
+                    // copied from -- that is what being a copy means -- and the rule below
+                    // prefers whichever install has a staging. A copy of ours never has
+                    // one: it carries the plugins inside itself, which is the entire point
+                    // of making it. So the original won every tie and the copy the wizard
+                    // had just finished making was invisible to the app that made it,
+                    // including to the Restore button that would have undone its toolkit.
+                    func isOurCopy(_ u: URL) -> Bool {
+                        fm.fileExists(atPath: u.appendingPathComponent(
+                            "Contents/SharedSupport/CrossOver/mgvf-origin.json").path)
+                    }
+                    if isOurCopy(sitting) { continue }
+                    if !isOurCopy(app) {
                     func hasStaging(_ u: URL) -> Bool {
                         let name = u.deletingPathExtension().lastPathComponent
                         let slug = String(name.map { c -> Character in
@@ -2433,6 +2488,7 @@ enum Codecs {
                         }
                     }
                     if hasStaging(sitting) || !hasStaging(app) { continue }
+                    }
                 }
 
                 found[version] = app
@@ -2452,18 +2508,25 @@ enum Codecs {
     /// No extra IO: the names come from the same pass that found the bundles.
     static func label(_ version: String) -> String {
         _ = installedEngines()
+        // A copy of ours carries CrossOver's own Info.plist, so it declares the
+        // same CFBundleName and would sit in a picker under a name that does not
+        // tell it apart from the install it was copied from.
+        if let url = installedEngines()[version],
+           FileManager.default.fileExists(atPath: url.appendingPathComponent(
+               "Contents/SharedSupport/CrossOver/mgvf-origin.json").path) {
+            return "\(url.deletingPathExtension().lastPathComponent) — patched by this app"
+        }
         guard let name = cachedEngineNames?[version] else { return "CrossOver \(version)" }
         return "\(name) (\(version))"
     }
 
     /// Is this engine a Preview build?
     ///
-    /// Every fix in this project is measured on Preview and only on Preview. A
-    /// few titles happen to work on stable and the wiki says which, but that is
-    /// an observation, not a promise, and nothing here is verified there. A
-    /// person pointing a bottle at stable deserves to be told that before they
-    /// wonder why a fix did nothing, so this exists to put it on screen instead
-    /// of leaving it in a README nobody opens twice.
+    /// What was measured differs per title: some on 26.3, some only on Preview,
+    /// some on 26.3 only with an engine this app patched, and the wiki table
+    /// says which for each. A person pointing a bottle at stable deserves to be
+    /// told that before they wonder why a fix did nothing, so this exists to put
+    /// it on screen instead of leaving it in a README nobody opens twice.
     ///
     /// The name is the one the bundle declares, so a Preview living under some
     /// other file name still answers correctly -- one of the installs on this
@@ -2651,8 +2714,8 @@ enum Codecs {
 
     /// Has a game that needs the staged codec ever run in this bottle?
     ///
-    /// Three of the nine do: Persona 5 Strikers wants VC-1, Nioh and Nioh 2 want
-    /// WMV3. Nioh 3 deliberately does not -- despite the name it is D3D12 on
+    /// Three do: Persona 5 Strikers wants VC-1, Nioh and Nioh 2 want WMV3.
+    /// Nioh 3 deliberately does not -- despite the name it is D3D12 on
     /// D3DMetal and is served by the DYNASTY WARRIORS bridge, so a bottle that
     /// has only ever run Nioh 3 needs nothing here and must not be written to.
     ///
@@ -2942,7 +3005,26 @@ struct Setup {
     /// The bottle's folder name.
     var bottle: String?
     /// Whether to stage this project's GStreamer codec into that bottle.
+    ///
+    /// Only consulted when `ownEngine` is off. An engine of our own carries the
+    /// plugins inside it, where CrossOver's own 17 live, and staging a
+    /// second copy onto the search path is the two-GStreamer-cores crash that
+    /// the staging arrangement exists to avoid.
     var codec: Bool
+    /// Whether to work on a copy of CrossOver rather than on the one installed.
+    ///
+    /// The default, and the reason this project can patch an engine at all
+    /// without touching what somebody paid for. The copy carries everything --
+    /// the media pair, the codecs, optionally a newer toolkit -- and the
+    /// original stays byte-identical to what CodeWeavers shipped.
+    var ownEngine: Bool
+    /// The chosen CrossOver's bundle path.
+    ///
+    /// `crossover` holds its CFBundleVersion, because that is what a bottle
+    /// records and what matches a bottle to an engine. It cannot identify an
+    /// install: several installs on this Mac declare 26.3.0.39832. The path can,
+    /// and a copy has to be made from one.
+    var enginePath: String?
     /// Whether to put the newest Game Porting Toolkit into that CrossOver.
     var toolkit: Bool
     /// Where the games live, as a path.
@@ -2957,6 +3039,8 @@ struct Setup {
         Setup(crossover: d.string(forKey: key + "crossover"),
               bottle:    d.string(forKey: key + "bottle"),
               codec:     d.object(forKey: key + "codec") as? Bool ?? true,
+              ownEngine: d.object(forKey: key + "ownEngine") as? Bool ?? true,
+              enginePath: d.string(forKey: key + "enginePath"),
               toolkit:   d.object(forKey: key + "toolkit") as? Bool ?? false,
               games:     d.string(forKey: key + "games"),
               done:      d.bool(forKey: key + "done"))
@@ -2969,6 +3053,8 @@ struct Setup {
         d.set(crossover, forKey: key + "crossover")
         d.set(bottle,    forKey: key + "bottle")
         d.set(codec,     forKey: key + "codec")
+        d.set(ownEngine, forKey: key + "ownEngine")
+        d.set(enginePath, forKey: key + "enginePath")
         d.set(toolkit,   forKey: key + "toolkit")
         d.set(games,     forKey: key + "games")
         d.set(done,      forKey: key + "done")
@@ -2976,7 +3062,7 @@ struct Setup {
 
     /// Forget everything, so the wizard runs again from the first question.
     static func clear() {
-        for k in ["crossover", "bottle", "codec", "toolkit", "games", "done"] {
+        for k in ["crossover", "bottle", "codec", "ownEngine", "enginePath", "toolkit", "games", "done"] {
             d.removeObject(forKey: key + k)
         }
     }
@@ -3163,6 +3249,76 @@ enum Graphics {
     /// seal invalid and CrossOver runs anyway; running `codesign` over it to
     /// tidy that up corrupts the application and costs a reinstall. That was
     /// learned the expensive way and is why this function ends at the copy.
+    /// Make a patched copy of a CrossOver, leaving the original untouched.
+    ///
+    /// This is the answer to a question that has no good version of "patch what
+    /// the user paid for": don't. The copy carries the winegstreamer pair this
+    /// project builds, the three GStreamer plugins CrossOver does not ship, and
+    /// optionally a newer toolkit; the original stays byte-identical to what
+    /// CodeWeavers shipped, so a support question about a modified engine is
+    /// separable from one about theirs and the original can always reproduce.
+    ///
+    /// The order inside the script is load-bearing -- copy, change everything,
+    /// sign, then clear extended attributes. Signing before the last change
+    /// leaves a seal the next change breaks, and Finder then calls the copy
+    /// damaged when nothing is wrong with it.
+    static func makeEngineCopy(fromPath sourcePath: String,
+                               named name: String,
+                               toolkitFrom toolkitEngine: String?) -> (path: String?, problem: String?) {
+        // A path, not a version. Several CrossOver installs on the machine this
+        // was written on declare the same CFBundleVersion, so resolving a version
+        // here copied whichever one happened to win a tie-break rather than the
+        // one the person chose.
+        let source = URL(fileURLWithPath: sourcePath)
+        guard FileManager.default.fileExists(atPath: source.appendingPathComponent(
+                  "Contents/SharedSupport/CrossOver").path) else {
+            return (nil, "There is no CrossOver at \(sourcePath) any more.")
+        }
+        guard let res = Bundle.main.resourceURL else {
+            return (nil, "Could not find this app's own resources.")
+        }
+        let script = res.appendingPathComponent("make-engine-copy.sh").path
+        guard FileManager.default.fileExists(atPath: script) else {
+            return (nil, "This build does not carry make-engine-copy.sh.")
+        }
+
+        var args = [script, "--from", source.path, "--name", name, "--force"]
+        // Apple's D3DMetal is not carried by this project. The argument names a
+        // directory already on this Mac; without one, the copy keeps the toolkit
+        // CrossOver shipped.
+        if let t = toolkitEngine, let engine = Codecs.installedEngines()[t] {
+            let four = engine.appendingPathComponent(
+                "Contents/SharedSupport/CrossOver/lib64/apple_gptk_4")
+            if FileManager.default.fileExists(atPath: four.path) {
+                args += ["--gptk", four.path]
+            } else if let root = gptkRoot(engine) {
+                args += ["--gptk", root.path]
+            }
+        }
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/bash")
+        proc.arguments = args
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = pipe
+        do { try proc.run() } catch {
+            return (nil, "Could not run make-engine-copy.sh: \(error.localizedDescription)")
+        }
+        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
+                         encoding: .utf8) ?? ""
+        proc.waitUntilExit()
+
+        let dest = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Applications/\(name)").path
+        guard proc.terminationStatus == 0 else {
+            // The script's own checks say why, and its last line is the reason.
+            let last = out.split(separator: "\n").last.map(String.init) ?? "no output"
+            return (nil, "The copy was not made: \(last)")
+        }
+        return (dest, nil)
+    }
+
     static func swapToolkit(inEngine version: String, from source: String) -> String? {
         let fm = FileManager.default
         guard let target = Codecs.installedEngines()[version],
@@ -3971,10 +4127,19 @@ struct SetupWizard: View {
                  + "that same one, so this answer decides the rest.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Picker("", selection: $setup.crossover) {
+            // Every install, not one per version. Selecting carries the path and
+            // fills in the version behind it: the rest of the app matches bottles
+            // by version, and a copy has to be made from a path.
+            Picker("", selection: Binding(
+                get: { setup.enginePath },
+                set: { picked in
+                    setup.enginePath = picked
+                    setup.crossover = Codecs.allEngines()
+                        .first { $0.path.path == picked }?.version
+                })) {
                 Text("Choose…").tag(String?.none)
-                ForEach(engines, id: \.self) { v in
-                    Text(Codecs.label(v)).tag(String?.some(v))
+                ForEach(Codecs.allEngines(), id: \.path) { e in
+                    Text(e.name).tag(String?.some(e.path.path))
                 }
             }
             .labelsHidden().frame(maxWidth: 380)
@@ -4010,6 +4175,24 @@ struct SetupWizard: View {
     private var stepDrivers: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("What should go into it?").font(.callout)
+            Toggle(isOn: $setup.ownEngine) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Work on a copy of CrossOver").font(.callout)
+                    Text("Makes Crossover_MGVF.app in your Applications folder and puts "
+                         + "everything there: the media libraries, the codecs, and the "
+                         + "toolkit if you ask for it. The CrossOver you bought is not "
+                         + "touched, so anything that goes wrong can be reproduced "
+                         + "against it. Play from the copy afterwards.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if !setup.ownEngine {
+                Text("Without a copy, the codec is staged beside the bottle instead and "
+                     + "your own CrossOver is modified if you ask for a toolkit.")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Toggle(isOn: $setup.codec) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Video codec").font(.callout)
@@ -4020,6 +4203,8 @@ struct SetupWizard: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            .disabled(setup.ownEngine)
+            .help(setup.ownEngine ? "A copy carries the codecs inside it; nothing is staged." : "")
             if let engine = setup.crossover, let newest = Graphics.newestToolkit(),
                let running = runner.toolkits[engine]?.running, newest.version != running {
                 Toggle(isOn: $setup.toolkit) {
@@ -4069,7 +4254,7 @@ struct SetupWizard: View {
 
     private var canAdvance: Bool {
         switch step {
-        case 1: return setup.crossover != nil
+        case 1: return setup.enginePath != nil && setup.crossover != nil
         case 2: return setup.bottle != nil
         case 3: return true
         default: return setup.games != nil
@@ -4087,6 +4272,25 @@ struct SetupWizard: View {
     }
 
     private func applyDrivers() {
+        // A copy is a different arrangement, not an extra step on the same one:
+        // the toolkit goes into the copy rather than into what the user paid for,
+        // and the codecs go inside that engine rather than beside a bottle. So it
+        // returns rather than falling through -- doing both would stage a second
+        // GStreamer core onto the search path of an engine that already has one.
+        if setup.ownEngine, let enginePath = setup.enginePath {
+            let toolkitSource = setup.toolkit ? Graphics.newestToolkit()?.engine : nil
+            let made = Graphics.makeEngineCopy(fromPath: enginePath,
+                                               named: "Crossover_MGVF.app",
+                                               toolkitFrom: toolkitSource)
+            if let bad = made.problem {
+                note = bad
+            } else if let path = made.path {
+                note = "Ready: \(path). Open it once from Finder, then play from it "
+                     + "instead of your own CrossOver."
+            }
+            runner.refreshCodecs()
+            return
+        }
         if setup.toolkit, let engine = setup.crossover, let newest = Graphics.newestToolkit() {
             if let bad = Graphics.swapToolkit(inEngine: engine, from: newest.engine) {
                 note = bad
@@ -4176,7 +4380,16 @@ struct ContentView: View {
             // straight into bulk mode, which skipped the branch and took the
             // banner -- and with it the way into staging a codec for another
             // bottle -- off the screen entirely.
-            codecBanner
+            // Only when the codecs are NOT ours to carry.
+            //
+            // Everything this banner reports -- a codec borrowed from the user's
+            // GStreamer, staged per engine, and a bottle pointed at the right
+            // staging -- describes an arrangement that a copy of our own makes
+            // unnecessary: the three plugins go inside that engine, beside
+            // CrossOver's own 17, and no bottle is told anything. Leaving
+            // it on screen would report a problem that cannot occur and offer a
+            // repair that would cause one.
+            if !Setup.load().ownEngine { codecBanner }
             // The drift banner used to sit here. It explained, in three lines,
             // that a bottle was set to a CrossOver it had not been opened with
             // and what would happen if it were -- accurate, and written for
@@ -4270,18 +4483,27 @@ struct ContentView: View {
             // Reachable in single-game mode, and when nothing is wrong. Someone
             // who has just switched CrossOver has nothing drifted yet, so the
             // banner that would otherwise be the only way in is not there.
+            if !Setup.load().ownEngine {
             Button("CrossOver and bottles…") { showingBottles = true }
                 .buttonStyle(.link)
                 .font(.caption)
                 .help("See which CrossOver each bottle runs under, choose one yourself, "
                       + "or point every bottle at the CrossOver you have switched to.")
+            }
             // The way back into the four questions. Changing CrossOver or bottle
             // is the normal reason to want them again, and both are answers the
             // wizard already holds -- so it resumes with them filled in rather
             // than starting from nothing.
-            Button("Set up…") { showingWizard = true }
-                .buttonStyle(.link)
-                .font(.caption)
+            // Large, and not a link. This is the way into every answer the app
+            // has -- which CrossOver, which bottle, whether to work on a copy --
+            // and it was a caption-sized link among other caption-sized links.
+            Button { showingWizard = true } label: {
+                Label("Set up", systemImage: "slider.horizontal.3")
+                    .font(.callout.weight(.medium))
+                    .padding(.horizontal, 4)
+            }
+            .controlSize(.large)
+            .buttonStyle(.borderedProminent)
                 .help("Go through the setup questions again. Your previous answers are "
                       + "kept, so changing one does not mean giving the others again.")
             Spacer()
@@ -4569,19 +4791,18 @@ struct ContentView: View {
                         }
                         // Scope, said where the choice is made.
                         //
-                        // Every fix here is measured on Preview. Some titles do work on
-                        // stable and the wiki says which, but that is an observation rather
-                        // than a promise, and a bottle on stable is a bottle nothing was
-                        // verified against. Saying so beside the picker costs one line and
-                        // saves somebody concluding a fix is broken when it was simply never
-                        // tried where they are running it.
+                        // What was measured differs per title: some on 26.3, some only on
+                        // Preview, some on 26.3 only with an engine this app patched, and
+                        // the wiki table says which for each. Saying so beside the picker
+                        // costs one line and saves somebody concluding a fix is broken when
+                        // it was simply never tried where they are running it.
                         if let engine = picked.target, !Codecs.isPreview(engine) {
                             HStack(spacing: 8) {
                                 Image(systemName: "exclamationmark.triangle")
                                     .foregroundStyle(.orange)
-                                Text("This bottle runs a stable CrossOver. Every fix here is "
-                                   + "measured on CrossOver Preview; a few titles also work on "
-                                   + "stable and the wiki says which. Nothing is verified here.")
+                                Text("This bottle runs a stable CrossOver. Some titles were "
+                                   + "measured on it, some only on Preview, and some need an "
+                                   + "engine this app patched. The wiki table says which.")
                                     .font(.caption).foregroundStyle(.orange)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
@@ -4829,7 +5050,7 @@ struct ContentView: View {
     /// Rows the app cannot act on carry no checkbox and say why instead. A
     /// disabled control with no explanation is the thing that makes people
     /// think software is broken.
-    /// The way in, for someone who does not want to do this six times.
+    /// The way in, for someone who does not want to do this once per game.
     ///
     /// Steam names install folders after the project rather than the game --
     /// Mortal Shell 2 lives under Sparta, Persona 5 Strikers under P5S -- so
@@ -5038,7 +5259,7 @@ struct ContentView: View {
         }
         guard Codecs.gstreamerInstalled else {
             return "GStreamer is not installed. Get the macOS runtime package: "
-                 + "1.24.14 is the version this was verified with, and others in "
+                 + "1.24.13 is the version this was verified with, and others in "
                  + "the 1.24 series should work. Nothing is redistributed here — "
                  + "the decoder is borrowed from your install."
         }
@@ -5050,7 +5271,7 @@ struct ContentView: View {
             return "CrossOver ships no VC-1 decoder. GStreamer \(found) is "
                  + "installed and will be borrowed from — nothing is redistributed."
         }
-        return "GStreamer \(found) is installed. 1.24.14 is the version this "
+        return "GStreamer \(found) is installed. 1.24.13 is the version this "
              + "was verified with; yours may work perfectly well. Staging will go "
              + "ahead and say what it finds."
     }
@@ -5365,7 +5586,7 @@ struct ContentView: View {
         }
         switch runner.scanOutcome {
         case .none:
-            return "Only the six supported games are ever named. Everything else "
+            return "Only the games this app supports are ever named. Everything else "
                  + "in the folder is walked and forgotten."
         case .some(.games):
             return "Scan again after installing a game or moving one to another drive."
@@ -5411,8 +5632,9 @@ struct ContentView: View {
                 + "may not be the one you meant. "
                 : ""
             return odd
-                 + "The folder was read and none of the six games is installed in "
-                 + "it. If your games are on another drive, choose that library in step 1."
+                 + "The folder was read and none of the games this app supports is "
+                 + "installed in it. If your games are on another drive, choose that "
+                 + "library in step 1."
         case .some(.nothing(.volumeNotMounted)):
             return "That folder was there when you chose it and is not now. "
                  + "Connect the drive and scan again."
