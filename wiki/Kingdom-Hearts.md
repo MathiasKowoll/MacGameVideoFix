@@ -270,12 +270,23 @@ The chain, and every link is in a log:
 2. It asks macOS for the microphone
 3. Launched from a terminal, the parent already has that permission, the request
    succeeds, and **the amber microphone indicator lights up**
-4. Launched from an app bundle with no `NSMicrophoneUsageDescription`, macOS can
-   neither prompt nor grant, and the request never resolves
+4. Launched from an app bundle, **the game inherits that application's TCC
+   identity** — the request is attributed to the launcher, not to wine and not
+   to Steam. With no `NSMicrophoneUsageDescription`, macOS can neither prompt
+   nor grant, so nobody can answer and the client waits
 5. Steam's own main loop stops: `steamengine.cpp (2843) : Assertion Failed:
    CSteamEngine::BMainLoop appears to have stalled > 15 seconds without event
    signalled`
 6. A stalled Steam never services the request the title makes of it
+
+The assertion was describing exactly that all along: a client waiting on an
+answer the system was never able to request.
+
+**Granting it on a machine that has already refused.** The usage description is
+what makes the permission *grantable*: an application declaring none never
+appears in Privacy & Security to be enabled. Where a decision predating the
+description is already on file, it has to be turned on by hand there once. A
+machine seeing the application for the first time gets the prompt.
 
 That last step is why **only this title showed it**. The 2.8 package is a menu
 that asks Steam for a game, so it needs Steam to answer a *second* request. An
