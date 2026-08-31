@@ -5,7 +5,7 @@ Twelve files, 21,632,848 bytes, copied verbatim from
 built here and not modified:
 byte-identical to that build, which is what the hashes below are for.
 
-**Why they are here.** Stock CrossOver 26.3 ships eighteen GStreamer plugins and
+**Why they are here.** Stock CrossOver 26.3 ships 17 GStreamer plugins and
 none of them decodes VC-1, WMV3 or VP9. Seven of the titles in this project need
 one that it does not ship. The two routes that existed took them from a
 GStreamer the user had to install themselves — which fails silently when it is

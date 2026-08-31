@@ -5,7 +5,7 @@
  * absolute plugin paths. Two engines on this machine point at the same one:
  * CrossOver's default, ~/Library/Application Support/CrossOver/
  * gstreamer-1.0-registry.x86_64.bin. Their plugin sets differ -- stock carries
- * eighteen, an engine with winevideo's plugins inside carries twenty-one -- so
+ * 17, an engine with these three plugins inside carries 20 -- so
  * every alternation between them invalidates the cache and forces a full
  * rescan, inside the process, while the game waits.
  *
