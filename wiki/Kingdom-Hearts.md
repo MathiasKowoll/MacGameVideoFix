@@ -258,41 +258,41 @@ its executable is in `KINGDOM HEARTS 0.2 Birth by Sleep/Binaries/Win64`, and
 directly it runs and plays its video, four times out of four, with nothing of
 ours installed.
 
-### Why 0.2 does not start from a launcher: `-applaunch`
+### Why 0.2 does not start from a launcher: still not known
 
-Isolated to one token. Same flags, same environment, same engine, same bottle,
-same wine binary, same shell:
+A launcher launches it and its process is never created. The same command run by
+hand creates it and the game plays. That difference is measured and reproducible;
+**which part of it decides has not been found.**
 
-    fails   Steam.exe <flags>  -applaunch 2552440
-    works   Steam.exe <flags>  steam://run/2552440//
-
-**This package is not a game, it is a menu that asks Steam for a title**, and
-that second request is what `-applaunch` does not service. Captured live while it
-was hung: one shell process and no `steam.exe steam://run/...` anywhere, against
-two shells in every working run. Almost no other title makes a second request of
-Steam, which is why nothing else shows this.
-
-The route to it is worth as much as the answer. Every candidate was tested one
-at a time and every one came back negative — the game, this project's patch
+Tested one at a time, every one negative: the game itself, this project's patch
 (absent), the three `GST_*` variables, MetalFX, the graphics backend, the
-toolkit, `WINEMSYNC`, the Metal HUD and its elements, the UE4 hack, Metal
-argument buffers, `ROSETTA_ADVERTISE_AVX`, `D3DM_MTL4`, which executable is
-launched, the process tree, Wine tracing, the working directory, `--cx-app`
-versus a native path, a cold Steam, and finally all fourteen environment
-variables at once. Nineteen negatives.
+toolkit, `WINEMSYNC`, the Metal HUD and its elements, the UE4 hack in both
+directions, Metal argument buffers, `ROSETTA_ADVERTISE_AVX`, `D3DM_MTL4`, which
+executable is launched, the process tree, Wine tracing, the working directory,
+`--cx-app` versus a native path, a cold Steam, all fourteen environment variables
+at once, and — read out of the launcher's own log rather than a description of
+it — its literal command, `Steam.exe <flags> -applaunch 2552440`, which starts
+the game when run from a shell.
 
-It broke open only when the launcher's own log was read instead of its author's
-description of it. The log showed the real command launched **Steam**, not the
-game — so every replication all evening had been of the wrong chain — and that
-three of the values reported had the opposite settings in what actually ran.
+**This section briefly claimed `-applaunch` was the cause. It is not**, and the
+retraction is left here because how the claim was made matters. The failing run
+was compared against one working run, the single differing token was named, and
+an earlier working run using `-applaunch` — in the same set of logs, on the same
+disk — was not consulted. The counter-example was already in hand.
 
-**Two instrument failures are recorded here rather than dropped.** A probe DLL
-beside the game made it launch, which looked like a finding and was noise from
-whatever the probe changed. And the probe's environment dump listed a fixed set
-of names rather than the whole environment, so hours of comparison were made
-against a list that could not have contained the answer. Both are the same
-mistake: trusting an instrument about a question it was not built to answer. The
-dump now lists every name present, values only for engine knobs.
+What survives is the shape of the fault. Captured live while hung: one shell
+process where a working run has two, and no `steam.exe steam://run/...` at all.
+This package is a menu that asks Steam for a title, so a second request has to be
+serviced, and in the failing case it never appears. That is a fact about the
+symptom, not an explanation, and it is recorded as such.
+
+**Two instrument failures belong with it.** A probe DLL beside the game made it
+launch, which looked like a finding and was noise from whatever the probe
+changed. And the probe's environment dump listed a fixed set of names rather than
+the whole environment, so hours of comparison were made against a list that could
+not have contained the answer. The dump now lists every name present, with values
+only for engine knobs — names are knobs, not secrets, and withholding values
+keeps the user's paths out of pasted logs without hiding what exists.
 
 ## Caveats
 

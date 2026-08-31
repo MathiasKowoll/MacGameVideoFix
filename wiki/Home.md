@@ -167,11 +167,11 @@ all: no installer here has ever covered it, its executable lives in a subfolder
 this project does not reach, and launched directly it runs and plays its video,
 four times out of four.
 
-**What fails for 0.2 is `-applaunch`.** A launcher asking Steam for the title
-that way never gets the process created; `steam://run/<id>//` does, with every
-other thing held identical. This package is a menu that asks Steam for a title,
-and that second request is what `-applaunch` does not service -- which is why
-almost no other game shows it.
+**What fails for 0.2 is one particular way of launching it**, and which part of
+it decides is still not known. Twenty candidates have been tested one at a time,
+including the launcher's own literal command, and every one starts the game when
+run by hand. The page records what the symptom looks like and refuses to name a
+cause it has not found.
 
 Its status says Fixed because this column answers "does the title work", and it
 does. Its **Fix** column says "none needed", and that is the half to read before
