@@ -26,7 +26,8 @@ otherwise.
 | [Nioh 3](Nioh-3.md) | Koei Tecmo, in-house | Failed to play movie | The DYNASTY WARRIORS bridge, unchanged | D3DMetal | 12 | 4.0b2 | 26.3 and Preview | Fixed |
 | [Wo Long: Fallen Dynasty](Wo-Long-Fallen-Dynasty.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | The DYNASTY WARRIORS bridge, unchanged | D3DMetal | 12 | 4.0b2 | 26.3 and Preview | Fixed |
 | [NieR Replicant ver.1.22474487139](NieR-Replicant.md) | Toylogic, in-house | Crashes when the first video starts | Software decode, and the frame written into the game's target | D3DMetal | 11 | 4.0b2 | 26.3 and Preview | Fixed |
-| [KINGDOM HEARTS Dream Drop Distance](Kingdom-Hearts.md) | Square Enix, in-house | Cutscene runs with sound, picture solid green; a crash dialog on leaving | Software decode with the planes written into the game's own textures, and the shutdown fault swallowed | D3DMetal | 11 + 12 | 3.0 and 4.0b2 | Preview -- **stalls on 26.3**, see the page | **In progress** |
+| [KINGDOM HEARTS Dream Drop Distance](Kingdom-Hearts.md) | Square Enix, in-house | Cutscene runs with sound, picture solid green; a crash dialog on leaving | Software decode with the planes written into the game's own textures, and the shutdown fault swallowed | D3DMetal | 11 + 12 | 3.0 and 4.0b2 | 26.3 and Preview | Fixed |
+| [KINGDOM HEARTS 0.2 Birth by Sleep](Kingdom-Hearts.md) | Unreal Engine 4 | Never reaches the game: the selector's helper spins and no process is created | None yet -- measured not to be a video fault | D3DMetal | 11 | not measured | **runs on neither** -- see the page | **In progress** |
 | [KINGDOM HEARTS HD 1.5+2.5 ReMIX](Kingdom-Hearts.md) | Square Enix, in-house | Cutscene runs with sound, picture solid green; a crash dialog on leaving | The Dream Drop Distance fix, unchanged -- six executables, same route | D3DMetal | 11 + 12 | 3.0 and 4.0b2 | 26.3 and Preview | Fixed |
 | [TMNT: Splintered Fate](TMNT-Splintered-Fate.md) | Rebirth, in-house | Opens a window, then closes silently | A guard on the D3D12 call that ends the process instead of failing | D3DMetal | 12 | 4.0b2 | 26.3 and Preview | Fixed |
 | [Tormented Souls 2](Tormented-Souls-2.md) | Unreal Engine 5 | Fatal error before the first frame | 16:9 modes added to a list that offered none | D3DMetal | 12 | 4.0b2 | 26.3 and Preview | Fixed |
@@ -81,14 +82,14 @@ stutter.
 **Which CrossOver, and what "Preview" means.** Every measurement here was
 taken against CrossOver 26.3 and `crossover-preview-arm64-20260821`, and the
 CrossOver column says which of the two a title was measured on rather than
-which it might work on. **Twenty of the twenty-one run on stable 26.3**, which
-inverts where this project started: stable was the exception and is now the
-rule, and the toolkit -- not the engine -- turned out to be the axis that
+which it might work on. **Twenty-one of the twenty-two run on stable 26.3**,
+which inverts where this project started: stable was the exception and is now
+the rule, and the toolkit -- not the engine -- turned out to be the axis that
 decides most of these titles.
 
 The one that does not is a **result and not an absence**, which is the
-distinction this column exists to keep: KINGDOM HEARTS Dream Drop Distance.
-Its fix installs, loads and decodes -- and the game stops anyway, before the
+distinction this column exists to keep: KINGDOM HEARTS 0.2 Birth by Sleep. Its
+fix installs, loads and decodes -- and the game stops anyway, before the
 fiftieth sample and without reaching a menu.
 
 **That row is the only one not marked Fixed, and "In progress" means what it
@@ -178,6 +179,7 @@ file at all.
 | [Wo Long: Fallen Dynasty](Wo-Long-Fallen-Dynasty.md) | D3DMetal | 12 | 4.0b2 | `libxess.dll` | `libxess_real.dll` | `dwo-video-bridge.c` | — | — | — |
 | [NieR Replicant ver.1.22474487139](NieR-Replicant.md) | D3DMetal | 11 | 4.0b2 | `dinput8.dll` | `dinput8_real.dll` | `dwo-video-bridge.c` | `libgstlibav` | — | yes |
 | [KINGDOM HEARTS Dream Drop Distance](Kingdom-Hearts.md) | D3DMetal | 11 + 12 | 3.0 and 4.0b2 | `dinput8.dll` | `dinput8_real.dll` | `dwo-video-bridge.c` | — | — | yes |
+| [KINGDOM HEARTS 0.2 Birth by Sleep](Kingdom-Hearts.md) | D3DMetal | 11 | not measured | — | — | — | not measured | — | — |
 | [KINGDOM HEARTS HD 1.5+2.5 ReMIX](Kingdom-Hearts.md) | D3DMetal | 11 + 12 | 3.0 and 4.0b2 | `dinput8.dll` | `dinput8_real.dll` | `dwo-video-bridge.c` | — | — | yes |
 | [TMNT: Splintered Fate](TMNT-Splintered-Fate.md) | D3DMetal | 12 | 4.0b2 | `fmod.dll` | `fmod_real.dll` | `d3d12-guards.c` | — | — | — |
 | [Tormented Souls 2](Tormented-Souls-2.md) | D3DMetal | 12 | 4.0b2 | `OpenColorIO_2_3.dll` | `OpenColorIO_2_3_real.dll` | `d3d12-guards.c` | — | — | — |

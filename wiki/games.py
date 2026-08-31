@@ -74,7 +74,16 @@ GAMES = [
     ("KINGDOM HEARTS Dream Drop Distance", "Square Enix, in-house",
      "Cutscene runs with sound, picture solid green; a crash dialog on leaving",
      "Software decode with the planes written into the game's own textures, and the shutdown fault swallowed",
-     "D3DMetal", "11 + 12", "Preview -- **stalls on 26.3**, see the page",
+     "D3DMetal", "11 + 12", "26.3 and Preview",
+     "Fixed", "Kingdom-Hearts"),
+    # Its own row while its fault is its own. The 2.8 package holds both this and
+    # Dream Drop Distance, and one row for the pair hid a working title behind a
+    # broken one. When 0.2 works, fold this back into the entry above -- which is
+    # how it was, and where it belongs once they behave alike.
+    ("KINGDOM HEARTS 0.2 Birth by Sleep", "Unreal Engine 4",
+     "Never reaches the game: the selector's helper spins and no process is created",
+     "None yet -- measured not to be a video fault",
+     "D3DMetal", "11", "**runs on neither** -- see the page",
      "**In progress**", "Kingdom-Hearts"),
     ("KINGDOM HEARTS HD 1.5+2.5 ReMIX", "Square Enix, in-house",
      "Cutscene runs with sound, picture solid green; a crash dialog on leaving",
@@ -263,10 +272,10 @@ def _note():
     # tried on 26.3" is an absence, and "stalls on 26.3" is a result. Neither
     # row runs on stable, and a substring test for "26.3" counts both as if
     # they did. The test is therefore what was measured AND what happened.
-    measured = [g for g in GAMES
-                if "not tried on 26.3" not in g[6] and "stalls on 26.3" not in g[6]]
+    off = ("not tried on 26.3", "stalls on 26.3", "runs on neither")
+    measured = [g for g in GAMES if not any(o in g[6] for o in off)]
     untried  = [g for g in GAMES if "not tried on 26.3" in g[6]]
-    stalling = [g for g in GAMES if "stalls on 26.3" in g[6]]
+    stalling = [g for g in GAMES if "stalls on 26.3" in g[6] or "runs on neither" in g[6]]
     stalls = [g for g in GAMES if "Preview stalls" in g[6]]
     names = [g[0] for g in stalls]
     listed = (" and ".join(names) if len(names) < 3
