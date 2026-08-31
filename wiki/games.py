@@ -81,9 +81,9 @@ GAMES = [
     # broken one. When 0.2 works, fold this back into the entry above -- which is
     # how it was, and where it belongs once they behave alike.
     ("KINGDOM HEARTS 0.2 Birth by Sleep", "Unreal Engine 4",
-     "Runs and plays its video. A launcher's launch never creates the process at all",
-     "**None needed** -- nothing of ours is installed for it",
-     "D3DMetal", "11", "26.3 -- launched directly; see the page",
+     "Would not start from a launcher; ran fine launched by hand",
+     "**None from us.** The launcher had to declare microphone use -- see the page",
+     "D3DMetal", "11", "26.3",
      "Fixed", "Kingdom-Hearts"),
     ("KINGDOM HEARTS HD 1.5+2.5 ReMIX", "Square Enix, in-house",
      "Cutscene runs with sound, picture solid green; a crash dialog on leaving",
@@ -193,11 +193,13 @@ all: no installer here has ever covered it, its executable lives in a subfolder
 this project does not reach, and launched directly it runs and plays its video,
 four times out of four.
 
-**What fails for 0.2 is one particular way of launching it**, and which part of
-it decides is still not known. Twenty candidates have been tested one at a time,
-including the launcher's own literal command, and every one starts the game when
-run by hand. The page records what the symptom looks like and refuses to name a
-cause it has not found.
+**0.2 would not start from a launcher because the launcher declared no
+microphone use.** Steam initialises voice detection at startup; without
+`NSMicrophoneUsageDescription` macOS can neither prompt nor grant, the request
+never resolves, and Steam's own main loop wedges -- its assertion says so. A
+stalled Steam never answers the second request this package makes of it, which
+is why no ordinary title showed the same fault. Declaring the permission fixed
+it, and fixes any title that touches the microphone.
 
 Its status says Fixed because this column answers "does the title work", and it
 does. Its **Fix** column says "none needed", and that is the half to read before

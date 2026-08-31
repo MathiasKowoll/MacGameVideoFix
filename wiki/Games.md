@@ -27,7 +27,7 @@ otherwise.
 | [Wo Long: Fallen Dynasty](Wo-Long-Fallen-Dynasty.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | The DYNASTY WARRIORS bridge, unchanged | D3DMetal | 12 | 4.0b2 | 26.3 and Preview | Fixed |
 | [NieR Replicant ver.1.22474487139](NieR-Replicant.md) | Toylogic, in-house | Crashes when the first video starts | Software decode, and the frame written into the game's target | D3DMetal | 11 | 4.0b2 | 26.3 and Preview | Fixed |
 | [KINGDOM HEARTS Dream Drop Distance](Kingdom-Hearts.md) | Square Enix, in-house | Cutscene runs with sound, picture solid green; a crash dialog on leaving | Software decode with the planes written into the game's own textures, and the shutdown fault swallowed | D3DMetal | 11 + 12 | 3.0 and 4.0b2 | 26.3 and Preview | Fixed |
-| [KINGDOM HEARTS 0.2 Birth by Sleep](Kingdom-Hearts.md) | Unreal Engine 4 | Runs and plays its video. A launcher's launch never creates the process at all | **None needed** -- nothing of ours is installed for it | D3DMetal | 11 | 3.0 | 26.3 -- launched directly; see the page | Fixed |
+| [KINGDOM HEARTS 0.2 Birth by Sleep](Kingdom-Hearts.md) | Unreal Engine 4 | Would not start from a launcher; ran fine launched by hand | **None from us.** The launcher had to declare microphone use -- see the page | D3DMetal | 11 | 3.0 | 26.3 | Fixed |
 | [KINGDOM HEARTS HD 1.5+2.5 ReMIX](Kingdom-Hearts.md) | Square Enix, in-house | Cutscene runs with sound, picture solid green; a crash dialog on leaving | The Dream Drop Distance fix, unchanged -- six executables, same route | D3DMetal | 11 + 12 | 3.0 and 4.0b2 | 26.3 and Preview | Fixed |
 | [TMNT: Splintered Fate](TMNT-Splintered-Fate.md) | Rebirth, in-house | Opens a window, then closes silently | A guard on the D3D12 call that ends the process instead of failing | D3DMetal | 12 | 4.0b2 | 26.3 and Preview | Fixed |
 | [Tormented Souls 2](Tormented-Souls-2.md) | Unreal Engine 5 | Fatal error before the first frame | 16:9 modes added to a list that offered none | D3DMetal | 12 | 4.0b2 | 26.3 and Preview | Fixed |
@@ -99,11 +99,13 @@ all: no installer here has ever covered it, its executable lives in a subfolder
 this project does not reach, and launched directly it runs and plays its video,
 four times out of four.
 
-**What fails for 0.2 is one particular way of launching it**, and which part of
-it decides is still not known. Twenty candidates have been tested one at a time,
-including the launcher's own literal command, and every one starts the game when
-run by hand. The page records what the symptom looks like and refuses to name a
-cause it has not found.
+**0.2 would not start from a launcher because the launcher declared no
+microphone use.** Steam initialises voice detection at startup; without
+`NSMicrophoneUsageDescription` macOS can neither prompt nor grant, the request
+never resolves, and Steam's own main loop wedges -- its assertion says so. A
+stalled Steam never answers the second request this package makes of it, which
+is why no ordinary title showed the same fault. Declaring the permission fixed
+it, and fixes any title that touches the microphone.
 
 Its status says Fixed because this column answers "does the title work", and it
 does. Its **Fix** column says "none needed", and that is the half to read before

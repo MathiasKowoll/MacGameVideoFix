@@ -258,41 +258,57 @@ its executable is in `KINGDOM HEARTS 0.2 Birth by Sleep/Binaries/Win64`, and
 directly it runs and plays its video, four times out of four, with nothing of
 ours installed.
 
-### Why 0.2 does not start from a launcher: still not known
+### Why 0.2 would not start from a launcher: a missing microphone declaration
 
-A launcher launches it and its process is never created. The same command run by
-hand creates it and the game plays. That difference is measured and reproducible;
-**which part of it decides has not been found.**
+**The launcher did not declare `NSMicrophoneUsageDescription`.** Adding it fixed
+it, and it fixes any title that touches the microphone.
 
-Tested one at a time, every one negative: the game itself, this project's patch
-(absent), the three `GST_*` variables, MetalFX, the graphics backend, the
-toolkit, `WINEMSYNC`, the Metal HUD and its elements, the UE4 hack in both
-directions, Metal argument buffers, `ROSETTA_ADVERTISE_AVX`, `D3DM_MTL4`, which
-executable is launched, the process tree, Wine tracing, the working directory,
-`--cx-app` versus a native path, a cold Steam, all fourteen environment variables
-at once, and — read out of the launcher's own log rather than a description of
-it — its literal command, `Steam.exe <flags> -applaunch 2552440`, which starts
-the game when run from a shell.
+The chain, and every link is in a log:
 
-**This section briefly claimed `-applaunch` was the cause. It is not**, and the
-retraction is left here because how the claim was made matters. The failing run
-was compared against one working run, the single differing token was named, and
-an earlier working run using `-applaunch` — in the same set of logs, on the same
-disk — was not consulted. The counter-example was already in hand.
+1. Steam initialises voice detection on startup — `warning: The VAD has been
+   replaced by a hack pending a complete rewrite`
+2. It asks macOS for the microphone
+3. Launched from a terminal, the parent already has that permission, the request
+   succeeds, and **the amber microphone indicator lights up**
+4. Launched from an app bundle with no `NSMicrophoneUsageDescription`, macOS can
+   neither prompt nor grant, and the request never resolves
+5. Steam's own main loop stops: `steamengine.cpp (2843) : Assertion Failed:
+   CSteamEngine::BMainLoop appears to have stalled > 15 seconds without event
+   signalled`
+6. A stalled Steam never services the request the title makes of it
 
-What survives is the shape of the fault. Captured live while hung: one shell
-process where a working run has two, and no `steam.exe steam://run/...` at all.
-This package is a menu that asks Steam for a title, so a second request has to be
-serviced, and in the failing case it never appears. That is a fact about the
-symptom, not an explanation, and it is recorded as such.
+That last step is why **only this title showed it**. The 2.8 package is a menu
+that asks Steam for a game, so it needs Steam to answer a *second* request. An
+ordinary title is launched once and never asks again, so a Steam whose main loop
+is wedged still got it running before wedging.
+
+### How it was found, and how it was nearly missed
+
+Twenty candidates were tested one at a time and every one came back negative —
+the game, this project's patch, the `GST_*` variables, MetalFX, the backend, the
+toolkit, `WINEMSYNC`, the Metal HUD, the UE4 hack in both directions, Metal
+argument buffers, `ROSETTA_ADVERTISE_AVX`, `D3DM_MTL4`, which executable is
+launched, the process tree, Wine tracing, the working directory, `--cx-app`
+versus a native path, a cold Steam, all fourteen environment variables at once,
+and the launcher's literal command.
+
+**The answer was in a log that had already been handed over.** It was grepped for
+the launch command and the next fourteen hundred lines were not read; the
+assertion and the `VAD` line sat there the whole time. The user read them and
+asked why they had not been considered.
+
+And one claim was made and retracted along the way: that `-applaunch` was the
+cause. It was named by comparing the failing run against one working run and
+taking the single differing token — without consulting an earlier working run,
+in the same directory, that used `-applaunch` and started the game. A change had
+already been shipped elsewhere on the strength of it before the retraction.
 
 **Two instrument failures belong with it.** A probe DLL beside the game made it
-launch, which looked like a finding and was noise from whatever the probe
-changed. And the probe's environment dump listed a fixed set of names rather than
-the whole environment, so hours of comparison were made against a list that could
-not have contained the answer. The dump now lists every name present, with values
-only for engine knobs — names are knobs, not secrets, and withholding values
-keeps the user's paths out of pasted logs without hiding what exists.
+launch, which looked like a finding and was noise. And the probe's environment
+dump listed a fixed set of names rather than the whole environment, so hours of
+comparison ran against a list that could not have contained the answer — the
+cause was not an environment variable at all. The dump now lists every name
+present, with values only for engine knobs.
 
 ## Caveats
 
