@@ -267,11 +267,20 @@ for the game ever appears in a `WINEDEBUG=+process` trace. Launched by hand from
 the same engine, the same bottle and the same executable, the trace shows the
 process created and the game runs.
 
-So it is a launcher's problem, not a game's. Eliminated by measurement, each
-with one variable at a time: the game itself, this project's patch (absent), the
-three `GST_*` variables a launcher sets, MetalFX, the graphics backend, the
-toolkit generation, which executable is launched, the process tree, and Wine
-tracing — which was the last plausible cause and turned out not to be it either.
+So something about **how** it is launched decides it, and what that something is
+remains unknown. Eliminated by measurement, one variable at a time: the game
+itself, this project's patch (absent), the three `GST_*` variables (which come
+from the engine's own wine, not from a launcher), MetalFX, the graphics backend,
+the toolkit generation, which executable is launched, the process tree, Wine
+tracing, the Metal HUD, and — tested last, at the launcher author's own
+suggestion — invoking the executable by native path from a foreign working
+directory instead of through `--cx-app`. That was the strongest remaining
+hypothesis, and the game started anyway.
+
+**This page deliberately does not name a culprit.** "A launcher's launch fails"
+is measured; "the launcher does X wrong" is not, and every specific X proposed
+so far has been tested and survived. Naming one would be inventing a cause to
+finish a sentence.
 
 **A warning about the instrument, paid for twice.** With a probe DLL beside it,
 0.2 launched; without, it did not — which looked like a finding and was noise
