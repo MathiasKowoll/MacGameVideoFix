@@ -26,7 +26,7 @@ family prefix.
 | Symptom | Cutscene runs with sound, picture solid green |
 | Fix | Software decode, and the luma and chroma planes written straight into the game's own plane textures |
 | Backend | **D3DMetal**, D3D11 **and** D3D12 |
-| CrossOver | `crossover-preview-arm64-20260821`. Not tried on 26.3 |
+| CrossOver | Stable 26.3, on a copy of it carrying this project's `winegstreamer` (2026-08-31) |
 
 ## The two that need nothing, and why
 
@@ -252,6 +252,21 @@ with a luma range of 28..235 — essentially the full dynamic range. And the
 bridge is necessary, isolated with a single variable: same engine, same toolkit,
 patch removed, and the game crashes.
 
+**The 2.8 package as a whole does not play on a 26.3-based engine.** Measured
+2026-08-29 with the fix installed and demonstrably working -- NV12 restored,
+three samples delivered with none empty, one frame written -- the stream stops
+before the fiftieth sample and the game never passes the Disney logo.
+Reproduced twice, identical both times: three samples, one frame, stop. Without
+the fix it is the same stall, so the fix is not making it worse; it simply is
+not the thing standing in the way. Where it stops is **not known**: `ReadSample`
+logs 1, 2, 3 and then 50, so seeing only three means fewer than fifty were read,
+and that part stands -- but the log has no resolution to say whether the game
+stopped asking or this code stopped answering.
+
+This paragraph was written on 2026-08-30 and removed by commit `a863ef1` while
+that page was being reworked around 0.2 Birth by Sleep. It is restored because
+it is a measurement, and a measurement is kept and marked rather than dropped.
+
 **0.2 Birth by Sleep needs nothing.** No installer here has ever covered it —
 its executable is in `KINGDOM HEARTS 0.2 Birth by Sleep/Binaries/Win64`, and
 `install-kh-bridge.sh` looks only at the top of the package folder. Launched
@@ -325,7 +340,11 @@ present, with values only for engine knobs.
 
 Do not use this on a game with anti-cheat. The fix patches a running process.
 
-Measured on Preview and D3DMetal only. 26.3 has not been tried.
+Measured on D3DMetal only. Dream Drop Distance ran on 2026-08-31 on stable
+26.3 — on a copy of it this project patched, carrying our `winegstreamer`, not a
+stock one. It ran on `crossover-preview-arm64-20260821` before that, which
+stands as a record rather than a route, since Preview is no longer a supported
+engine here.
 
 0.2 Birth by Sleep and KINGDOM HEARTS III are untouched by this and need to be.
 Both decode their own video in software.
