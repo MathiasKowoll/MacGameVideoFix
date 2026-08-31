@@ -178,32 +178,6 @@ fi
 # pointing a bottle at the wrong one is the two-cores crash this whole script
 # exists to avoid.
 stage_one() {
-  # An engine that already carries these plugins needs nothing staged.
-  #
-  # Staging exists because stock CrossOver ships 17 GStreamer plugins and
-  # none of them decodes VC-1, WMV3 or VP9: the three that do are put in a
-  # directory of their own and the bottle is pointed at it with GST_PLUGIN_PATH.
-  # That is a per-bottle arrangement with a per-engine directory behind it, and
-  # this project now also builds engines that carry the three inside
-  # lib64/gstreamer-1.0, where CrossOver's own 17 live. For those, staging
-  # would put a second copy of each plugin on the search path -- two GStreamer
-  # cores in one process is the crash this whole script is written to avoid.
-  #
-  # So: look, and if they are already there, say so and do nothing.
-  if [ -d "$ENGINE/Contents/SharedSupport/CrossOver/lib64/gstreamer-1.0" ]; then
-    have=0
-    for plug in libgstlibav libgstmatroska libgstvpx; do
-      [ -f "$ENGINE/Contents/SharedSupport/CrossOver/lib64/gstreamer-1.0/$plug.dylib" ] && have=$((have + 1))
-    done
-    if [ "$have" = 3 ]; then
-      echo "engine    : $ENGINE"
-      echo "            carries libgstlibav, libgstmatroska and libgstvpx already."
-      echo "            Nothing staged, and no GST_PLUGIN_PATH is needed for a bottle"
-      echo "            on this engine."
-      return 0
-    fi
-  fi
-
   VER="$1"; APP="$2"
   ENGINE="$(plist_value "$APP" CFBundleName)"
   ENGINE="${ENGINE:-$(basename "$APP" .app)}"
@@ -221,6 +195,38 @@ stage_one() {
   # -- and a directory shared between two engines is the two-cores crash again.
   SLUG="$(printf '%s' "$(basename "$APP" .app)" | tr -c 'A-Za-z0-9._-' '-')"
   CX="$APP/Contents/SharedSupport/CrossOver"
+
+  # An engine that already carries these plugins needs nothing staged.
+  #
+  # Staging exists because stock CrossOver ships 17 GStreamer plugins and none
+  # of them decodes VC-1, WMV3 or VP9: the three that do are put in a directory
+  # of their own and the bottle is pointed at it with GST_PLUGIN_PATH. That is a
+  # per-bottle arrangement with a per-engine directory behind it, and this
+  # project now also builds engines that carry the three inside
+  # lib64/gstreamer-1.0, where CrossOver's own 17 live. For those, staging would
+  # put a second copy of each plugin on the search path -- two GStreamer cores in
+  # one process is the crash this whole script is written to avoid.
+  #
+  # So: look, and if they are already there, say so and do nothing.
+  #
+  # This check was first written at the top of the function, before VER and APP
+  # were read from the arguments, and testing "$ENGINE" -- which is the engine's
+  # NAME, not a path. Under set -u the unset variable aborted the whole script on
+  # its first call, so staging was unreachable for every engine and not merely
+  # wrong for one. It belongs after $CX exists, which is the path it wanted.
+  if [ -d "$CX/lib64/gstreamer-1.0" ]; then
+    have=0
+    for plug in libgstlibav libgstmatroska libgstvpx; do
+      [ -f "$CX/lib64/gstreamer-1.0/$plug.dylib" ] && have=$((have + 1))
+    done
+    if [ "$have" = 3 ]; then
+      echo "engine    : $ENGINE"
+      echo "            carries libgstlibav, libgstmatroska and libgstvpx already."
+      echo "            Nothing staged, and no GST_PLUGIN_PATH is needed for a bottle"
+      echo "            on this engine."
+      return 0
+    fi
+  fi
   # A staging built from a different GStreamer series does not register, and a
   # plugin that does not register is worse than no plugin at all: the directory
   # exists, the bottle points at it, the app reports it staged, and the decoder
