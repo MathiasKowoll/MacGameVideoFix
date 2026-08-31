@@ -1121,10 +1121,40 @@ static BOOL poke(BYTE *at, const BYTE *expect, const BYTE *with, const char *wha
  *
  * Verification below is on the call target, not on the bytes: both sites must
  * call the same address. That is what makes them the pair rather than two calls
- * that happen to look alike. */
-#define RVA_ISSW_A     0x0636CB3E   /* callq IsSoftware ; testb al,al */
-#define RVA_ISSW_B     0x06370B44   /* the second site, which is not optional */
-#define RVA_ISSW_FUNC  0x0636B8B0   /* what both of them call */
+ * that happen to look alike.
+ *
+ * SECOND MOVE, 2026-08-31. The game updated again (exe 176.6 MB, dated that
+ * day, ++aibou+mainline-CL-407366, engine 5.4.4-407366) and everything shifted
+ * by exactly 0x4070 -- func, site A and site B all by the same amount, and the
+ * distance between the two sites is still 0x4006. Found the same way, and this
+ * time the game's own crash report handed over the anchor: PCallStack listed
+ *   636f6c9  <- where it died
+ *   636fa19  <- inside the function the sites call
+ *   6370bb3  <- the return address of site A's call, i.e. site A is 6370bae
+ * so the pair did not have to be guessed at all. Both sites have the identical
+ * shape: lea r8,[rsp+X] ; mov rcx,[reg+0x98] ; lea rdx,[reg+0xc8] ; call ;
+ * testb al,al ; je. In the whole 128 MB .text exactly two direct calls reach
+ * 0636F920, and both are followed by testb al,al.
+ *
+ * WHAT THE CRASH ACTUALLY IS, since it says what the patch is for. At 636f6c9
+ * the game does `mov rax,[rbx]` with rbx zero. rbx was loaded from the stack
+ * slot that the preceding virtual call -- vtable slot 0, QueryInterface -- was
+ * given as its out pointer, asking for {A06EB39A-50DA-425B-8C31-4EECD6C270F3},
+ * which is IID_ID3DDestructionNotifier. The slot is zeroed before the call and
+ * the result is never checked, so an interface we do not implement is a null
+ * dereference one instruction later. That is the D3D path. This patch exists so
+ * that path is never taken, and the log line proving it worked is
+ * "set to 1 -- Electra takes the old CPU buffer path".
+ *
+ * A NOTE ON SEARCHING BY OFFSET, because getting it wrong cost time here: a
+ * `call rel32` is FIVE bytes, so the testb that follows it sits at +5. Scanning
+ * for `84 C0` and checking seven bytes back finds coincidences and reports the
+ * region as empty. */
+#define RVA_ISSW_A     0x06370BAE   /* callq IsSoftware ; testb al,al */
+#define RVA_ISSW_B     0x06374BB4   /* the second site, which is not optional */
+#define RVA_ISSW_FUNC  0x0636F920   /* what both of them call */
+/* The previous build, kept because the shift is measured from it:
+ *   A 0x0636CB3E   B 0x06370B44   func 0x0636B8B0 */
 /* Where this build stores the console variable, found from the single
  * reference to its name: the instruction after the registration call is
  * `movq %rax, 0x94c0d25(%rip)`. The old build had it at 0x0AA29110. */
@@ -2271,6 +2301,11 @@ static HRESULT WINAPI guarded_query_vram(void *self, UINT node,
 {
     /* One GPU means one node, so zero is the only valid index, and
      * DXGI_ERROR_INVALID_CALL is what Windows returns past the end. */
+    {
+        static LONG asked;
+        if (InterlockedIncrement(&asked) == 1)
+            logf_("node guard: the adapter was asked for video memory (node %u) -- the walk reached us", node);
+    }
     if (node != 0)
     {
         if (InterlockedIncrement(&refusals) == 1)
@@ -2329,6 +2364,15 @@ static void guard_factory(void *factory)
     /* IDXGIFactory1: slot 7 EnumAdapters, slot 12 EnumAdapters1. */
     real_enum_adapters  = patch_vtable_slot(factory, 7,  guarded_enum_adapters);
     real_enum_adapters1 = patch_vtable_slot(factory, 12, guarded_enum_adapters1);
+
+    /* "armed" only ever meant that the import table was hooked. Whether a
+     * factory is then created through those imports, and whether anything walks
+     * its adapters afterwards, was never recorded -- so a title where the guard
+     * installs and never acts looked identical in the log to one where it was
+     * not needed. Life is Strange: Double Exposure is such a title: three
+     * sessions, armed at 2 ms, not another line. Say the two steps out loud. */
+    logf_("node guard: a DXGI factory came through the imports and was wrapped%s",
+          (real_enum_adapters || real_enum_adapters1) ? "" : " -- but neither EnumAdapters slot took");
 }
 
 static HRESULT (WINAPI *real_CreateDXGIFactory)(REFIID, void **);
