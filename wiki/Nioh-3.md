@@ -11,7 +11,7 @@ one its two predecessors use.
 | Symptom | `Failed to play movie.` |
 | Fix | The DYNASTY WARRIORS video bridge, on `amd_ags_x64.dll` |
 | Backend | **D3DMetal**, D3D12 — the opposite of Nioh and Nioh 2 |
-| CrossOver | `crossover-preview-arm64-20260821`. Not tried on 26.3 |
+| CrossOver | Stable 26.3, on an engine carrying this project's `winegstreamer` |
 
 ## Not the same fault as Nioh or Nioh 2
 
@@ -74,7 +74,9 @@ Two things came out of that:
 
 Do not use this on a game with anti-cheat. The fix patches a running process.
 
-Measured on Preview only, and on D3DMetal only. 26.3 has not been tried.
+Measured on D3DMetal only, on stable 26.3. The four runs described below were
+made on `crossover-preview-arm64-20260821`, and they stand as a record rather
+than a route, since Preview is no longer a supported engine here.
 
 The carrier is `amd_ags_x64.dll`, which is also Persona 5 Strikers' carrier —
 but with a different bridge inside and a different export set. The shipped

@@ -2,12 +2,16 @@
 #
 # Stage the codecs CrossOver does not ship, without patching CrossOver.
 #
-# Preview decodes VP9, H.264 and AAC on its own, but has no WMV3, VC-1 or WMA
+# The supported engine is stable CrossOver 26.3 (26.3.0.39832), and only that.
+# CrossOver Preview was dropped on 2026-08-31; where Preview is still named below
+# it is a record of where something was measured, not a place to run this.
+#
+# CrossOver decodes VP9, H.264 and AAC on its own, but has no WMV3, VC-1 or WMA
 # decoder -- which Persona 5 Strikers and the Nioh titles need. The official
 # GStreamer.framework has them, in libgstlibav (ffmpeg).
 #
 # Loading that plugin in place crashes: dyld ends up with two copies of
-# libgstreamer and two GObject type registries, and Preview ships no
+# libgstreamer and two GObject type registries, and CrossOver ships no
 # gst-plugin-scanner, so there is no forked scanner to absorb it.
 #
 #     objc: Class GstCocoaApplicationDelegate is implemented in both ...
@@ -17,7 +21,7 @@
 # GStreamer core symlinked to CROSSOVER'S copy gives one core, one registry,
 # and the decoders registered.
 #
-# Then one line in the bottle: GST_PLUGIN_PATH = <this directory>. Preview's
+# Then one line in the bottle: GST_PLUGIN_PATH = <this directory>. CrossOver's
 # launcher sets only GST_PLUGIN_SYSTEM_PATH and never touches GST_PLUGIN_PATH,
 # and the bottle's environment is applied first, so it survives.
 #
@@ -50,9 +54,11 @@ FRAMEWORK=/Library/Frameworks/GStreamer.framework/Versions/1.0
 ROOT="$HOME/Library/Application Support/MacGameVideoFix/gst-codecs"
 
 # Find CrossOver by what it declares, not by what its file is called. One of
-# the installs on the machine this was fixed on is a Preview build named
+# the installs on the machine this was fixed on was a Preview build named
 # Crossover_patched.app -- searching for "CrossOver Preview.app" would never
 # have seen it, and staging against the wrong engine is a crash, not a warning.
+# Preview is no longer supported, but the rule it taught is general: an engine
+# is identified by what its Info.plist declares, never by its filename.
 plist_value() { defaults read "$1/Contents/Info.plist" "$2" 2>/dev/null; }
 
 ENGINES=""
@@ -191,7 +197,7 @@ stage_one() {
   # so the path a bottle holds stays valid across updates.
   #
   # It is the filename rather than CFBundleName because two installs can declare
-  # the same name -- this machine has two calling themselves "CrossOver Preview"
+  # the same name -- this machine had two calling themselves "CrossOver Preview"
   # -- and a directory shared between two engines is the two-cores crash again.
   SLUG="$(printf '%s' "$(basename "$APP" .app)" | tr -c 'A-Za-z0-9._-' '-')"
   CX="$APP/Contents/SharedSupport/CrossOver"

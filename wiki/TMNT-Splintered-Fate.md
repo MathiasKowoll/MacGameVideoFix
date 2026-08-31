@@ -9,7 +9,7 @@ the project: twelve lines that turn a silent death into a game.
 | Cause | `D3D12CreateRootSignatureDeserializer` ends the process instead of returning an error |
 | Fix | Look in the container first, and answer for it when there is nothing to find |
 | Backend | **D3DMetal**, D3D12 |
-| CrossOver | `crossover-preview-arm64-20260821`. Not tried on 26.3 |
+| CrossOver | Stable 26.3, on a copy of it carrying this project's `winegstreamer` (2026-08-31) |
 
 ## A crash with nothing to go on
 
@@ -82,7 +82,10 @@ which makes this the least invasive fix in the project.
 
 Do not use this on a game with anti-cheat. The fix patches a running process.
 
-Measured on Preview and D3DMetal only. 26.3 has not been tried.
+Measured on D3DMetal only: on 2026-08-31 on stable 26.3 — on a copy of it this
+project patched, carrying our `winegstreamer`, not a stock one. It was measured
+on `crossover-preview-arm64-20260821` before that, which stands as a record
+rather than a route, since Preview is no longer a supported engine here.
 
 Verified by ten minutes of play, not by a single boot.
 

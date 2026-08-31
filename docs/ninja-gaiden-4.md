@@ -8,6 +8,11 @@ This page replaces an earlier one that reached the opposite conclusion. That
 version is worth reading only for how it went wrong, which is recorded at the
 bottom.
 
+**Preview is no longer supported.** As of 2026-08-31 the only supported engine
+is stable CrossOver 26.3, and CrossOver Preview was dropped. The Preview
+measurements below are kept as a record of what was measured, not as guidance
+about where to run anything.
+
 ## What was missing: one demuxer
 
 NG4's videos are WebM — 399 of 400 `Assets/Movies/*.msd` files are plain

@@ -12,7 +12,11 @@
 # game that hangs on a black screen and leaves no crash report.
 #
 #     diagnostics/launch-and-capture.sh Steam
-#     diagnostics/launch-and-capture.sh Steam "CrossOver Preview"
+#     diagnostics/launch-and-capture.sh Steam Crossover_patched
+#
+# The second argument names the engine bundle by its .app filename. It defaults
+# to CrossOver, which is stable CrossOver 26.3 -- the only supported engine --
+# and is given explicitly to reach a copy of it this project has patched.
 #
 # Everything is written to ~/Desktop/crossover-capture-<time>.log and shown as
 # it happens. Close the game to finish.
@@ -25,7 +29,10 @@ set -uo pipefail
 # reasonable guess for anybody else's machine, and a default that happens to
 # exist would capture the wrong one without saying so.
 BOTTLE="${1:?usage: launch-and-capture.sh <bottle name or full path> [...]}"
-ENGINE="${2:-CrossOver Preview}"
+# Any .app filename is accepted -- a patched copy is reached by naming it. The
+# default is the supported engine, stable CrossOver 26.3, which installs as
+# CrossOver.app.
+ENGINE="${2:-CrossOver}"
 
 # The bottle by name, in whatever root holds it -- fixes are raised against
 # Procyon now, whose bottles live under its own support folder rather than

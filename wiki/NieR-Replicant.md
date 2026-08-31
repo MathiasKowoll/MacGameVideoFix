@@ -12,7 +12,7 @@ two was a magenta screen.
 | Fix | Software decode, and the frame converted and written into the game's own target |
 | Backend | **D3DMetal**, D3D11 |
 | Needs | `libgstlibav` staged, and the `dinput8` override below — without the override nothing else matters |
-| CrossOver | 26.3 and `crossover-preview-arm64-20260821` |
+| CrossOver | Stable 26.3, measured on a stock one, with Game Porting Toolkit 4.0b2 |
 
 ## What the source codec is
 
@@ -105,8 +105,9 @@ The override says otherwise and is scoped to this executable alone.
 ## Why it looked like a 26.3 failure, and was not
 
 This title was recorded as Preview-only, with the note that 26.3 "crashes before
-the fix loads". Half of that was right: the fix was not loading. The half that
-was wrong is which side the fault was on.
+the fix loads" — a record of what this page used to say, from when Preview was
+still a supported engine. Half of that was right: the fix was not loading. The
+half that was wrong is which side the fault was on.
 
 The bridge needs two things, and the installer checks one. The proxy and the
 copied original sit beside the game; the registry override below is what makes

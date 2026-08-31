@@ -11,7 +11,7 @@ widescreen.
 | Cause | The game keeps only 16:9 resolutions and has no fallback when none exist |
 | Fix | Put 16:9 modes in the list the game reads |
 | Backend | **D3DMetal**, D3D12 (and D3D11 — it fails identically either way) |
-| CrossOver | `crossover-preview-arm64-20260821` |
+| CrossOver | Stable 26.3 with Game Porting Toolkit 4.0b2 (2026-08-31). The measurements below were made on `crossover-preview-arm64-20260821`, which is no longer a supported engine |
 
 ## The address is the whole clue
 

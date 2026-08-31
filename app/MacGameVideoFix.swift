@@ -146,6 +146,10 @@ private final class ProcessBox: @unchecked Sendable {
 /// warning about something irrelevant is worse than not warning at all: it
 /// sends people to install something that will not change their problem.
 ///
+/// That Preview measurement is history. Preview is no longer a supported
+/// engine, and the supported one is stable CrossOver 26.3. The note is kept
+/// because it is the reason this warns about three titles and not about VP9.
+///
 /// Three titles do need a decoder CrossOver does not ship -- VC-1 for Persona 5
 /// Strikers, WMV3 for the two Nioh games -- and that is said on their own rows
 /// rather than as a blanket requirement.
@@ -155,21 +159,27 @@ enum Requirements {
     /// This used to read "CrossOver 26.2 or later on Apple Silicon. Nothing
     /// else, for most games", and the comment beside it already conceded the
     /// text was not accurate. It is worse than inaccurate: a version floor
-    /// invites someone on a stable build to read "you are fine", when what was
-    /// measured differs per title -- some on 26.3, some on Preview, some on 26.3
-    /// only with an engine this app patched.
+    /// invites someone on a stable build to read "you are fine".
     ///
-    /// A floor is the wrong shape for this. What the project has is a
-    /// measurement per title, and the honest sentence points at it.
+    /// It then read as a spread of engines -- "26.3, Preview, or 26.3 with an
+    /// engine this app patched" -- because that was where the titles had been
+    /// measured at the time. That is history now: Preview is no longer a
+    /// supported engine, and every title was measured on stable 26.3. One
+    /// engine, so one sentence rather than a table lookup.
+    ///
+    /// The version is named because the winegstreamer pair this project ships
+    /// was built against it and the runtime refuses any other. That engine is
+    /// not a stock CrossOver: the version is stable 26.3, and the engine
+    /// carries this project's winegstreamer.
     /// GStreamer was mentioned here for a while, in a sentence appended to this
     /// line. It said the right thing and nobody read it: a requirement that
     /// blocks several games does not belong in a caption, it belongs in a card
     /// with the button that resolves it. That is what the banner below does
     /// now, and this line is back to one fact.
     static var note: String {
-        "Measured per title, and the wiki table names which CrossOver: 26.3, "
-      + "Preview, or 26.3 with an engine this app patched. Nothing beyond that "
-      + "table is verified."
+        "Measured on stable CrossOver 26.3 (26.3.0.39832), on an engine "
+      + "carrying the winegstreamer this project builds. Nothing on another "
+      + "CrossOver is verified."
     }
 }
 
@@ -401,17 +411,15 @@ enum SupportedGame: String, CaseIterable, Identifiable {
 
     /// Has this title been run on a stable CrossOver, or only on Preview?
     ///
-    /// The titles the switch below names, and no more. The rest were measured
-    /// elsewhere -- which is not a claim that they fail on stable, only that
-    /// nobody has looked here. Saying "not verified" is the whole point: the
-    /// alternative is a version floor, which reads as permission.
+    /// Not a question any more. Every title here was measured on stable
+    /// CrossOver 26.3, on an engine carrying this project's winegstreamer, and
+    /// Preview is no longer a supported engine to be measured against.
     ///
-    /// Keep this in step with the CrossOver column in wiki/games.py. They are
-    /// two statements of one fact, and the day they disagree the app is the one
-    /// people believe. They disagree today: the table marks stable for titles
-    /// this switch does not name. Nothing in this file reads the property, so it
-    /// publishes nothing, and adding titles to it would be a measurement claim
-    /// rather than a wording fix.
+    /// The switch below is what the answer looked like while the question was
+    /// still open -- the titles it names are the ones anyone had looked at here
+    /// by then -- and it is left as that record rather than rewritten into a
+    /// measurement claim. Nothing in this file reads it, so it publishes
+    /// nothing; the CrossOver column in wiki/games.py is what people see.
     var verifiedOnStable: Bool {
         switch self {
         case .mortalShell2, .beastOfReincarnation, .personaStrikers: return true
@@ -2522,17 +2530,21 @@ enum Codecs {
 
     /// Is this engine a Preview build?
     ///
-    /// What was measured differs per title: some on 26.3, some only on Preview,
-    /// some on 26.3 only with an engine this app patched, and the wiki table
-    /// says which for each. A person pointing a bottle at stable deserves to be
-    /// told that before they wonder why a fix did nothing, so this exists to put
-    /// it on screen instead of leaving it in a README nobody opens twice.
+    /// The supported engine is stable CrossOver 26.3 and nothing else, because
+    /// that is what the winegstreamer pair this project ships was built
+    /// against. So this answers one question: has a bottle been pointed at an
+    /// engine outside what was measured. A person who has deserves to be told
+    /// before they wonder why a fix did nothing, so this exists to put it on
+    /// screen instead of leaving it in a README nobody opens twice.
     ///
     /// The name is the one the bundle declares, so a Preview living under some
     /// other file name still answers correctly -- one of the installs on this
-    /// machine is a Preview build inside Crossover_patched.app. The distinction
-    /// stops being useful on the day Preview becomes stable, and on that day
-    /// this and the caution it drives should both go.
+    /// machine is a Preview build inside Crossover_patched.app.
+    ///
+    /// It used to run the other way about: what was measured differed per
+    /// title, some of it only on Preview, and the caution went to people on
+    /// stable. That is history -- the titles were measured on stable 26.3, and
+    /// Preview was dropped rather than half-supported.
     static func isPreview(_ version: String) -> Bool {
         _ = installedEngines()
         guard let name = cachedEngineNames?[version] else { return false }
@@ -3101,6 +3113,12 @@ struct Setup {
 /// `lib/apple_gptk3` (D3DMetal 3.0), and uses the first unless
 /// `CX_GRAPHICS_BACKEND_VERSION` says otherwise. CrossOver 26.3 ships one tree,
 /// and its D3DMetal is byte-identical to Preview's `apple_gptk3`.
+///
+/// Preview is named here for what was read off it, not as an engine to play on:
+/// the supported engine is stable 26.3. Both layouts still have to be read,
+/// because an engine that ships two trees can be installed beside the supported
+/// one, and because a 26.3 given a newer toolkit is one tree with a different
+/// framework inside it.
 ///
 /// That matters twice over. It is a real choice worth having -- 4.0b2 is the
 /// newer renderer and implements an NvAPI surface 3.0 stubs out entirely -- and
@@ -4791,18 +4809,25 @@ struct ContentView: View {
                         }
                         // Scope, said where the choice is made.
                         //
-                        // What was measured differs per title: some on 26.3, some only on
-                        // Preview, some on 26.3 only with an engine this app patched, and
-                        // the wiki table says which for each. Saying so beside the picker
-                        // costs one line and saves somebody concluding a fix is broken when
-                        // it was simply never tried where they are running it.
-                        if let engine = picked.target, !Codecs.isPreview(engine) {
+                        // The supported engine is stable CrossOver 26.3, which is what the
+                        // winegstreamer this project ships was built against. A bottle set
+                        // to anything else is outside everything that was measured, and
+                        // saying so beside the picker costs one line and saves somebody
+                        // concluding a fix is broken when it was never tried where they
+                        // are running it.
+                        //
+                        // This ran the other way about until Preview was dropped: the
+                        // caution went to people on stable, because some titles had only
+                        // been measured on Preview. The titles were measured on stable 26.3
+                        // afterwards, so the condition is inverted and the warning is now
+                        // about the engine that is out of scope rather than the one in it.
+                        if let engine = picked.target, Codecs.isPreview(engine) {
                             HStack(spacing: 8) {
                                 Image(systemName: "exclamationmark.triangle")
                                     .foregroundStyle(.orange)
-                                Text("This bottle runs a stable CrossOver. Some titles were "
-                                   + "measured on it, some only on Preview, and some need an "
-                                   + "engine this app patched. The wiki table says which.")
+                                Text("This bottle is set to a CrossOver Preview, which is not "
+                                   + "supported. Everything here was measured on stable "
+                                   + "CrossOver 26.3 (26.3.0.39832).")
                                     .font(.caption).foregroundStyle(.orange)
                                     .fixedSize(horizontal: false, vertical: true)
                             }

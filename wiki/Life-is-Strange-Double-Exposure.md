@@ -9,7 +9,7 @@ the same fix.
 | Cause | `IDXGIAdapter3::QueryVideoMemoryInfo` succeeds for node indices the adapter does not have |
 | Fix | Refuse them — the same DLL Reunion uses |
 | winevideo | Not required — the fault is in DXGI, not in video. Not separately measured here; the DLL and the finding are shared with [Reunion](Life-is-Strange-Reunion.md) |
-| CrossOver | `crossover-preview-arm64-20260821`. **Freezes on 26.3**, with or without the fix — see below |
+| CrossOver | Stable 26.3. **Freezes on the D3DMetal 3.0 that build ships**, with or without the fix; this title needs Game Porting Toolkit 4.0b2 — see below |
 | Status | Fixed — the guard was confirmed to arm in play. The freeze itself was never reproduced on this title, so what is confirmed is that the fix takes hold, not that a freeze was cured |
 
 ## What was actually checked
@@ -35,9 +35,10 @@ recorded. The static match and the armed guard are what there is.
 
 ## On stable CrossOver
 
-`crossover-preview-arm64-20260821` is where the confirmation above was made. On
-26.3 this title freezes, as Reunion does, and the two share a DLL and a policy
-row.
+`crossover-preview-arm64-20260821` is where the confirmation above was made,
+which is a record of a measurement and not a route: Preview is no longer a
+supported engine here. On 26.3 this title freezes, as Reunion does, and the two
+share a DLL and a policy row.
 
 It is not ours. The control was run on Reunion, which is the sibling this page
 defers to throughout: the fix removed entirely, the game restored to stock, and
@@ -46,8 +47,10 @@ D3DMetal -- 3.0 on 26.3 against 4.0b2 on that Preview. Reunion's page carries th
 measurements; [Findings](Findings.md) carries the cross-cutting account.
 
 This title was not separately controlled, and the claim here is inherited rather
-than measured, which is the same footing as everything else on this page. Use
-Preview until GPTK 3 is understood.
+than measured, which is the same footing as everything else on this page. What
+that leaves is a toolkit requirement rather than an engine one: on stable 26.3
+this title needs Game Porting Toolkit 4.0b2, and why GPTK 3 freezes it is still
+not understood.
 
 ## Caveats
 

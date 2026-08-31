@@ -11,7 +11,7 @@ bridge does.
 | Symptom | `Failure to play movie. (RTM_ID_EV0001)`, then a crash |
 | Fix | Stage the WMV3 decoder, then hand the game a share handle that exists |
 | Backend | **DXMT only.** The sidecar needs `GetSharedHandle`, `E_NOTIMPL` under D3DMetal |
-| CrossOver | `crossover-preview-arm64-20260821`, and winevideo 0.5 on 26.3 (`cxoffice-26.3.0rc2`) |
+| CrossOver | Stable 26.3 (`cxoffice-26.3.0rc2`), with winevideo 0.5 in the bottle — 27 Aug 2026 |
 
 ## Verified on 26.3, and what the failure was not
 
@@ -120,9 +120,12 @@ outside.
 
 Do not use this on a game with anti-cheat. The fix patches a running process.
 
-Measured on Preview and on DXMT only. 26.3 has not been tried. Under D3DMetal the
-sidecar has nothing to build on — `GetSharedHandle` is `E_NOTIMPL` there — so it
-is not expected to work, but that has not been run either.
+Measured on DXMT only. The 26.3 run is the one at the top of this page; the
+earlier runs were made on `crossover-preview-arm64-20260821`, and they stand as
+a record rather than a route, since Preview is no longer a supported engine
+here. Under D3DMetal the sidecar has nothing to build on — `GetSharedHandle` is
+`E_NOTIMPL` there — so it is not expected to work, but that has not been run
+either.
 
 [Nioh 2](Nioh-2.md) turned out to use the same path and is fixed by the same
 bridge, with no code change and even the same built proxy.

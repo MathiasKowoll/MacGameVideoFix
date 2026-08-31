@@ -2,11 +2,19 @@
 
 Some of the games here need something CrossOver does not ship: most need a
 decoder, and two need a demuxer. Which is which, per title, is the Codec
-column of [what each title actually loads](Games.md#what-each-title-actually-loads). This is what the app does about it, why it is
-built that way, and why the obvious approach crashes.
+column of [what each title actually loads](Games.md#what-each-title-actually-loads). This is what this project does about
+it — two arrangements, not one — why they are built that way, and why the
+obvious approach crashes.
 
-Nothing is redistributed and no CrossOver file is touched. The whole repair is a
-directory of libraries and one line in a bottle's configuration.
+For a CrossOver the user owns, nothing is redistributed and no CrossOver file is
+touched: the whole repair is a directory of libraries and one line in a bottle's
+configuration. For an engine this project copies and patches itself, the same
+plugins are carried inside the copy instead. Both are described below, and they
+must never be applied to the same engine.
+
+Throughout, the CrossOver in question is stable 26.3 — the one supported engine
+here — whether it is the one the user installed or a copy of it this project
+patched.
 
 ## What is missing
 
@@ -26,8 +34,9 @@ gst-plugins-good.
 
 The official [GStreamer.framework](https://gstreamer.freedesktop.org/download/)
 for macOS has both, in `libgstlibav` — GStreamer's binding to FFmpeg — and in
-`libgstmatroska`. They exist on the machine already. The problem is getting them
-in front of CrossOver.
+`libgstmatroska`. They exist on the machine already, which is where the staging
+route takes them from; the engine-copy route carries its own. Either way the
+problem is the same: getting them in front of CrossOver.
 
 ## Why loading it in place crashes
 
@@ -44,6 +53,44 @@ two: two copies of the library, two GObject type registries, and objects from
 one being handed to the other. On a normal desktop this is absorbed by
 `gst-plugin-scanner`, a separate process that inspects plugins and reports back.
 CrossOver ships no scanner, so there is nothing to absorb it.
+
+## Two routes, and why they must not overlap
+
+Which arrangement applies depends on whose engine it is.
+
+**Staged beside a bottle**, for a CrossOver the user owns. Two plugins —
+`libgstlibav` and `libgstmatroska` — in a directory of their own, taken from the
+user's own GStreamer framework, reached by one `GST_PLUGIN_PATH` line per
+bottle. Nothing is written into CrossOver. That is the arrangement the rest of
+this page describes.
+
+**Carried inside the engine**, for a copy this project made. Three plugins —
+`libgstvpx` as well — copied into the copy's own `lib64/gstreamer-1.0` beside
+CrossOver's own, from `runtime/engine-payload/lib64` rather than from the user's
+framework. No bottle on that engine needs `GST_PLUGIN_PATH` at all, and the
+GStreamer framework is not a prerequisite for that engine.
+`scripts/make-engine-copy.sh` puts them there, and
+[what ships and where it goes](What-ships-and-where-it-goes.md) covers the copy
+itself.
+
+**Doing both to one engine puts a second copy of each plugin on the search
+path**, which is the crash above arrived at from the other side: two GStreamer
+cores in one process. So `stage-codecs.sh` is written to look first — if the
+engine's own `lib64/gstreamer-1.0` already holds `libgstlibav`,
+`libgstmatroska` and `libgstvpx`, it says so, stages nothing, and reports that
+no bottle on that engine needs `GST_PLUGIN_PATH`.
+
+**As the script stands today that check does not run.** It reads `$ENGINE`
+before the variable is assigned, and the script runs under `set -u`, so the
+first engine it reaches ends the run:
+
+    runtime/stage-codecs.sh: line 193: ENGINE: unbound variable
+
+Measured against the real script with an isolated `HOME`, so nothing on this
+machine changed: nothing was staged, for any engine. The check wants the bundle
+path it was passed; `ENGINE` is the display name, and it is not given a value
+until further down the same function. Recorded rather than described as working,
+because a stand-down that ends the run is not a stand-down.
 
 ## The shape that works
 
@@ -62,11 +109,13 @@ includes `@loader_path/../lib` — so `lib/` beside it is where everything is
 found. That directory is filled two different ways, and the difference is the
 whole design:
 
-- **FFmpeg is copied**, and so are the few libraries Matroska needs. Nine real
-  files — `libavcodec`, `libavformat`, `libavfilter`, `libavutil`,
-  `libswresample` and their support, plus `libz` and `libbz2`. CrossOver does not
-  have these at all, which is the entire reason for doing any of this.
-- **GStreamer's own core is symlinked into CrossOver.** Twelve links, pointing
+- **FFmpeg is copied**, and so are the few libraries Matroska needs. Seven real
+  files — `libavcodec`, `libavformat`, `libavfilter`, `libavutil` and
+  `libswresample`, with `libz` and `libbz2` behind them. CrossOver does not have
+  these at all, which is the entire reason for doing any of this. The `copied`
+  count the script prints at the end is 9 rather than 7, because it counts the
+  two plugins as well.
+- **GStreamer's own core is symlinked into CrossOver.** Thirteen links, pointing
   at that CrossOver's `libgstreamer`, `libglib`, `libgobject`, `libgstvideo` and
   the rest.
 
@@ -103,8 +152,10 @@ Every installed CrossOver gets its own directory, named after the application
 rather than its version:
 
     gst-codecs/CrossOver/            .built-against  26.3.0.39832
-    gst-codecs/CrossOver-Preview/    .built-against  27.0.0.40921
-    gst-codecs/Crossover_patched/    .built-against  27.0.0.40817
+    gst-codecs/Crossover_patched/    .built-against  26.3.0.39832
+
+The second is a copy this project patched for its own use, not a CrossOver
+anyone can go and get.
 
 Named after the application because a CrossOver updated in place keeps its path:
 the links still resolve, and a bottle pointing at the directory stays correct.
@@ -122,8 +173,9 @@ A version map is written alongside, so a bottle's recorded engine resolves to a
 directory:
 
     26.3.0.39832|CrossOver|…/gst-codecs/CrossOver/x86_64/gstreamer-1.0
-    27.0.0.40921|CrossOver Preview|…/gst-codecs/CrossOver-Preview/x86_64/gstreamer-1.0
-    27.0.0.40921|CrossOver Preview|…/gst-codecs/CrossOver-Preview/aarch64/gstreamer-1.0
+
+One line per engine and architecture. 26.3 ships x86_64 GStreamer and no ARM, as
+above, so it contributes one line rather than two.
 
 ## Getting it in front of CrossOver
 
@@ -146,9 +198,9 @@ there too.
 ## The mismatch worth knowing about
 
 A staged directory is bound to the CrossOver it was built for, through those
-twelve symlinks. Run a bottle under a *different* CrossOver and the plugin pulls
-that engine's GStreamer in beside the running one — the two-cores crash again,
-arrived at from the one direction the design does not cover.
+thirteen symlinks. Run a bottle under a *different* CrossOver and the plugin
+pulls that engine's GStreamer in beside the running one — the two-cores crash
+again, arrived at from the one direction the design does not cover.
 
 The app prevents this in normal use: it writes the path for the engine the
 bottle records and re-points it when the bottle migrates. Only
@@ -157,40 +209,70 @@ corrects the path for that run.
 
 Worth checking separately: the framework the plugin comes from should be the
 same GStreamer series as the core it plugs into. `stage-codecs.sh` compares them
-and says which engines match. This has been 1.24.14 and is now 1.24.13, while
-Preview ships 1.28.5 — a series apart, which usually works and is not the
-closest fit. Advise 1.24.13: a launcher that places the plugins inside its own
-engine may require that release exactly, so recommending a later 1.24 can break
-the other route on the same machine.
+and **refuses** where they differ — it prints `REFUSED:` for that engine and
+stages nothing for it, because a plugin from another series does not register.
+The framework installed here is 1.24.13. The CrossOver Preview build measured
+here had a core a series above that, and was refused rather than staged — a
+record of the check doing its job, kept now that Preview is no longer a
+supported engine and stable 26.3 is the engine the staging is for.
+
+Advise 1.24.13. It is what winevideo names, and a launcher that places the
+plugins inside its own engine may require that release exactly, so recommending
+a later 1.24 can break the other route on the same machine.
+
+**The version the script prints is one too high**, which is worth knowing before
+anyone chases it. It reads the framework's version out of the compatibility
+number in `libgstreamer-1.0.0.dylib`, as `compat/100` and `compat%100`. That
+number is 2414 here, so it prints 1.24.14 — and the framework really is 1.24.13:
+`gst-inspect-1.0 --version` says so, the framework's `Info.plist` records
+`12413`, and `pkgutil` says 1.24.13 for every GStreamer package on this machine.
+The compatibility number runs one ahead of `minor*100 + micro`, so the patch
+digit comes out one high. Only that digit is affected — the series the refusal
+rests on is `compat/100`, which is 24 either way.
 
 ## What the script does, step by step
 
 All of it is in
 [`runtime/stage-codecs.sh`](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/runtime/stage-codecs.sh),
-312 lines of shell with the reasoning in comments beside each decision. The app
+457 lines of shell with the reasoning in comments beside each decision. The app
 runs exactly this file — it ships a copy in its bundle and shells out to it, so
 what you read is what runs.
 
-    runtime/stage-codecs.sh                         every engine, every arch
-    runtime/stage-codecs.sh all 26.3.0.39832        that engine, every arch
-    runtime/stage-codecs.sh x86_64                  one architecture only
+    runtime/stage-codecs.sh                              every engine, every arch
+    runtime/stage-codecs.sh all 26.3.0.39832             that engine, every arch
+    runtime/stage-codecs.sh all ~/Applications/One.app   that one bundle
+    runtime/stage-codecs.sh x86_64                       one architecture only
+
+The second argument takes a bundle path as well as a version, and the reason is
+this release's whole situation: a version is ambiguous the moment a copy exists,
+because the copy inherits it. A path is not.
 
 What it does, in order:
 
 1. **Find the framework.** `/Library/Frameworks/GStreamer.framework/Versions/1.0`.
-   If it is not there the script stops and prints where to get it, naming the
-   1.24 runtime package as the version this was verified with.
+   If it is not there the script stops and prints where to get it: the macOS
+   runtime package at
+   `https://gstreamer.freedesktop.org/data/pkg/osx/1.24.13/`, 1.24.13 exactly,
+   with the reason beside it — it is what is installed and working here, it is
+   what winevideo names, and a launcher that owns its engine may require it
+   exactly.
 2. **Read its GStreamer version**, from the compatibility number in
-   `libgstreamer-1.0.0.dylib` rather than a plist — the number encodes
-   `1.MINOR.PATCH` directly.
+   `libgstreamer-1.0.0.dylib` rather than a plist. What the rest of the script
+   uses is the series, `compat/100`, and that is right; the patch digit it also
+   prints is one too high, as above. The plist this step passes over is the one
+   that would have been exact.
 3. **Compare that against every installed CrossOver.** Each engine's own core is
-   read the same way, and the script says which ones are the same series and
-   which are not. A mismatch still stages, because GStreamer keeps its ABI
-   across 1.x, but it says so.
+   read the same way, and an engine of a different series is **refused** rather
+   than staged. This used to say a mismatch usually works. It does not: a
+   rebuild under a 1.28 engine came back with zero `avdec_*` entries, and a
+   title that had been playing stopped with nothing anywhere saying why.
 4. **Find every CrossOver**, in `/Applications` and `~/Applications`, by whether
    the bundle contains `Contents/SharedSupport/CrossOver` — not by its name.
-5. **For each engine**, skip it if `.built-against` already records this exact
-   version, unless forced. Otherwise build a fresh staging in a temporary
+5. **For each engine**, look first for `libgstlibav`, `libgstmatroska` and
+   `libgstvpx` already in the engine's own `lib64/gstreamer-1.0`, and stand down
+   if all three are there — the check described above, which does not run as the
+   script stands. Otherwise skip the engine if `.built-against` already records
+   this exact version, unless forced, and build a fresh staging in a temporary
    directory:
    - copy `libgstlibav.dylib` and `libgstmatroska.dylib`, and the libraries they
      need. The dependency walk is seeded from **every** plugin staged, not from
@@ -213,7 +295,11 @@ line:
     ffmpeg and friends copied : 9
     CrossOver libraries linked: 13
 
-## What it is not
+## What the staging is not
+
+Every line here is about `stage-codecs.sh` and the route it builds. The engine
+copy is the other route, and the first two do not hold for it: it carries
+winevideo's binaries and it puts them inside an engine.
 
 - Nothing is redistributed. The decoder is borrowed from a GStreamer the user
   installed themselves.

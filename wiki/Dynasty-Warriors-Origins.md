@@ -8,8 +8,12 @@ Koei Tecmo, in-house engine. Cutscenes played with sound and no picture.
 | Cutscenes | 355 `.webm`, VP9 Profile 0. 42 of them 2560x1440 and up to four minutes; the rest 960x540 interface clips |
 | Played by | `IMFSourceReader` on a **separate D3D11 device**, presented by a **D3D12** renderer |
 | Was | Cutscene ran with sound and subtitles, picture black |
-| Now | Plays on `crossover-preview-arm64-20260821`. Crashes on 26.3 — that much was run. Why is inferred rather than measured: 26.3 ships no WebM demuxer, read from the plugin sets; see below |
-| Needs | A build whose Media Foundation can **open a WebM**, and an injected DLL. Neither alone is enough: Preview demuxes WebM and decodes the VP9 inside it; stable 26.3 decodes the same VP9 and ships no `matroska` plugin, so nothing opens the container. The measured run also had the `.webm` byte-stream handler registered — see below for whether that is needed |
+| Now | Plays on stable 26.3, on a copy of it carrying this project's `winegstreamer` and its plugins (2026-08-31). On a stock 26.3 it crashes — that much was run. Why is inferred rather than measured: a stock 26.3 ships no WebM demuxer, read from the plugin sets; see below |
+| Needs | A Media Foundation that can **open a WebM**, and an injected DLL. Neither alone is enough: a stock 26.3 decodes the VP9 perfectly well and ships no `matroska` plugin, so nothing opens the container. The first successful run also had the `.webm` byte-stream handler registered — see below for whether that is needed |
+
+**CrossOver Preview is no longer a supported engine here**, and the supported
+engine is stable 26.3. Where Preview appears below it is a record of what was
+measured or read on it at the time, not a build to run this title on.
 
 ## Who does what
 
@@ -33,7 +37,7 @@ frame to present.
 **The DLL presents.** It starts work at the moment Media Foundation hands over
 a decoded NV12 sample, and it decodes nothing itself.
 
-**The byte-stream handler, and an honest gap.** The one successful run was made
+**The byte-stream handler, and an honest gap.** The first successful run was made
 on Preview with `diagnostics/registry/apply-webm-handler.sh` applied, so that
 mapping was present in the measured configuration. It is believed unnecessary
 there: this title opens its cutscenes with `MFCreateSourceReaderFromByteStream`,
@@ -44,18 +48,18 @@ The bridge has to live inside the game's process rather than in Wine, and not
 for convenience: the call that has to be intercepted is
 `ID3D12Device::OpenSharedHandle`, and that D3D12 is D3DMetal's, not Wine's.
 
-## On stable CrossOver: one missing demuxer
+## On a stock CrossOver: one missing demuxer
 
-Stable 26.3 ships no `matroska` plugin and nothing else it carries opens a WebM,
-so this title's 355 `.webm` cutscenes never get as far as a decoder there. Both
-builds decode the VP9 inside them identically. The plugin-by-plugin comparison
-the claim rests on, and why [Mortal Shell 2](Mortal-Shell-2.md) is not the
-control it looks like, are in [Findings](Findings.md), under *The container, not
-the codec*.
+A stock 26.3 ships no `matroska` plugin and nothing else it carries opens a
+WebM, so this title's 355 `.webm` cutscenes never get as far as a decoder there.
+The VP9 inside them is decoded identically either way. The plugin-by-plugin
+comparison the claim rests on, and why [Mortal Shell 2](Mortal-Shell-2.md) is
+not the control it looks like, are in [Findings](Findings.md), under *The
+container, not the codec*.
 
-**The reason is inferred, not instrumented.** The title was launched on stable
-and crashed; what was not done is watch it fail. Everything claimed about
-stable here is read from the plugin sets, not from a run.
+**The reason is inferred, not instrumented.** The title was launched on a stock
+stable build and crashed; what was not done is watch it fail. Everything claimed
+about a stock build here is read from the plugin sets, not from a run.
 
 So the honest requirement is narrower than "needs winevideo": it needs something
 that can demux WebM.

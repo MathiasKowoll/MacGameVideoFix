@@ -8,7 +8,7 @@ Unreal Engine 5.6.1. Crashes on the first cutscene.
 | Played by | Electra, decoding VP9 with its own bundled libvpx |
 | Symptom | `EXCEPTION_ACCESS_VIOLATION` reading `0x0` in `FElectraMediaDecoderOutputBufferPoolBlock_DX12::AllocateBuffer` |
 | Fix | Runtime patch, **4 sites**, all four confirmed at runtime |
-| CrossOver | 26.3 and `crossover-preview-arm64-20260821`, played through on both |
+| CrossOver | Stable 26.3, played through both with winevideo and without |
 | winevideo | Not required — see below |
 
 ## The fault
@@ -45,7 +45,8 @@ carrying no winevideo, and again on 26.3 **with winevideo**: the same version,
 differing only in the GStreamer plugins. The fix worked either way. That
 paired run is the controlled comparison the rest of these pages lean on, and it
 was made on this title and no other. `crossover-preview-arm64-20260821` was
-measured separately, and also plays.
+measured separately at the time and also played; that stands as a record rather
+than a route, since Preview is no longer a supported engine here.
 
 That matches the mechanism. VP9 never goes through Media Foundation here —
 Electra decodes it in-process with its own libvpx, and only the *output*

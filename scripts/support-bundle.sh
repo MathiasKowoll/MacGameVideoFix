@@ -389,6 +389,11 @@ done
 # Info.plist and a location class are. CFBundleName is also the only reliable
 # stable-vs-Preview tell -- both lines ship CFBundleIdentifier
 # com.codeweavers.CrossOver, and a Preview build can sit under a non-Preview name.
+#
+# The tell stays because a machine can still have Preview installed and a report
+# should say so. Since 2026-08-31 the supported engine is stable CrossOver 26.3
+# and Preview is not one, so "Preview" in that column is a fact about the
+# machine, not a configuration this project supports.
 cx_name()  { local n; n="$(plist_get "$1" CFBundleName)"; printf '%s' "${n:-(no CFBundleName)}"; }
 cx_where() { case "$1" in "$HOME/Applications/"*) printf '~/Applications' ;;
                           /Applications/*) printf '/Applications' ;;
@@ -736,10 +741,13 @@ if [ -n "$GAME_BACKEND" ]; then
   # The DWO line is where wiki/Games.md ("none of these games needs CrossOver
   # patched") and wiki/Dynasty-Warriors-Origins.md ("winevideo, not optional")
   # are reconciled: the bridge presents frames and decodes none, so the engine
-  # must supply the VP9 decoder -- recent Preview does, older or stable does not.
+  # has to open the container and decode what is inside it. Stable 26.3 decodes
+  # the VP9 and ships no matroska demuxer, read from the plugin sets, so the
+  # container is the half that has to come from somewhere else.
   case "$GAME_FAMILY" in
-    dwo) kv "requires engine" "a build whose Media Foundation decodes VP9 in WebM"
-         note "Recent Preview does on its own; older or stable needs winevideo." ;;
+    dwo) kv "requires engine" "a build whose Media Foundation opens a WebM and decodes VP9"
+         note "Stable 26.3 decodes the VP9 and ships no matroska demuxer, so the" \
+              "container is the half to account for. Section 5." ;;
     p5s) kv "requires engine" "any current CrossOver, plus the staged VC-1 decoder"
          note "CrossOver ships no VC-1 at all -- the only such title here. Section 5." ;;
     *)   kv "requires engine" "any current CrossOver"
@@ -865,7 +873,9 @@ else
       "$(plist_get "$a" CFBundleShortVersionString)" "$(plist_get "$a" CFBundleVersion)" \
       "$(cx_line "$(cx_name "$a")")" "$(cx_where "$a")"
   done
-  note "Any engine can run any bottle; section 4 says which last touched this one."
+  note "Any engine can run any bottle; section 4 says which last touched this one." \
+       "The supported engine is stable CrossOver 26.3 (26.3.0.39832) and only that:" \
+       "a Preview row is what is installed, not a configuration this project covers."
 fi
 echo
 echo "7. HOST"
@@ -1295,9 +1305,11 @@ if [ ${#CX_APPS[@]} -eq 0 ]; then p3 "none found"; else
     fi
   done
   p3 "libgstmatroska is the plugin that differs between the lines (present on 27.x" \
-     "Preview, absent on 26.3). libgstvpx is NOT a winevideo verdict -- neither" \
-     "shipping build has it and VP9 arrives via libgstapplemedia. UNCONFIRMED: which" \
-     "apple_gptk generation or dxmt revision a given run selects."
+     "Preview, absent on 26.3) -- recorded to read the rows above, not to point" \
+     "anywhere: Preview stopped being supported on 2026-08-31. libgstvpx is NOT a" \
+     "winevideo verdict -- neither shipping build has it and VP9 arrives via" \
+     "libgstapplemedia. UNCONFIRMED: which apple_gptk generation or dxmt revision" \
+     "a given run selects."
 fi
 echo
 echo "PER RELEVANT BOTTLE (only the bottles our own logs were found in)"

@@ -16,10 +16,11 @@ at all.
 
 Read the codec and the container as two separate answers. The codec says
 whether anything can decode the file; the container says whether anything can
-open it, and those come apart. On stable CrossOver 26.3 the same VP9 plays in
-an `.mp4` and does not in a `.webm`, because that build ships no `matroska`
-plugin — 355 `.webm` files and 61 VP9 `.mp4` files are the same codec and
-different outcomes. Which build opens what is set out in
+open it, and those come apart. On a stable CrossOver 26.3 as CodeWeavers ships
+it the same VP9 plays in an `.mp4` and does not in a `.webm`, because that build
+ships no `matroska` plugin — 355 `.webm` files and 61 VP9 `.mp4` files are the
+same codec and different outcomes. An engine carrying this project's own media
+opens both. What each title was measured on is set out in
 [Games](Games.md).
 
 Given a whole library instead of one game it surveys everything under it, which
@@ -38,8 +39,9 @@ line, and starts no process. There is no error, no dialog and no log entry. It
 reads exactly like a broken launcher script, and the temptation is to debug the
 script.
 
-So a measurement "on Preview" needs a bottle that records Preview's version, not
-a 26.3 bottle launched with Preview's `wine`. Bottles are otherwise shared
+The supported engine here is stable CrossOver 26.3 and nothing else, so that is
+the version a bottle used for a measurement has to record -- not a bottle from
+one engine launched with another engine's `wine`. Bottles are otherwise shared
 between installs -- the engine supplies the runtime and the bottle supplies the
 prefix -- which is what makes `diagnostics/launch-with.sh` useful, and it is easy
 to over-generalise that into believing any bottle runs under any engine. It does
@@ -48,12 +50,12 @@ not: it runs under its own version and newer-refuses-older is silent.
 Two consequences worth carrying:
 
 - **Keep one bottle per engine version** for anything that has to be measured on
-  both, and say which is which. Comparing "26.3 versus Preview" means two
-  bottles, and the game installed where both can see it -- a Steam library on a
-  shared volume does this without a second copy.
+  more than one, and say which is which. Two versions means two bottles, and the
+  game installed where both can see it -- a Steam library on a shared volume does
+  this without a second copy.
 **The recorded version is not stable while a CrossOver app is open.** The
-`"Version"` line gets rewritten as bottles are touched, so a value read while
-CrossOver or CrossOver Preview is running can be stale within the minute. An
+`"Version"` line gets rewritten as bottles are touched, so a value read while any
+CrossOver app is running can be stale within the minute. An
 afternoon went into correcting `GST_PLUGIN_PATH` entries three times before this
 was noticed: each correction was right when made and wrong shortly after, because
 the version it was keyed to had changed underneath. Quit every CrossOver app,
@@ -61,7 +63,8 @@ confirm no `wineserver` remains, and only then read the file and act on it.
 
 - **A bottle's `GST_PLUGIN_PATH` must match the bottle's own version.** The
   staged codec symlinks into one specific CrossOver's GStreamer, so pointing a
-  26.3 bottle at a Preview-built tree puts two GStreamer cores in one process.
+  bottle at a tree staged for a different engine puts two GStreamer cores in one
+  process.
   That failure is loud where this one is silent -- `objc: Class
   GstCocoaApplicationDelegate is implemented in both ...` -- but the audit is
   cheap: compare each bottle's `"Version"` against the third field of

@@ -24,7 +24,7 @@
 # was written for.
 #
 # This presents frames, it does not decode them. DYNASTY WARRIORS needs a
-# container CrossOver Preview can open -- see the wiki -- and an earlier
+# container the engine can open -- see the wiki -- and an earlier
 # version of this file said it needed CrossOver patched with winevideo, which
 # was withdrawn: both builds decode VP9 identically and what stable lacks is a
 # WebM demuxer.

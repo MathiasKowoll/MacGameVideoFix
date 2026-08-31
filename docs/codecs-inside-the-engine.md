@@ -2,6 +2,11 @@
 
 Measured 2026-08-26.
 
+**Preview is no longer supported.** As of 2026-08-31 the only supported engine
+is stable CrossOver 26.3, and CrossOver Preview was dropped. The Preview
+measurements below are kept as a record of what was measured, not as guidance
+about where to run anything.
+
 **This does not replace the staging, and is not meant to.** MacGameVideoFix
 installs onto whatever CrossOver a person already has, and does not modify it:
 a directory of compiled GStreamer plugins per engine, pointed at by

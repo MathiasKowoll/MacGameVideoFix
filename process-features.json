@@ -97,8 +97,7 @@
       "codec": "",
       "gptk": "",
       "env": {},
-      "symptom": "Will not start: \"Insufficient VRAM\"",
-      "needs_engine": "winevideo"
+      "symptom": "Will not start: \"Insufficient VRAM\""
     },
     "NINJAGAIDEN4-Steam.exe": {
       "title": "NINJA GAIDEN 4",

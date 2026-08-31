@@ -11,7 +11,7 @@ that bridge since it was written.
 | Symptom | The cutscene runs with sound and no picture |
 | Fix | The DYNASTY WARRIORS bridge, on `libxess.dll` |
 | Backend | **D3DMetal**, D3D12 |
-| CrossOver | `crossover-preview-arm64-20260821`. Not tried on 26.3 |
+| CrossOver | Stable 26.3, on a copy of it carrying this project's `winegstreamer` (2026-08-31) |
 
 ## Nothing new was written for it
 
@@ -61,7 +61,11 @@ it paid.
 
 Do not use this on a game with anti-cheat. The fix patches a running process.
 
-Measured on Preview and D3DMetal only. 26.3 has not been tried.
+Measured on D3DMetal only: on 2026-08-31 on stable 26.3 — on a copy of it this
+project patched, carrying our `winegstreamer`, not a stock one. The picture has
+been read only on that patched copy. It was measured on
+`crossover-preview-arm64-20260821` before that, which stands as a record rather
+than a route, since Preview is no longer a supported engine here.
 
 No staged codec is needed: the reader reports its native type as NV12 with
 `MF_MT_COMPRESSED` at 0, so whatever decodes it does so upstream and the stored

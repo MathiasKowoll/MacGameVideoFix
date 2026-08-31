@@ -23,9 +23,29 @@ it rather than telling it again.
 To get a game playing, start at the
 [README](https://github.com/MathiasKowoll/MacGameVideoFix#readme).
 
-Everything here was measured on an M4 Max, macOS 27, GPTK 4.0b2, against
-CrossOver 26.3 and `crossover-preview-arm64-20260821`. "Preview" on this page
-means that build and no other.
+Everything here was measured on an M4 Max, macOS 27.
+
+**The supported engine is stable CrossOver 26.3, and only that.** Specifically
+26.3.0.39832: the `winegstreamer` pair this project ships was compiled against
+that engine, and `runtime/install-engine-media.sh` refuses any other. As of
+2026-08-31 CrossOver Preview is no longer supported and is not a build to run
+anything on. The reason is what it can carry: on Preview only titles patched
+without `winegstreamer` could work, and the rest are out of the equation, so it
+is dropped rather than half-supported.
+
+Every title here was run on stable 26.3. The CrossOver **version** in those runs
+is stable 26.3; the **engine** carries this project's patched `winegstreamer`
+rather than being a stock untouched CrossOver. Where a result rests on such an
+engine — a copy of the user's CrossOver, patched here — the entry says so.
+
+The Game Porting Toolkit these titles need is 4.0b2, as a general rule. NINJA
+GAIDEN 4 is the exception and needs 3.0. Where a title carries a measurement of
+its own it is in the games table, title by title.
+
+Results taken on Preview are kept below rather than deleted; erasing a
+measurement is not a correction. "Preview" on this page means
+`crossover-preview-arm64-20260821` and no other build, and every such note
+stands as a record of what was observed on a build that is no longer supported.
 
 ## Defects, by the component that would fix them
 
@@ -104,6 +124,43 @@ Four words are used precisely: **measured** (observed directly here),
   builds. With `libgstlibav` reachable, the same call returns `S_OK`.
 - *Standing.* **Measured**, on Nioh, either side of the change.
 
+**winegstreamer's media source hands out buffers that are not 2D-capable.**
+
+- *Observed.* The media source allocates every sample with
+  `MFCreateMemoryBuffer`, and mfplat's plain memory buffer answers only
+  `IID_IMFMediaBuffer` and `IID_IUnknown` — `dlls/mfplat/buffer.c`, where
+  everything else gets `*out = NULL; return E_NOINTERFACE`. The 1D/2D buffer in
+  the same file would have answered.
+- *Consequence.* A player that asks a decoded frame for `IMF2DBuffer2` and does
+  not check the HRESULT dereferences the null it was handed. METAL GEAR SOLID:
+  Peace Walker dies on the first frame of its first pre-rendered cutscene, in
+  its own code, with no message and no dialog: `EXCEPTION 0xc0000005`, `rcx` at
+  zero and `rax` at `0x80004002` — the arguments of `QueryInterface` still in
+  place, with the riid `{33AE5EA6-4316-436F-8DDD-D73D22F829EC}`.
+- *Why the decoder MFT's repair does not reach it.* winevideo's `0008` is this
+  same fault, found through UE Electra, and it changes the decoder MFT. A title
+  that resolves its own byte stream never goes near that MFT — the media source
+  produces its own samples — so the two paths need the same repair separately.
+- *Reproduce.* Any title that hands Media Foundation a byte stream of its own
+  and asks the frame for a 2-D view. This one decrypts its `.xmx` in memory and
+  passes it through `MFCreateMFByteStreamOnStream`, so there is no extension and
+  no MIME type to route on, and no registry switch reaches it.
+  [The title's page](Metal-Gear-Solid-Peace-Walker.md) carries the register dump
+  and that route in full.
+- *What would fix it.* Allocating video buffers with
+  `MFCreateMediaBufferFromMediaType`, which returns a 2D-capable buffer when the
+  media type carries a subtype and a frame size, and falls back to a 1-D buffer
+  of the requested length when it does not. That is `mgvf-0001` in
+  `source-patches/`, and it is the whole of this title's cure: nothing is
+  installed into the game's own folder. Audio is left alone.
+- *Standing.* **Measured**, on one title, either side of the change: about
+  eleven minutes of play, two Media Foundation sessions, two `.xmx` files, zero
+  exceptions, where before it died on the first frame of the first one. The
+  engine it was measured on is a copy of CrossOver 26.3 patched here, because
+  neither a stock engine nor winevideo's plays this title's cutscenes. That
+  engine carries the whole patch set and `mgvf-0001` alone was not tried, so
+  whether the others matter to this title is **not measured**.
+
 ### D3DMetal
 
 **`ID3DDestructionNotifier` is not implemented.**
@@ -114,6 +171,12 @@ Four words are used precisely: **measured** (observed directly here),
   out of shipping builds — and the next line dereferences a null vtable. Every
   UE5 title with VP9 cutscenes on the D3D12 RHI crashes on its first cutscene,
   with the same stack at different offsets.
+- *Also.* It is not confined to VP9. Beast of Reincarnation is an H.264 title,
+  and on the D3D path it dies at the same query: `QueryInterface` for
+  `{A06EB39A-50DA-425B-8C31-4EECD6C270F3}` is given nothing, the null out
+  pointer is dereferenced one instruction later, and the exception is an access
+  violation reading address 0. VP9 is where the query is unavoidable, not where
+  it is confined.
 - *Reproduce.* Any such title; the stack names
   `FElectraMediaDecoderOutputBufferPoolBlock_DX12::AllocateBuffer`.
 - *What would fix it.* Implementing the interface. It is small, and winevideo
@@ -311,8 +374,10 @@ change it.**
   as far as a decoder. Both builds decode VP9 identically through
   `applemedia`, so this is a container gap, not a codec one.
 - *What would fix it.* Shipping `libgstmatroska` in the stable line.
-- *Standing.* **Measured** for the plugin sets. **Inferred** for the effect on
-  stable — the affected title has never been launched there.
+- *Standing.* **Measured** for the plugin sets. The effect on a stable engine as
+  CodeWeavers ships it is **inferred** rather than watched: the runs made here
+  are on stable 26.3 carrying this project's own engine media, which supplies
+  the demuxer.
 
 **No VC-1 or WMV3 decoder is shipped in either line.**
 
@@ -328,8 +393,9 @@ change it.**
 - *Consequence.* A plugin can be supplied per bottle without modifying the
   installation. This is the property the staging here depends on; it is recorded
   so that a change to it is known to break something.
-- *Standing.* **Measured** on Preview. **Inferred** for other builds — not
-  checked on any.
+- *Standing.* **Measured** on Preview, a build no longer supported here; the
+  reading stands as a record. **Inferred** for stable 26.3 and every other
+  build — `bin/wine` has not been read on any of them.
 
 ### A note on method
 
@@ -346,6 +412,16 @@ that hands over a valid but empty surface produces a game that runs and a
 screen that is black, and nothing distinguishes that from success without
 looking at the pixels.
 
+**An executable's date belongs beside the result it produced.** Beast of
+Reincarnation had been measured working, and was measured again after the game
+updated between the two runs. The comparison was worthless: what had changed was
+the executable, and the first suspicion nonetheless fell on the engine. The
+control that settled it was the unmodified environment, where the new build
+failed identically. A result recorded without the build it was taken against
+cannot be compared with anything later, and a game updates when it likes —
+record the executable's build string, its date and its size beside the result,
+and check them again before treating two runs as a pair.
+
 ### Open, and attributable to nobody yet
 
 **Why D3DMetal 3.0 freezes those two titles.** The fault arrives before any
@@ -355,6 +431,19 @@ them is upstream of the walk that explains the same freeze on other builds.
 **What decodes Persona 5 Strikers' VC-1.** The title plays on a system where the
 staged ffmpeg plugin is demonstrably not loading, so something else is serving
 it. Not chased down.
+
+**The green band along the bottom of some Peace Walker cutscenes.** It appears
+in some cutscenes and not others, and nothing in the path distinguishes one from
+another. It was twice written up as ours, introduced by `mgvf-0001`, and twice
+withdrawn after measuring: from inside the process the frame is I420 1920x1080
+and the buffer reports current 3110400, maximum 3110400 and contiguous
+3110400 — three lengths that agree, so there is no unwritten tail, and the plain
+buffer the patch replaced was allocated at exactly that size. The bytes reaching
+the game are the same either way; only the buffer's type changed. That rules the
+buffer out. It does not name a cause, and no other cause has been ruled out.
+Reading the last rows of the frame out of the buffer would say whether the band
+arrives with the picture or is drawn over it. Before the patch nobody had seen a
+frame of this title at all, because it crashed on the first one.
 
 ## The container, not the codec
 
@@ -370,9 +459,9 @@ are `matroska` and `osxaudio`.
 
 `matroska` is a demuxer, not a decoder, and it is the whole difference. Both
 builds carry `applemedia` and decode VP9 through VideoToolbox; neither ships
-`libgstvpx` or `libgstlibav`. What only Preview can do is open a WebM container.
-DYNASTY WARRIORS' 355 cutscenes are `.webm`, so on stable nothing gets as far as
-a decoder.
+`libgstvpx` or `libgstlibav`. Of the two, only Preview could open a WebM
+container. DYNASTY WARRIORS' 355 cutscenes are `.webm`, so on a stable engine as
+CodeWeavers ships it nothing gets as far as a decoder.
 
 Mortal Shell 2 is not the control it looks like, and it is worth saying why. Its
 61 cutscenes are the same codec in a different box, and it plays on stable — but
@@ -396,24 +485,32 @@ nothing, so the open has to succeed first: on a build with no WebM demuxer,
 `MFCreateSourceReaderFromByteStream` on a `.webm` fails outright and there is
 never a frame to carry.
 
-**The limit on all of this.** DYNASTY WARRIORS has never been launched on stable
-26.3, with or without anything added. Everything said here about stable is read
-from the plugin sets rather than from a run.
+**The limit on all of this.** Everything said here about a stable engine as
+CodeWeavers ships it is read from the plugin sets rather than from a run.
 
-**What would close the gap, and has not been built.**
+**What closes the gap.**
 [winevideo](https://github.com/Jfishin/winevideo) supplies a WebM demuxer today,
-by patching the CrossOver installation. Staging `libgstmatroska.dylib` would
-supply one without patching anything — 756 KB, in the official
-GStreamer.framework, the same re-homing move that stages VC-1 for Persona 5
-Strikers. Neither has been measured with this title, and the staging has not
-been written. It is recorded here as a plugin to stage rather than an engine to
-patch, not as something that works.
+by patching the CrossOver installation. Staging `libgstmatroska.dylib` supplies
+one without patching anything — 756 KB, in the official GStreamer.framework, the
+same re-homing move that stages VC-1 for Persona 5 Strikers. That staging has
+since been written: `stage-codecs.sh` stages `libgstmatroska` alongside
+`libgstlibav`, and it was measured on Ninja Gaiden 4, whose first video is a
+Matroska stream and every part of whose chain but the demuxer was already
+present. Media Foundation reports that gap as
+`MF_E_UNSUPPORTED_BYTESTREAM_TYPE`, which reads like a codec problem and is not
+one. An engine built here carries the plugin inside itself instead, which needs
+no bottle setting at all, and that is the route DYNASTY WARRIORS was measured
+on: stable 26.3 with this project's engine media in it. The staging route has
+not been measured with that title.
 
 ## The freeze on 26.3, and what a control run settled
 
-Both Life is Strange titles freeze on stable CrossOver 26.3 and run on
-`crossover-preview-arm64-20260821`. This is the canonical account; both title
-pages state the observation and point here.
+Both Life is Strange titles freeze on stable CrossOver 26.3 as CodeWeavers ships
+it, and run once the toolkit is 4.0b2. This is the canonical account; both title
+pages state the observation and point here. The build that carried 4.0b2 when the
+difference was found was `crossover-preview-arm64-20260821`, so that is what the
+observations below were taken against; the finding is about the toolkit and not
+about a CrossOver line.
 
 **Nothing installed beside the game is involved.** Established by a control
 run: the fix removed entirely, the game restored to what Steam delivers,
@@ -429,9 +526,11 @@ evidence cannot explain this.
 
 **What differs is D3DMetal.** CrossOver 26.3 carries 3.0; that Preview carries
 4.0b2 and ships 3.0 beside it, unused and unreferenced. The two copies of 3.0 are
-byte-identical, so "stable" and "GPTK 3" are interchangeable in any account of
-this. Nothing else about the two installs distinguishes these titles: the proxy
-DLL is the same file, the bottle the same bottle, the backend `d3dmetal` in both.
+byte-identical, so across those two installs "stable" and "GPTK 3" named the same
+thing. They no longer do: the toolkit in a stable 26.3 here is whichever one was
+installed into it. Nothing else about the two installs distinguishes these
+titles: the proxy DLL is the same file, the bottle the same bottle, the backend
+`d3dmetal` in both.
 
 **Still unknown** is why GPTK 3 freezes here at all. That is a question for the
 engine rather than for this project, and it is the shape a report upstream would
@@ -442,6 +541,12 @@ One thing this leaves worth asking. The guard fires in a minority of sessions
 even where it works, and not at all where the freeze happens. How much of the
 improvement on Preview is actually its doing has never been controlled, and the
 same experiment would answer it.
+
+**Where this leaves a reader.** Preview is no longer a supported engine here, so
+everything above is the record of how the difference was found rather than a
+route to take. What it establishes carries over unchanged: 3.0 freezes these two
+titles and 4.0b2 does not, and on stable 26.3 the toolkit is the variable to get
+right.
 
 ## One DLL, three repairs
 
@@ -475,10 +580,11 @@ half: it is present in the file they install and inert in their process. And an
 executable the build does not recognise arms all three rather than a chosen
 subset, which the log says on startup, so an unexpected result is traceable to
 the table rather than mistaken for a measurement. That last row is what the
-app's **Another Unreal Engine 5 title** entry reaches, and it is why an untried
-title is best tried on Preview: the 26.3 defect is open and unexplained, and a
-title the table does not recognise arms more of the DLL than any title that has
-been measured, so Preview is where it carries the least unknown.
+app's **Another Unreal Engine 5 title** entry reaches, and it carries more
+unknown than any title that has been measured, because it arms more of the DLL.
+An untried title is best tried on stable 26.3 with the toolkit at 4.0b2: the
+freeze recorded above belongs to D3DMetal 3.0, so getting the toolkit right
+first is what keeps a result about the game rather than about the toolkit.
 
 The Media Foundation hooks are the exception to the gating. They are installed
 for every title, armed or not, because they are how a new one is surveyed: what
@@ -525,6 +631,15 @@ The difference is who guards it:
 So VP9 always hits it on D3D12. Titles that run on D3D11 — Persona 5 Strikers,
 for one — never do: the same bug is there and unreachable.
 
+**It is not only VP9 that reaches the pool.** The CVar in the H.264 row is zero
+until something sets it, so an H.264 title on D3D12 enters the pool as well, and
+Beast of Reincarnation is the measured case: the same `QueryInterface` for
+`IID_ID3DDestructionNotifier`, the same null read one instruction later, the
+same access violation on address 0. That is what its console variable and its
+two `IsSoftware` patches exist to prevent. The argument here is unchanged — the
+H.264 row has a way out and the VPx row does not — but the evidence for it is
+now two titles rather than one.
+
 **There is no VPx CVar.** Extracting every string from the shipped executable
 turns up only `Electra.Win.H264UseOldOutputPath` and
 `Electra.Win.H265UseOldOutputPath`. VP9 on D3D12 has no configuration escape.
@@ -537,9 +652,12 @@ that makes `-dx11` a poor answer to the Life is Strange freeze.
 nothing from CrossOver's media stack. It was measured rather than argued: the
 game was played through on CrossOver 26.3 carrying no winevideo, and again on
 26.3 **with winevideo**, the same version differing only in the GStreamer
-plugins. The fix worked either way. That paired run is the only controlled
-comparison in the project, and several claims elsewhere lean on it — it was made
-on [Mortal Shell 2](Mortal-Shell-2.md) and no other title.
+plugins. The fix worked either way. That paired run is the cleanest controlled
+comparison here, and several claims elsewhere lean on it — it was made on
+[Mortal Shell 2](Mortal-Shell-2.md) and on no other title. It is not the only
+one: Beast of Reincarnation was measured with the same DLL and the same game
+build across four engines, and again on an unmodified environment the day its
+addresses moved, which is what said the game had changed rather than the engine.
 `diagnostics/launch-with.sh` is what makes that comparison cheap: bottles with a
 build present or absent, without reinstalling anything.
 
@@ -576,7 +694,9 @@ replaces Apple's `dxgi.dll` inside a CrossOver build with a proxy handling all
 seven exports — three implemented here, which is how the adapter gets wrapped at
 all, and four PE forwarders to the renamed original. It reaches every game in
 every bottle using that CrossOver without anybody selecting a folder, at the
-cost of an invalidated code signature and a much larger blast radius.
+cost of an invalidated code signature and a much larger blast radius. Point it
+at a copy rather than at the build you rely on; the script's own header says the
+same.
 
 That this guard is possible at all rests on Apple's `dxgi.dll` tolerating being
 renamed to `dxgi_real.dll`. `d3d12.dll` is not known to tolerate the same, which
@@ -690,11 +810,10 @@ frames arrived as NV12 with a 1920 pitch where Nioh's had been a four-byte
 format at 7680. The NV12-to-BGRA converter that came across from DYNASTY
 WARRIORS absorbed that difference without being told.
 
-**What is not measured.** Neither Nioh title has run anywhere but Preview and
-DXMT. Whether
-the bridge works under D3DMetal is not open in the same way -- the sidecar needs
-`GetSharedHandle`, which is `E_NOTIMPL` there -- but it has not been tried, and
-26.3 has not been tried at all.
+**What is not measured.** Neither Nioh title has run on any backend but DXMT.
+Whether the bridge works under D3DMetal is not open in the same way -- the
+sidecar needs `GetSharedHandle`, which is `E_NOTIMPL` there -- but it has not
+been tried.
 
 ## The module a function lives in is not the module it is asked from
 
@@ -732,17 +851,29 @@ and the sidecar upload to `d3d9` itself. This project reaches several of the
 same places from inside the game process. That is a trade, not an improvement,
 and anyone who finds both will ask about it.
 
+That was true of everything here until METAL GEAR SOLID: Peace Walker, whose
+fault is in the engine's own media source and has no surface a game process can
+reach. That one is an engine patch of ours, and the comparison below is written
+for the rest.
+
 **What being outside buys.**
 
 *The fixes survive a CrossOver update.* A patched binary has to be rebuilt for
 every build it is applied to. winevideo declares stable 26.2 or 26.3 and states
 that Preview is not supported; that follows from what it ships rather than from
-a preference. The patches here survived a CrossOver version change without
-recompiling, which is the property that makes targeting a Preview build possible
-at all.
+a preference, and this project now says the same of itself. The patches here
+survived a CrossOver version change without recompiling, which is what let them
+be carried across builds while more than one was in scope.
 
-*Nothing is redistributed.* No modified Wine binaries leave this repository, and
-a fix is removed by deleting one file from the game folder.
+*Almost nothing is redistributed.* Most repairs here are one file in the game's
+folder and are removed by deleting it. Two are not. NINJA GAIDEN 3 ships patched
+Wine DLLs built by winevideo into the bottle's `system32`, credited and carrying
+their licence text. And the `winegstreamer` pair built from `source-patches/` is
+a modified Wine binary of ours: the fault it repairs is inside the engine, with
+no surface a game process can reach, so it is built here and installed into an
+engine copy. That pair is the one thing in this project that has to be rebuilt
+for the Wine it is going into -- which is exactly the cost described above, paid
+in the one place there was no way around it.
 
 *The findings stay reportable.* Every conclusion here is stated at the level of
 an interface or an instruction -- D3DMetal's per-title override table, the
@@ -808,6 +939,51 @@ everything: between two builds of Mortal Shell 2 the crash site alone shifted by
 No static scanner for that pattern ships here. The code that knows it is the
 runtime patch itself, so the count of sites arrives once the fix is installed
 rather than before.
+
+### An address in a game's own code has an expiry date
+
+One repair here does write fixed addresses: Beast of Reincarnation's, which
+patches two call sites inside the shipping executable. It has expired twice. On
+2026-08-24 everything shifted by `0x1E930`; on 2026-08-31 the game shipped build
+5.4.4-407366 (`++aibou+mainline-CL-407366`, a 176.6 MB executable) and the two
+sites and the function they both call shifted by exactly `0x4070`. The distance
+between the two sites is `0x4006` in both of those builds.
+
+**A guard that refuses is the design working.** Both times the fix read the
+bytes at the addresses it had, did not recognise them, and wrote nothing. The
+title stopped working cleanly and stayed stopped until somebody looked. That is
+much the better failure: a patch aimed at a fixed offset in a build it was never
+measured on writes into whatever happens to be there.
+
+**The method of re-finding the sites is worth more than the numbers.** After the
+first move they were found by what they are: locate the function that returns a
+bool, then take every direct call to it followed by `testb al, al`, of which
+there are exactly two. After the second move the game's own crash report handed
+over the anchor without a search — `PCallStack` listed `6370bb3`, the return
+address of the first site's call, which places the call at `6370bae`. A crash
+report is symbolication of the build in front of you, which is exactly what a
+written-down address is not. Look there before disassembling anything.
+
+The same title's console variable stopped moving at all once its address was
+derived instead of remembered: there is one UTF-16
+`Electra.Win.H264UseOldOutputPath` in the image and one RIP-relative reference
+to it, and the store that follows is the pointer. The search is what runs; the
+address read off the last disassembly survives only as a cross-check, and the
+fix says so when the two disagree. What is remembered between builds is then a
+name out of Electra's own API, which cannot move without the console command
+moving with it. Anything that can be found from a name should be.
+
+**Two ways to search that look like results and are not.** A `call rel32` is
+**five** bytes, so the `testb` that follows it sits at `+5`. The build before
+the first move called the function through a vtable — `call [rax+0x28]`, three
+bytes — and a scan carried over from it, looking for `84 C0` and checking seven
+bytes back, found only coincidences and reported the region as empty. An empty
+scan is a claim about the scan until its own arithmetic has been checked. And
+searching by the **distance** between the old pair found a different pair
+entirely: a distance is not a name, and two calls the right way apart are not
+the two calls. That is the same shape as the `DXGI_MODE_DESC` stride under
+[the fault that was not in the stack](#the-fault-that-was-not-in-the-stack) — a
+wrong size does not look like an error, it looks like data.
 
 ### The carrier DLL
 
@@ -892,10 +1068,13 @@ tidiness.
 Persona 5 Strikers needs a VC-1 decoder **no CrossOver ships** — that is a
 property of CrossOver rather than a difference between the two lines, and it is
 what makes this title independent of which build it runs on. Nothing is
-distributed here: `runtime/stage-codecs.sh` borrows the decoder from the user's
-own official GStreamer install. The staging, the dyld crash that made re-homing
-necessary, and the layout trap that cost a first attempt are on
-[that title's page](Persona-5-Strikers.md).
+distributed either way: the plugins come from the user's own official GStreamer
+install. There are two places to put them. `runtime/stage-codecs.sh` stages them
+beside a bottle and points that bottle at them, which needs nothing of the
+engine; an engine built here carries them inside its own `lib64/gstreamer-1.0`
+instead, beside CrossOver's, and then no bottle setting is involved at all. The
+staging, the dyld crash that made re-homing necessary, and the layout trap that
+cost a first attempt are on [that title's page](Persona-5-Strikers.md).
 
 Four things about the staging are not title-specific.
 
@@ -934,9 +1113,16 @@ records as its Version, so a bottle can be matched to the staging it needs
 without guessing, and an engine whose `.app` filename does not say what it is
 still resolves. The bottle setting survives because the launcher sets only
 `GST_PLUGIN_SYSTEM_PATH` and never touches `GST_PLUGIN_PATH`, and the bottle's
-environment is applied first. That was read out of Preview's `bin/wine` and has
-not been checked on another build, so the staging assumes it holds across
-CrossOver releases rather than knowing it does.
+environment is applied first. That was read out of Preview's `bin/wine`, on a
+build no longer supported here, and has not been checked on another — so the
+staging assumes the property holds across CrossOver releases rather than knowing
+it does.
+
+The staging stands down when the engine already carries `libgstlibav`,
+`libgstmatroska` and `libgstvpx` itself. A second copy on the search path would
+put two GStreamer cores and two GObject type registries in one process, which is
+the crash the re-homing exists to avoid, and no engine here ships a
+`gst-plugin-scanner` to absorb it.
 
 **The idea is not ours.** [winevideo](https://github.com/Jfishin/winevideo) does
 this too — its README describes importing WMV/VC-1 codecs from the user's
@@ -1062,13 +1248,22 @@ on that RHI makes it. The DYNASTY WARRIORS fault is what happens to any game
 that decodes video on a D3D11 device and presents it with a D3D12 renderer. The
 H.264/NV12 negotiation is CrossOver's behaviour on macOS and not any game's.
 Persona 5 Strikers' D3D9-to-D3D11 bridge is the narrowest of the five, and even
-there the frame converter came from another title's fix unchanged.
+there the frame converter came from another title's fix unchanged. The media
+source's plain buffers are the same kind of thing: any title that resolves its
+own byte stream and asks the frame for a 2-D view meets them, whatever it is
+playing.
 
 What is specific is the **carrier** — the DLL the fix rides in on:
 
 - `libogg_64.dll` for Unreal titles
 - `libxess.dll` for DYNASTY WARRIORS: ORIGINS
 - `amd_ags_x64.dll` for Persona 5 Strikers
+
+The newest repair has no carrier at all. Peace Walker's fault is in the engine,
+so nothing is installed beside the game and there is nothing in the game's
+folder to remove — it is undone by not using that engine. That is a different
+shape from everything above it, and worth knowing before reading the rest of
+this section as though a carrier were always needed.
 
 Adding a game means finding a DLL it loads directly that has nothing to do with
 rendering, and building a proxy for it:
@@ -1086,11 +1281,13 @@ chosen.
 
 `diagnostics/survey-games.sh` reports what a game ships and which media API it
 uses. Read both halves of that row: the codec says whether anything can decode
-it, and the container says whether anything can open it — which, on stable
-CrossOver, is where WebM stops.
+it, and the container says whether anything can open it — which, on a stable
+CrossOver as CodeWeavers ships it, is where WebM stops.
 
-**Do not use any of this on a game with anti-cheat.** It patches a running
-process, which is exactly the behaviour anti-cheat exists to stop.
+**Do not use any of this on a game with anti-cheat.** Everything that rides in
+on a carrier patches a running process, which is exactly the behaviour
+anti-cheat exists to stop. The engine patch does not touch the game, and this
+warning is about the carriers.
 
 ## Compatibility runs backwards
 
@@ -1228,21 +1425,27 @@ Once an entry is gone the engine falls through to disk, because
 In the repository rather than on the wiki:
 
 - [docs/winevideo-on-preview.md](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/winevideo-on-preview.md)
-  — what a current CrossOver decodes on its own, measured codec by codec, and
-  what winevideo is still for.
+  — what that CrossOver decoded on its own, measured codec by codec, and what
+  winevideo is still for. Taken on `crossover-preview-arm64-20260821`, which is
+  no longer a supported engine here; kept as a record of the measurements rather
+  than as a description of what to run.
 - [docs/what-we-got-wrong.md](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/what-we-got-wrong.md)
   — the mistakes made producing these results: claims that reached the wiki and
   were withdrawn, the reading errors that caused them, and the hypotheses that
   did not survive.
 - [docs/upstreaming.md](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/docs/upstreaming.md)
   — what of this could stop being per-game, and what should not be attempted.
+- [source-patches/README.md](https://github.com/MathiasKowoll/MacGameVideoFix/blob/main/source-patches/README.md)
+  — the engine patches, what each one is for, and which of them are winevideo's
+  work carried here rather than ours. `mgvf-0001` and `0008` are both described
+  there.
 
 On the wiki:
 
 - [How the codec staging works](How-the-codec-staging-works.md) — what the app
   does to put a VC-1 decoder in front of CrossOver without redistributing
-  anything or touching a CrossOver file, and why loading the plugin in place
-  crashes instead.
+  anything, the two places the plugins can live, and why loading the plugin in
+  place crashes instead.
 
 ---
 

@@ -19,63 +19,88 @@ import sys
 # game, engine, symptom, fix, backend, dx, crossover, status, page
 #
 # The CrossOver cell is what a title was measured on, never what it might work
-# on. "Preview" throughout is crossover-preview-arm64-20260821, which is the
-# build every measurement here was taken against.
+# on -- and there is one answer for every row now, so it is written once here
+# and shared. The supported engine is stable CrossOver 26.3.0.39832 and no
+# other: the winegstreamer pair this project ships was built against that
+# engine, and install-engine-media.sh refuses any other version.
+#
+# The cell names the engine as well as the version, because a bare "26.3" reads
+# as the build CodeWeavers ships and the engine these runs were made on is not
+# that one: the version is stable 26.3, and the engine carries this project's
+# winegstreamer. A filter that missed exactly that distinction once counted
+# METAL GEAR SOLID: Peace Walker as running on a stock engine, against a
+# measurement that a stock engine cannot play its cutscenes -- so the cell says
+# both halves outright rather than leaving one of them to be inferred.
+#
+# It is not the Motor column and does not answer for one. This says what the
+# runs were made on; Motor says what a fix needs an engine to carry, which for
+# most rows is nothing.
+#
+# CrossOver Preview was an engine here until 2026-08-31 and is not one now. No
+# cell names it as a place a title runs. The past-tense findings in the note
+# below that mention it are kept as history and marked as history.
+MEASURED = "26.3, our winegstreamer"
+
 GAMES = [
+    ("METAL GEAR SOLID: Peace Walker", "Konami, Master Collection",
+     "Dies the moment a pre-rendered cutscene starts",
+     "Engine patch mgvf-0001: 2D-capable buffers from the media source",
+     "D3DMetal", "11", MEASURED,
+     "Fixed -- crash cured; a green band in some cutscenes is unexplained", "Metal-Gear-Solid-Peace-Walker"),
     ("Mortal Shell 2", "Unreal Engine 5.6.1",
      "Crash on the first cutscene", "Runtime patch, 4 sites",
-     "D3DMetal", "12", "26.3 and Preview",
+     "D3DMetal", "12", MEASURED,
      "Fixed", "Mortal-Shell-2"),
     ("Life is Strange: Reunion", "Unreal Engine 5",
      "Freezes after a while, anywhere", "DXGI node guard",
-     "D3DMetal", "12", "26.3 and Preview",
-     "Fixed", "Life-is-Strange-Reunion"),
+     "D3DMetal", "12", MEASURED,
+     "Runaway node walk stopped; no freeze-free session recorded", "Life-is-Strange-Reunion"),
     ("Life is Strange: Double Exposure", "Unreal Engine 5",
      "Freezes after a while, anywhere", "DXGI node guard, same DLL",
-     "D3DMetal", "12", "26.3 and Preview",
-     "Fixed", "Life-is-Strange-Double-Exposure"),
+     "D3DMetal", "12", MEASURED,
+     "Guard installs; the freeze was never reproduced or cured", "Life-is-Strange-Double-Exposure"),
     ("DYNASTY WARRIORS: ORIGINS", "Koei Tecmo, in-house",
      "Cutscene runs with sound, picture black", "Video bridge, D3D11 to D3D12",
-     "D3DMetal", "12", "26.3 and Preview",
+     "D3DMetal", "12", MEASURED,
      "Fixed", "Dynasty-Warriors-Origins"),
     ("Beast of Reincarnation", "Unreal Engine 5",
      "Startup video plays with sound, no picture",
-     "Console variable puts Electra on its CPU path; **needs winevideo**",
-     "D3DMetal", "12", "26.3 with winevideo -- Preview stalls",
+     "Console variable, and two IsSoftware call sites patched by address; **needs winevideo**",
+     "D3DMetal", "12", MEASURED,
      "Fixed", "Beast-of-Reincarnation"),
     ("Persona 5 Strikers", "Koei Tecmo, in-house",
      "Video never starts; sound only", "Staged VC-1 codec, and a D3D9 to D3D11 bridge",
-     "**DXMT**", "11", "26.3 and Preview",
+     "**DXMT**", "11", MEASURED,
      "Fixed", "Persona-5-Strikers"),
     ("NINJA GAIDEN 3: Razor's Edge", "Koei Tecmo, in-house",
      "Will not start: \"Insufficient VRAM\"", "d9vk, and winevideo's DirectShow filters",
-     "**DXVK**", "9", "26.3",
-     "Fixed", "Ninja-Gaiden-3-Razors-Edge"),
+     "**DXVK**", "9", MEASURED,
+     "Starts, 60 fps, in-game cutscenes; the boot movie freezes, one click skips it", "Ninja-Gaiden-3-Razors-Edge"),
     ("Nioh", "Koei Tecmo, in-house",
      "Cutscene refuses to play, then crashes", "Staged WMV3 codec, and the same D3D9 to D3D11 bridge",
-     "**DXMT**", "11", "26.3 and Preview",
+     "**DXMT**", "11", MEASURED,
      "Fixed", "Nioh"),
     ("Nioh 2", "Koei Tecmo, in-house",
      "Cutscene refuses to play, then crashes", "Same codec and same bridge as Nioh, unchanged",
-     "**DXMT**", "11", "26.3 and Preview",
+     "**DXMT**", "11", MEASURED,
      "Fixed", "Nioh-2"),
     ("Nioh 3", "Koei Tecmo, in-house",
-     "Failed to play movie", "The DYNASTY WARRIORS bridge, unchanged",
-     "D3DMetal", "12", "26.3 and Preview",
+     "Failed to play movie", "The DYNASTY WARRIORS bridge, with ordinal hooking added for this title",
+     "D3DMetal", "12", MEASURED,
      "Fixed", "Nioh-3"),
     ("Wo Long: Fallen Dynasty", "Koei Tecmo, in-house",
-     "Cutscene runs with sound, picture black", "The DYNASTY WARRIORS bridge, unchanged",
-     "D3DMetal", "12", "26.3 and Preview",
-     "Fixed", "Wo-Long-Fallen-Dynasty"),
+     "Cutscene runs with sound, picture black", "The DYNASTY WARRIORS bridge, with ordinal hooking",
+     "D3DMetal", "12", MEASURED,
+     "Bridge installs; picture measured only on a patched engine", "Wo-Long-Fallen-Dynasty"),
     ("NieR Replicant ver.1.22474487139", "Toylogic, in-house",
      "Crashes when the first video starts", "Software decode, and the frame written into the game's target",
-     "D3DMetal", "11", "26.3 and Preview",
+     "D3DMetal", "11", MEASURED,
      "Fixed", "NieR-Replicant"),
     ("KINGDOM HEARTS Dream Drop Distance", "Square Enix, in-house",
      "Cutscene runs with sound, picture solid green; a crash dialog on leaving",
      "Software decode with the planes written into the game's own textures, and the shutdown fault swallowed",
-     "D3DMetal", "11 + 12", "26.3 and Preview",
-     "Fixed", "Kingdom-Hearts"),
+     "D3DMetal", "11 + 12", MEASURED,
+     "Picture restored; the exit dialog was measured on 1.5+2.5", "Kingdom-Hearts"),
     # Its own row while its fault is its own. The 2.8 package holds both this and
     # Dream Drop Distance, and one row for the pair hid a working title behind a
     # broken one. When 0.2 works, fold this back into the entry above -- which is
@@ -83,85 +108,97 @@ GAMES = [
     ("KINGDOM HEARTS 0.2 Birth by Sleep", "Unreal Engine 4",
      "Would not start from a launcher; ran fine launched by hand",
      "**None from us.** The launcher had to declare microphone use -- see the page",
-     "D3DMetal", "11", "26.3",
-     "Fixed", "Kingdom-Hearts"),
+     "D3DMetal", "11", MEASURED,
+     "Works with nothing of ours -- fixed in the launcher", "Kingdom-Hearts"),
     ("KINGDOM HEARTS HD 1.5+2.5 ReMIX", "Square Enix, in-house",
      "Cutscene runs with sound, picture solid green; a crash dialog on leaving",
      "The Dream Drop Distance fix, unchanged -- six executables, same route",
-     "D3DMetal", "11 + 12", "26.3 and Preview",
+     "D3DMetal", "11 + 12", MEASURED,
      "Fixed", "Kingdom-Hearts"),
     ("TMNT: Splintered Fate", "Rebirth, in-house",
      "Opens a window, then closes silently",
      "A guard on the D3D12 call that ends the process instead of failing",
-     "D3DMetal", "12", "26.3 and Preview",
+     "D3DMetal", "12", MEASURED,
      "Fixed", "TMNT-Splintered-Fate"),
     ("Tormented Souls 2", "Unreal Engine 5",
      "Fatal error before the first frame",
      "16:9 modes added to a list that offered none",
-     "D3DMetal", "12", "26.3 and Preview",
+     "D3DMetal", "12", MEASURED,
      "Fixed", "Tormented-Souls-2"),
     ("Devil May Cry 5", "RE Engine",
      "Crashes when a skill preview video plays",
      "Staged VC-1 codec. Nothing installed beside the game",
-     "D3DMetal", "12", "26.3 and Preview",
+     "D3DMetal", "12", MEASURED,
      "Fixed", "RE-Engine-VC1"),
     ("RESIDENT EVIL 2", "RE Engine",
      "Crashes when a video plays",
      "The same staged VC-1 codec, unchanged",
-     "D3DMetal", "12", "26.3 and Preview",
+     "D3DMetal", "12", MEASURED,
      "Fixed", "RE-Engine-VC1"),
     ("RESIDENT EVIL 3", "RE Engine",
      "Crashes when a video plays",
      "The same staged VC-1 codec, unchanged",
-     "D3DMetal", "12", "26.3 and Preview",
+     "D3DMetal", "12", MEASURED,
      "Fixed", "RE-Engine-VC1"),
     ("NINJA GAIDEN 4", "Koei Tecmo, in-house",
      "Says the VP9 codec is missing, then exits",
      "Staged Matroska demuxer, and the MFT gate answered",
-     "D3DMetal", "12", "26.3 only -- Preview stalls before video",
+     "D3DMetal", "12", MEASURED,
      "Fixed", "Ninja-Gaiden-4"),
     ("RESONANCE: A PLAGUE TALE LEGACY", "Asobo, in-house",
      "Fatal error: Shader Model 6.7 is not supported", "Shader model floor lowered in memory; needs a 16:9 display",
-     "D3DMetal", "12", "26.3",
-     "Fixed", "Resonance-A-Plague-Tale-Legacy"),
+     "D3DMetal", "12", MEASURED,
+     "Starts on a 16:9 display -- its cutscenes have never been visible", "Resonance-A-Plague-Tale-Legacy"),
 ]
 
-HEAD = ("| Game | Engine | Symptom | Fix | Backend | DX | GPTK | CrossOver | Status |\n"
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
+HEAD = ("| Game | Engine | Symptom | Fix | Backend | DX | GPTK | Motor | CrossOver | Status |\n"
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
 
 NOTE = """
-**Update the toolkit, then pick a CrossOver.** Every fix here was written
-against Apple's Game Porting Toolkit 4.0b2, which is what CrossOver Preview
-ships and what CrossOver 26.3 does **not** -- 26.3 carries D3DMetal 3.0, and on
-3.0 these patches do not find what they were written to find. So 26.3 is a
-perfectly good engine for all of this once its toolkit is replaced, and a poor
-one until then. The app does the replacing, and keeps the original beside it.
+**One engine, and update its toolkit.** The supported engine is stable
+CrossOver 26.3.0.39832 and nothing else: the winegstreamer pair this project
+ships was built against that engine, and `install-engine-media.sh` refuses any
+other version rather than installing onto a wine it was not compiled for. Every
+fix here was written against Apple's Game Porting Toolkit 4.0b2, which 26.3 does
+**not** ship -- it carries D3DMetal 3.0, and on 3.0 these patches do not find
+what they were written to find. So 26.3 is a perfectly good engine for all of
+this once its toolkit is replaced, and a poor one until then. The app does the
+replacing in a copy of the CrossOver you point it at, and keeps both halves of
+the original inside that copy, so on that route the CrossOver you installed is
+not touched. With the copy turned off in Set up, a toolkit you ask for goes into
+the CrossOver you installed instead, and the app says so where that choice is
+made.
 
-The exception is NINJA GAIDEN 4, which is the other way round: it runs on 3.0
-and stalls on 4.0b2, before its first frame and for reasons inside the toolkit
-that nothing here can reach.
+The exception is NINJA GAIDEN 4, which is the other way round: it is measured
+working on 3.0, and on 4.0b2 its cutscene plays its audio and no picture
+appears. It does not stall there and it does not exit; where the frames stop
+has not been established.
 
-**The GPTK column is the one that decides, and it is newer than this table.**
+**The GPTK column is the one that decides.**
 Apple's Game Porting Toolkit is what actually draws these games, and CrossOver
 ships it inside the bundle rather than as something you pick: 26.3 carries
-D3DMetal 3.0, Preview 27.0 carries 4.0b2 and uses it unless
-`CX_GRAPHICS_BACKEND_VERSION` says otherwise. So "this only works on Preview"
-has, for {gptk_n} of the rows here, meant "this needs the newer toolkit" and
-nothing about Wine at all.
+D3DMetal 3.0. A launcher can put another generation in front of it -- RaccoonBot
+carries d3dMetal3 and d3dMetal4 side by side and injects one at launch -- and
+that is how the rows needing 4.0b2 run on this engine. So "this only works on
+the Preview build" meant, for {gptk_n} of the rows here, "this needs the newer
+toolkit" and nothing about Wine at all -- which is why dropping Preview costs
+the table nothing.
 
 Those {gptk_n} rows in bold are where that stops being a footnote, and they
-fall into two camps pointing opposite ways. **NINJA GAIDEN 4 runs on 3.0 and
-stalls on 4.0b2. Life is Strange -- both packages -- runs on 4.0b2 and crashes
+fall into two camps pointing opposite ways. **NINJA GAIDEN 4 is measured working
+on 3.0, and on 4.0b2 its video has sound and no picture. Life is Strange -- both
+packages -- runs on 4.0b2 and crashes
 on 3.0.** Opposite requirements, same machine, so there is no single toolkit
-that serves the whole table and no version of CrossOver that is simply
-"better".
+that serves the whole table.
 Both were measured by moving the toolkit under a fixed CrossOver, which is the
 only way to separate the two.
 
-Everything else in the column is derived rather than freshly run: a title
-measured on 26.3 was measured on 3.0, and one measured on Preview was measured
-on 4.0b2. A cell naming one generation means the other was never tried, not that
-it fails.
+**Everywhere else the column says "not measured", and that is deliberate.**
+4.0b2 is what these titles need as a general rule, with NINJA GAIDEN 4 the
+exception at 3.0 -- but a rule is not a run, and a row whose toolkit nobody
+varied has no measurement of its own to report. The cells that used to hold one
+were derived from the CrossOver build rather than run, and that derivation is
+gone: a launcher chooses the generation, so the build implies nothing about it.
 
 **Backend and DX are not preferences, they are requirements.** Persona 5
 Strikers, Nioh and Nioh 2 only work on DXMT: all three need a shared D3D9
@@ -173,18 +210,20 @@ D3DMetal with the D3D12 renderer, which is also what keeps PSO precompilation
 -- `-dx11` dodges some of these faults and costs permanent shader-compilation
 stutter.
 
-**Which CrossOver, and what "Preview" means.** Every measurement here was taken
-against CrossOver 26.3 and `crossover-preview-arm64-20260821`, and the CrossOver
-column says which of the two a title was measured on rather than which it might
-work on. **{on_stable} of the {corpus} run on stable 26.3**, which inverts where
-this project started: stable was the exception and is now the rule, and the
-toolkit -- not the engine -- turned out to be the axis that decides most of
-these titles.
+**Which CrossOver, and one answer for every row.** Every measurement here was
+taken on stable CrossOver 26.3, on an engine carrying this project's
+winegstreamer, and the column says exactly that on every row because it is the
+same answer on every row. Both halves of it are load-bearing: the version is
+stable 26.3, and the engine carries this project's winegstreamer rather than
+the one CodeWeavers ships. What a fix needs an engine to carry is a different
+question, and the Motor column answers it per row.
 
-The {off_stable} that does not is a **result and not an absence**, which is the
-distinction this column exists to keep: {off_stable_list}. Its fix installs,
-loads and decodes -- and the game stops anyway, before the fiftieth sample and
-without reaching a menu.
+**CrossOver Preview is no longer a supported engine.** It was measured against
+here, and on 2026-08-31 it was dropped rather than half-supported: only titles
+patched without winegstreamer could have worked on it, and the rest were out of
+the equation. The findings below that mention it are kept, because they record
+what was measured and a deleted measurement is not a correction. They are
+history. None of them is guidance about where to run a game.
 
 **The KINGDOM HEARTS 2.8 package holds three entries, not two** -- Dream Drop
 Distance, 0.2 Birth by Sleep and the Back Cover film -- and they do not share a
@@ -206,12 +245,15 @@ does. Its **Fix** column says "none needed", and that is the half to read before
 concluding anything was shipped for it: nothing was. Every other Fixed row in
 this table names something this project installs; this one names nothing.
 
-{stalls_n} run on stable and stall on Preview, which is the opposite direction:
-{stalls_list}. What stalls NINJA GAIDEN 4 is the toolkit, which executes command
-lists concurrently with no lever to turn that off. Beast of Reincarnation is
-there for a different reason -- it needs winevideo since the game update of
-2026-08-24 -- and the shared lesson is that "runs on Preview" was never the safe
-assumption this project began with.
+**History: NINJA GAIDEN 4 and Beast of Reincarnation were both measured
+stalling on Preview**, and both were recorded working on 26.3, which is the
+opposite direction to the one this project expected. NINJA GAIDEN 4 stalled
+there before any video call, with no thread in it touching D3D12, DXGI, Media
+Foundation or winegstreamer, and what held it was never established. Beast of
+Reincarnation stalled there as well, and carries a separate requirement of its
+own: it needs winevideo since the game update of 2026-08-24. The shared lesson
+is that "runs on Preview" was never the safe assumption this project began
+with.
 
 Two lessons paid for by rows that were wrong for a while, and are worth more
 than the statuses they corrected:
@@ -225,33 +267,55 @@ than the statuses they corrected:
   depends on had gone missing, and the installer answered `installed` from the
   files alone.
 
-**None of these games needs CrossOver patched, wherever the container can be
-opened.** That was not true when this project started, and it is the single
-biggest thing that changed. The qualifier is the whole of what remains, and it
-is a container question rather than a codec one.
+**The Motor column says what the engine itself has to carry, and for most rows
+it is nothing.** Those ask nothing of ours from the engine: the fix sits beside
+the game and, where the video needs one, a plugin goes in front of it. That was
+not true when this project started, and it is the single biggest thing that
+changed. The exceptions are the rows that name something instead: Beast of
+Reincarnation needs a winegstreamer carrying winevideo's patches, and METAL GEAR
+SOLID: Peace Walker is the first title here whose whole fix is an engine patch
+of ours, with nothing installed beside the game at all -- it was tried on a
+stable 26.3 as CodeWeavers ships it and could not play its cutscenes there,
+which is the measurement that puts **Ours** in its cell.
 
-Both builds decode VP9 the same way, and for a long time what only Preview could
-do was **open** a WebM -- which was the whole of the difference. DYNASTY WARRIORS
-ships 355 `.webm` cutscenes and could not get as far as decoding on stable, while
-Mortal Shell 2 ships the same codec in `.mp4`, which both builds handle. The
-plugin-by-plugin comparison that conclusion rested on is in
-[Findings](Findings.md), under *The container, not the codec*.
+**A dagger on "Stock" means inferred rather than run.** No run on those rows
+isolated the engine's own `winegstreamer` as the thing that carried the video,
+so Stock there is read off the mechanism rather than established. That is not a
+smaller claim than Stock; it is an untested one, and the column says which rows
+it applies to. It is not a statement about the CrossOver cell beside it. That
+cell records what the runs were made on -- stable 26.3 with this project's
+winegstreamer in the engine, on every row -- and Motor records what a fix needs
+an engine to carry. A row reading Stock in one and our winegstreamer in the
+other is not two claims in contradiction: the runs were made on the engine this
+project supports, and Stock says the fix does not depend on it.
 
-**That gap is now closed, and it was a missing plugin rather than a missing
-engine.** Preview ships `libgstmatroska`, for both architectures, and stable
-26.3 ships it for neither -- so the difference between the two builds on a WebM
-was one plugin the whole time. Staging it beside the decoder gives stable one
+**History, and the finding that closed a gap.** Both builds decoded VP9 the
+same way, and for a long time what only Preview could do was **open** a WebM --
+which was the whole of the difference. DYNASTY WARRIORS ships 355 `.webm`
+cutscenes and could not get as far as decoding on stable, while Mortal Shell 2
+ships the same codec in `.mp4`, which both builds handled. The plugin-by-plugin
+comparison that conclusion rested on is in [Findings](Findings.md), under *The
+container, not the codec*.
+
+**That gap is closed, and it was a missing plugin rather than a missing
+engine.** Stable 26.3 ships `libgstmatroska` for neither architecture and the
+Preview build shipped it for both -- so the difference between them on a WebM
+was one plugin the whole time. Staging it beside the decoder gives 26.3 one
 too, and NINJA GAIDEN 4 is where that was measured: it plays on stock 26.3,
 video and all, with nothing patched into CrossOver.
 
-Several titles need a codec no CrossOver ships -- VC-1, WMV3, WMV2 or WMA -- and
-it is staged beside the game rather than patched into it. Which titles, and
-which plugin each one needs, is the Codec column of
+Several titles need a codec no CrossOver ships -- VC-1, WMV3, WMV2 or WMA --
+and where it comes from depends on the engine. On a stock CrossOver the plugin
+is staged from a GStreamer runtime you installed, one staging per engine, with
+the bottle pointed at it; on an engine copy this project makes, the same plugins
+are already inside the engine's own `lib64/gstreamer-1.0` and nothing is staged
+at all. Neither route patches a decoder into a CrossOver you installed. Which
+titles, and which plugin each one needs, is the Codec column of
 [what each title actually loads](Games.md#what-each-title-actually-loads); the
 count is derived there rather than repeated here, because the number written
-here was three for as long as it took two more titles to join the list.
-Nioh 3 needs none: its video is already NV12 by the time Media Foundation is
-asked for it.
+here was three for as long as it took two more titles to join the list. Nioh 3
+needs none: its video is already NV12 by the time Media Foundation is asked for
+it.
 
 None of these fixes decodes anything. The frames existed all along; they were
 being crashed on, mislabelled, or thrown away.
@@ -272,6 +336,27 @@ def _word(n):
     return WORDS[n] if n < len(WORDS) else str(n)
 
 
+# A table of phrases sat here that sorted the CrossOver cells into the rows
+# measured on a stable 26.3 as CodeWeavers ships it and the rows measured on
+# something this project had patched, and a paragraph was rendered from it
+# naming each row and the claim its cell made. It sorted nothing once the cells
+# became one cell, and a filter over a single value renders a sentence that
+# says the same thing about every row or, worse, nothing at all.
+#
+# Its lesson is worth more than the code was, so it is kept here: three
+# different claims were living in one column and the prose had to say which one
+# it was holding. "Not tried" is an absence -- nobody made the run. "Stalls" and
+# "freezes" are results, and somebody watched them happen. A run made on an
+# engine this project had patched is a third thing again, and the bug that list
+# carried into release was reading that third kind as the first: a cell saying
+# "26.3 only on a patched engine" matched none of the phrases, so METAL GEAR
+# SOLID: Peace Walker counted as running on stable -- against a measurement
+# that a stock CrossOver cannot play its cutscenes.
+#
+# That is why MEASURED names the engine and not only the version. The
+# distinction now lives in the cell instead of in a filter over it.
+
+
 def _note():
     """Fill the note's counts from the rows, so it cannot say nineteen at 21.
 
@@ -280,28 +365,13 @@ def _note():
     -- hand_counts() skips generated blocks precisely because they are supposed
     to be rewritten from the rows every run, and this one was not.
     """
-    # Two cells contain "26.3" and mean the opposite of running on it: "not
-    # tried on 26.3" is an absence, and "stalls on 26.3" is a result. Neither
-    # row runs on stable, and a substring test for "26.3" counts both as if
-    # they did. The test is therefore what was measured AND what happened.
-    off = ("not tried on 26.3", "stalls on 26.3", "runs on neither")
-    measured = [g for g in GAMES if not any(o in g[6] for o in off)]
-    untried  = [g for g in GAMES if "not tried on 26.3" in g[6]]
-    stalling = [g for g in GAMES if "stalls on 26.3" in g[6] or "runs on neither" in g[6]]
-    stalls = [g for g in GAMES if "Preview stalls" in g[6]]
-    names = [g[0] for g in stalls]
-    listed = (" and ".join(names) if len(names) < 3
-              else ", ".join(names[:-1]) + " and " + names[-1])
-    gptk_req = [g for g in GAMES if "only" in gptk(g[6], g[0])]
-    values = dict(
-        gptk_n=_word(len(gptk_req)),
-        on_stable=_word(len(measured)).capitalize(),
-        corpus=_word(len(GAMES)),
-        off_stable=_word(len(GAMES) - len(measured)),
-        off_stable_list=(" and ".join(g[0] for g in untried + stalling) or "none"),
-        stalls_n=_word(len(stalls)).capitalize(),
-        stalls_list=listed,
-    )
+    # One count survives the move to one engine: the rows whose toolkit is a
+    # requirement rather than something they happened to be run on. The rest of
+    # what used to be counted here -- how many rows ran on a stable engine, how
+    # many stalled on the other build -- was a count of a distinction the
+    # CrossOver cell no longer draws.
+    gptk_req = [g for g in GAMES if "only" in gptk(g[0])]
+    values = dict(gptk_n=_word(len(gptk_req)))
     # Substituting a word of a different length leaves the paragraph ragged, so
     # the ones that take a value are rewrapped and the rest are left exactly as
     # they were written. Only prose is touched: a bullet reflowed into the
@@ -346,6 +416,14 @@ CODEC = {
     # joined the decoder group by measurement, having been filed for a long time
     # as needing nothing: its video is WMV2 with WMA v2 audio in an ASF that
     # starts sixteen bytes into the game's own .arc.
+    #
+    # Nothing is installed for this title anywhere: no carrier, no bridge, and
+    # nothing staged. Its fix IS the engine -- winegstreamer carrying mgvf-0001
+    # -- and the engine that carries it also carries the three plugins in its
+    # own lib64/gstreamer-1.0, so "which plugin must be staged" has no answer
+    # here rather than an unmeasured one. It is not NONE either: that would read
+    # as "measured, and none needed", which no run here could have shown.
+    "METAL GEAR SOLID: Peace Walker": "**in the engine**",
     "Persona 5 Strikers": "`libgstlibav`",
     "Nioh": "`libgstlibav`",
     "Nioh 2": "`libgstlibav`",
@@ -478,13 +556,19 @@ answer `broken` rather than `installed` when it is gone.
 levers, not requirements: each one defaults to the setting the fix was measured
 with, and they exist so a failing title can be bisected without a rebuild.
 
-**Codec** is the plugin `stage-codecs.sh` must put in front of CrossOver.
-{decoders} titles need a decoder no CrossOver ships, {demuxers} need a demuxer,
-and telling those two cases apart is most of the work -- see
-[How the codec staging works](How-the-codec-staging-works.md). The decoder
-column is the same on every build; the demuxer one is not, because Preview
-ships `matroska` and stable 26.3 does not, so those rows describe what stable
-needs and what Preview already has.
+**Codec** is the plugin that has to be in front of CrossOver before the title
+can play. {decoders} titles need a decoder no CrossOver ships, {demuxers} need a
+demuxer, and telling those two cases apart is most of the work -- see
+[How the codec staging works](How-the-codec-staging-works.md). Stable 26.3
+ships no `matroska` plugin at all, so the demuxer rows say what has to be put
+in front of it.
+
+Where it comes from depends on the engine. On a stock CrossOver
+`stage-codecs.sh` puts it there; on one of this project's engine copies the
+plugins are already inside the engine, and that script finds them and stands
+down, because a second copy on the search path means two GStreamer cores in one
+process. The row marked **in the engine** is METAL GEAR SOLID: Peace Walker,
+where that is the whole fix: nothing beside the game, and nothing staged.
 """
 
 
@@ -496,7 +580,7 @@ def stack():
     installers, fallback = _switch("installer")
     by_title = {title: case for case, title in names.items()}
     rows, bridges_seen, registry_seen = "", [], []
-    for g, _engine, _sym, _fix, backend, dx, cx, _status, page in GAMES:
+    for g, _engine, _sym, _fix, backend, dx, _cx, _status, page in GAMES:
         case = by_title.get(g)
         script = installers.get(case, fallback) if case else None
         if script:
@@ -514,7 +598,7 @@ def stack():
         if registry == "yes":
             registry_seen.append(script)
         rows += (
-            f"| [{g}]({page}.md) | {backend} | {dx} | {gptk(cx, g)} "
+            f"| [{g}]({page}.md) | {backend} | {dx} | {gptk(g)} "
             f"| {'`%s`' % carrier if carrier else NONE} "
             f"| {'`%s`' % kept if kept else NONE} "
             f"| {'`%s`' % bridge if bridge else NONE} "
@@ -532,62 +616,100 @@ def stack():
 BEGIN, END = "<!-- games:begin -->", "<!-- games:end -->"
 
 
-def gptk(cx, title=None):
+# ------------------------------------------------------------------ engine
+#
+# Which winegstreamer a reader must have. The CrossOver cell says what the runs
+# were made on, which is one answer for every row; it has never said whether a
+# particular fix NEEDS anything of this project inside the engine, and three
+# different things were being conflated in one word.
+#
+#   Stock      any CrossOver of the stated version, untouched
+#   winevideo  needs a winegstreamer carrying winevideo's patches -- their
+#              engine, or a rebuild of that same patch set
+#   Ours       needs the winegstreamer scripts/build-winegstreamer.sh produces,
+#              with a patch that exists only here (source-patches/mgvf-0001)
+#   None       no Wine engine is involved in the fault or in the fix
+#
+# The dagger means: inferred from the mechanism, and not established by a run
+# that isolated the engine. The rows carrying it are not making a smaller claim
+# than "Stock" -- they are making an untested one.
+#
+# It is not a statement about the CrossOver cell, and it was written as one for a
+# while: "nobody has watched them play on an untouched engine" was contradicted
+# by rows it covered whose cells recorded plain runs. That cell now records the
+# same engine for every row, so it cannot answer for a single row's requirement
+# at all -- the two columns answer different questions, and this is the one that
+# answers what a fix needs.
+
+ENGINE_NEEDED = {
+    "METAL GEAR SOLID: Peace Walker": "**Ours**",
+    "Beast of Reincarnation": "winevideo",
+    "KINGDOM HEARTS 0.2 Birth by Sleep": "None",
+    "DYNASTY WARRIORS: ORIGINS": "Stock&dagger;",
+    "Persona 5 Strikers": "Stock&dagger;",
+    "Nioh": "Stock&dagger;",
+    "Nioh 2": "Stock&dagger;",
+    "Nioh 3": "Stock&dagger;",
+    "Wo Long: Fallen Dynasty": "Stock&dagger;",
+    "KINGDOM HEARTS Dream Drop Distance": "Stock&dagger;",
+}
+
+
+def engine_needed(title):
+    """Stock unless a fix demonstrably needs something inside the engine."""
+    return ENGINE_NEEDED.get(title, "Stock")
+
+
+def gptk(title):
     """Which Game Porting Toolkit a title was measured against.
 
-    Not a new measurement: every run recorded in the CrossOver cell already
-    carries this, unnamed. CrossOver 26.3 ships one toolkit and it is D3DMetal
-    3.0; CrossOver Preview 27.0 ships two and defaults to 4.0b2. So a row
-    measured on 26.3 was measured on 3.0, a row measured on Preview was measured
-    on 4.0b2, and the pair says which generations a title is known to run on.
+    4.0b2 is what these titles need as a general rule and NINJA GAIDEN 4 is the
+    exception at 3.0, but a rule is not a run: this reports only what
+    GPTK_BY_TITLE holds. A title with no toolkit measurement of its own says so,
+    and the note beside the table states the rule once rather than rendering it
+    into every cell as if somebody had watched it.
 
-    Read as positive evidence only. "not tried on 26.3" contains the string
-    "26.3" and means the opposite of having been measured there -- an earlier
-    version of this function counted fifteen such rows as tested on both.
-
-    Titles where both toolkits were tried deliberately are in GPTK_OVERRIDE.
+    This used to derive a generation from the CrossOver cell -- 26.3 read as
+    3.0, Preview read as 4.0b2 -- and that derivation went with the second
+    build. It could not have survived it anyway.
 
     **The toolkit is not the engine, and this column reads as if it were.**
-    That inference holds only for a stock CrossOver, where the two arrive
-    together: 26.3 ships D3DMetal 3.0 and Preview 27 ships 4.0b2. A launcher
-    that carries both toolkits and injects one at launch -- RaccoonBot ships
-    d3dMetal3 and d3dMetal4 side by side -- breaks it, and then reading "needs
-    4.0b2" as "needs Preview" is simply wrong. It was read that way once, to
-    conclude that dropping Preview would cost the two Life is Strange titles.
-    It would not: they need the toolkit, which the launcher can supply on 26.3.
+    That inference holds only where the two arrive together, which is a stock
+    CrossOver. A launcher that carries both toolkits and injects one at launch
+    -- RaccoonBot ships d3dMetal3 and d3dMetal4 side by side -- breaks it, and
+    then reading "needs 4.0b2" as "needs Preview" is simply wrong. It was read
+    that way once, to conclude that dropping Preview would cost the two Life is
+    Strange titles. It would not: they need the toolkit, and the launcher
+    supplies it on 26.3.
 
     process-features.json keeps them apart, which is what a launcher able to
     choose actually needs: `gptk` says which generation a title was measured
     on, `needs_engine` says when an engine itself is required.
     """
-    if title in GPTK_BY_TITLE:
-        return GPTK_BY_TITLE[title]
-    if cx in GPTK_OVERRIDE:
-        return GPTK_OVERRIDE[cx]
-    denied = ("not tried on 26.3", "crashes on 26.3", "26.3 crashes")
-    on263 = "26.3" in cx and not any(d in cx for d in denied)
-    onprev = "Preview" in cx and "Preview stalls" not in cx \
-             and "Preview not yet measured" not in cx
-    if on263 and onprev: return "3.0 and 4.0b2"
-    if on263:            return "3.0"
-    if onprev:           return "4.0b2"
-    return "not measured"
+    return GPTK_BY_TITLE.get(title, UNKNOWN)
 
 
-# Titles where both toolkits were tried on purpose. Keyed on the CrossOver cell
-# so the two never drift apart.
-GPTK_OVERRIDE = {
-    "26.3 only -- Preview stalls before video": "**3.0 only** -- 4.0b2 stalls it",
-}
+# A second table keyed on the CrossOver cell used to sit here, holding NINJA
+# GAIDEN 4's toolkit finding. It was dead -- GPTK_BY_TITLE below answers first
+# for that title -- and what it held was the retracted "4.0b2 stalls it",
+# waiting to be rendered again the day somebody removed the entry that shadowed
+# it. Keying on the cell was the other half of the mistake: every title shares
+# one cell now, and they do not share a toolkit.
 
-# Titles measured on 26.3 only after its toolkit had been replaced with 4.0b2,
-# which is not what that CrossOver ships. Deriving from the engine would read
-# them as 3.0, and 3.0 is the one generation they were never tried on.
+# Every toolkit measurement there is, and nothing else. Most of these are titles
+# measured on 26.3 with its toolkit replaced by 4.0b2, which is not what that
+# CrossOver ships -- reading the generation off the engine would have called
+# them 3.0, and 3.0 is the one generation they were never tried on.
 #
-# Keyed by title rather than by the CrossOver cell, because several titles now
-# share a cell and do not share a toolkit -- which is the whole reason this
-# column exists.
+# A title absent from here has no toolkit measurement of its own and renders as
+# "not measured". That is not the same as having no answer: 4.0b2 is the rule
+# for these titles and NINJA GAIDEN 4 is the exception, and the note beside the
+# table says so once. Writing the rule into a cell would dress it as a run.
 GPTK_BY_TITLE = {
+    # Not a toolkit finding at all, and nothing here may manufacture one. What
+    # was varied for this title was the engine, and that is what the Motor
+    # column records. No generation is claimed because none was measured.
+    "METAL GEAR SOLID: Peace Walker": "not measured -- the engine was the variable",
     "Nioh": "4.0b2",
     "Nioh 2": "4.0b2",
     "Nioh 3": "4.0b2",
@@ -600,6 +722,16 @@ GPTK_BY_TITLE = {
     # bridge depends on had gone missing, so the 26.3 runs measured the game
     # with no fix loaded. With the key written it runs on both.
     "NieR Replicant ver.1.22474487139": "4.0b2",
+    # The other direction, and the only title that goes this way. Most rows here
+    # want 4.0b2; this one is measured working on 3.0, and on 4.0b2 -- on a
+    # patched 26.3, that generation selected and saved -- it runs, its cutscene
+    # plays its audio and no picture appears. It neither stalls nor exits there.
+    #
+    # Two earlier values are wrong and neither should come back. "4.0b2 stalls
+    # it" is retracted; it was never measured. "Preview stalls before video" is
+    # measured but names a CrossOver build, which is what the CrossOver cell is
+    # for -- putting it here said nothing about the toolkit twice over.
+    "NINJA GAIDEN 4": "**3.0 only** -- on 4.0b2 the video has sound and no picture",
     "Life is Strange: Reunion": "**4.0b2 only** -- 3.0 crashes it",
     "Life is Strange: Double Exposure": "**4.0b2 only** -- 3.0 crashes it",
 }
@@ -608,7 +740,7 @@ GPTK_BY_TITLE = {
 def table():
     rows = "".join(
         f"| [{g}]({page}.md) | {engine} | {sym} | {fix} | {backend} | {dx} "
-        f"| {gptk(cx, g)} | {cx} | {status} |\n"
+        f"| {gptk(g)} | {engine_needed(g)} | {cx} | {status} |\n"
         for g, engine, sym, fix, backend, dx, cx, status, page in GAMES)
     return f"{BEGIN}\n\n{HEAD}{rows}{_note()}\n{END}"
 
@@ -616,31 +748,37 @@ def table():
 # ------------------------------------------------------------------ README
 #
 # The README carried its own copy of the table, kept by hand, with absolute
-# links because it is read on the front page rather than inside the wiki. It had
-# eighteen rows against the wiki's nineteen -- NINJA GAIDEN 4 was fixed, shipped
-# and documented, and never reached the one table most people see first.
+# links because it is read on the front page rather than inside the wiki. It fell
+# a row behind the wiki -- NINJA GAIDEN 4 was fixed, shipped and documented, and
+# never reached the one table most people see first.
 #
 # Same rows, same source, different link style. The symptom column is shortened
 # the way the README already shortened it: the front page is a list, not a
-# report.
+# report. It carries Status and Motor, and neither is decoration; see below.
 
 WIKI = "https://github.com/MathiasKowoll/MacGameVideoFix/wiki"
 README_BEGIN, README_END = "<!-- readme-games:begin -->", "<!-- readme-games:end -->"
 
 
 def readme_table():
-    """The README's table now carries Status.
+    """The README's table carries Status and Motor.
 
-    It did not, so a row could be measured not working and still read here as
-    one of the fixed ones -- the caveat rode entirely in the CrossOver cell,
-    which a person skimming a list of games will not parse. The README is the
-    front door; a title under investigation has to say so where somebody
+    It carried neither, so a row could be measured not working and still read
+    here as one of the fixed ones -- the caveat rode entirely in the CrossOver
+    cell, which a person skimming a list of games will not parse. The README is
+    the front door; a title under investigation has to say so where somebody
     decides whether to try it.
+
+    Motor is here for the same reason and was the sharper gap: METAL GEAR SOLID:
+    Peace Walker read "26.3 | Fixed" on the front page with nothing saying its
+    fix is an engine this project builds. Beast of Reincarnation only escaped
+    that by happening to carry its requirement inside its CrossOver cell.
     """
     rows = "".join(
-        f"| [**{g}**]({WIKI}/{page}) | {sym} | {cx} | {status} |\n"
+        f"| [**{g}**]({WIKI}/{page}) | {sym} | {cx} | {engine_needed(g)} | {status} |\n"
         for g, engine, sym, fix, backend, dx, cx, status, page in GAMES)
-    head = "| Game | Symptom | CrossOver | Status |\n| --- | --- | --- | --- |\n"
+    head = ("| Game | Symptom | CrossOver | Motor | Status |\n"
+            "| --- | --- | --- | --- | --- |\n")
     return f"{README_BEGIN}\n\n{head}{rows}\n{README_END}"
 
 
@@ -737,10 +875,14 @@ def hand_counts(paths):
 # list is how "three titles need a codec" became wrong while seven did.  # count-ok
 #
 # A generation is reported ONLY where it is a requirement, never where it is
-# merely what the title happened to be measured on. "3.0 and 4.0b2" means both
-# work and the field stays empty; "**3.0 only** -- 4.0b2 stalls it" is a
-# requirement and reports 3. Getting that backwards would have a launcher pin a
-# toolkit for a game that did not care, which is worse than leaving it alone.
+# merely what the title happened to be measured on. A bare "4.0b2" says a run
+# was made there and pins nothing; "**3.0 only** -- on 4.0b2 the video has sound
+# and no picture" is a requirement and reports 3. Getting that backwards would
+# have a launcher pin a toolkit for a game that did not care, which is worse
+# than leaving it alone. A cell reporting no generation -- "not measured" --
+# pins nothing, which is the right answer for a row whose toolkit nobody varied
+# and is what most rows now say, because 4.0b2 being the rule for these titles
+# is not a measurement of any one of them.
 
 
 # Titles whose whole fix is the staged codec: nothing is installed beside the
@@ -756,13 +898,20 @@ CODEC_ONLY_EXE = {
     "Devil May Cry 5": "DevilMayCry5.exe",
 }
 
+# METAL GEAR SOLID: Peace Walker is absent from this file for a reason worth
+# writing down: nothing is installed for it, so there is no installer to carry an
+# MGVF-GAME line, and no file in this repository records the name of its
+# executable. So the one title release 5 is announced on cannot tell a launcher
+# that it needs an engine of ours. Guessing a filename would close the gap with
+# something unmeasured; titles_without_an_executable publishes it instead.
+
 
 def config_json():
     """Per-title setup, for runtime/make-fixes-bundle.sh. JSON, no dependencies."""
     import json
     out = {}
     for g, engine, sym, fix, backend, dx, cx, status, page in GAMES:
-        want = gptk(cx, g)
+        want = gptk(g)
         gen = ""
         if "only" in want:
             if "3.0 only" in want:
@@ -799,8 +948,9 @@ def config_json():
 # that maps an executable to the behaviour it needs, and its series also holds
 # per-game patches: Soulcalibur VI, Mortal Shell II, Kingdom Hearts. So the
 # shape is proven and it is not ours to invent. What it lacks is the data, and
-# that is the one thing this repository has: nineteen titles, each measured, and
-# each already declaring its executable to an installer.
+# that is the one thing this repository has: the rows of the table above, each
+# measured, and nearly all of them already declaring an executable to an
+# installer.
 #
 # Why this file rather than more DLLs beside games. Measured on 2026-08-26:
 # every half of the Beast of Reincarnation fix went inert on winevideo, because
@@ -810,6 +960,13 @@ def config_json():
 # architecture shared between engines, a lib64 test that silently decides
 # whether GST_REGISTRY is set, bottles pointed at a staging built for another
 # core, and nothing checking any of it.
+#
+# An observation against that reading, recorded rather than resolved. On
+# 2026-08-31 the title updated, every address moved by 0x4070, the guard read
+# the bytes, refused to patch and said so -- and the title stopped working until
+# the two IsSoftware call sites were followed to their new addresses. Whatever
+# "inert" measured on 2026-08-26, those two sites are load-bearing on the engine
+# this runs on now. Both readings are here; neither has been explained away.
 #
 # The risk this shape carries, named here because it is the same shape as the
 # addresses that died with a game update: a table keyed on an executable name
@@ -857,9 +1014,17 @@ def features_json():
             "symptom": sym,
         }
         # An engine requirement is a fact about the engine, not about the game,
-        # and it is the one thing here a launcher cannot work around.
-        if "winevideo" in fix.lower():
-            entry["needs_engine"] = "winevideo"
+        # and it is the one thing here a launcher cannot work around. So it is
+        # read from the column that answers it and not from the prose of the Fix
+        # column, which reads the same for two different arrangements: NINJA
+        # GAIDEN 3's fix names winevideo because its DirectShow filters came
+        # from there, and those files ship into the bottle's system32 for one
+        # executable. The engine that runs it is stock, and publishing
+        # "needs_engine" for it would send a launcher hunting for an engine no
+        # part of that fix wants.
+        motor = engine_needed(g)
+        if motor not in ("Stock", "Stock&dagger;", "None"):
+            entry["needs_engine"] = motor.replace("**", "")
         procs[exe] = entry
     missing = sorted(g for g, *_ in GAMES if g not in exes)
     # An executable name is a key here, and some of them are not distinctive

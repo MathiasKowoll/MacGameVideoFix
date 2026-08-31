@@ -10,9 +10,13 @@ and no error anywhere.
 | Symptom | Sound plays, the picture never appears |
 | Fix | Stage a VC-1 decoder, then bridge D3D9 to D3D11 |
 | Backend | **DXMT only.** D3DMetal cannot produce a shared handle at all |
-| CrossOver | Plays on 26.3 and on `crossover-preview-arm64-20260821` — see below for what the first measurement on 26.3 got wrong |
+| CrossOver | Plays on stable 26.3 — see below for what the first measurement on 26.3 got wrong |
 
-## The one that should not need Preview
+**CrossOver Preview is no longer a supported engine here**, and the supported
+engine is stable 26.3. Where Preview appears below it is a record of what was
+measured or read on it at the time, not a build to run this title on.
+
+## The one that does not depend on what the engine ships
 
 Every other title here that goes through Media Foundation depends on what
 CrossOver's own media stack can open and decode. This one depends on none of
@@ -64,7 +68,7 @@ onto — but
 no other release has been tried. Nothing is redistributed: the decoder is borrowed
 from an install you already have, which is also how winevideo does it. Loading
 that plugin in place crashes: dyld ends up with two copies of libgstreamer and
-two GObject type registries, and Preview ships no `gst-plugin-scanner`, so
+two GObject type registries, and no CrossOver ships a `gst-plugin-scanner`, so
 there is no forked scanner to absorb it.
 
 ```
@@ -80,9 +84,11 @@ one line in the bottle:
 GST_PLUGIN_PATH = …/gst-codecs/x86_64/gstreamer-1.0
 ```
 
-Preview's launcher sets only `GST_PLUGIN_SYSTEM_PATH` and never touches
+CrossOver's launcher sets only `GST_PLUGIN_SYSTEM_PATH` and never touches
 `GST_PLUGIN_PATH`, and the bottle's environment is applied first, so it
-survives. `runtime/stage-codecs.sh` builds it.
+survives. That was read out of Preview's `bin/wine` and has not been checked on
+another build, so the staging assumes it holds across CrossOver releases rather
+than knowing it does. `runtime/stage-codecs.sh` builds it.
 
 Layout matters and cost a first attempt: `GST_PLUGIN_PATH` names a directory
 GStreamer scans and tries to load everything in as a plugin, so the support

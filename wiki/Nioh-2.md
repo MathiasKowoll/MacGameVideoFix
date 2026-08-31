@@ -12,7 +12,7 @@ code change, no rebuild, the same proxy binary already built for
 | Symptom | The cutscene refuses to play, then the game crashes |
 | Fix | Stage the WMV3 decoder, then hand the game a share handle that exists |
 | Backend | **DXMT only.** The sidecar needs `GetSharedHandle`, `E_NOTIMPL` under D3DMetal |
-| CrossOver | `crossover-preview-arm64-20260821`. Not tried on 26.3 |
+| CrossOver | Stable 26.3, on a copy of it carrying this project's `winegstreamer` (2026-08-31) |
 
 ## What it shares with Nioh, and what it does not
 
@@ -53,9 +53,13 @@ adjustment — the second time that converter has moved between titles unchanged
 
 Do not use this on a game with anti-cheat. The fix patches a running process.
 
-Measured on Preview and on DXMT only. 26.3 has not been tried. Under D3DMetal
-the sidecar has nothing to build on, since `GetSharedHandle` is `E_NOTIMPL`
-there, so it is not expected to work — but that has not been run either.
+Measured on DXMT only: on 2026-08-31 on stable 26.3 — on a copy of it this
+project patched, carrying our `winegstreamer`, not a stock one. It was measured
+on `crossover-preview-arm64-20260821` before that, which stands as a record
+rather than a route, since Preview is no longer a supported engine here. Under
+D3DMetal the sidecar has nothing to build on, since `GetSharedHandle` is
+`E_NOTIMPL` there, so it is not expected to work — but that has not been run
+either.
 
 ## What it cost
 

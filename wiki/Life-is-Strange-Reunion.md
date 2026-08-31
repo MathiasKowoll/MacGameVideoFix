@@ -8,7 +8,7 @@ Unreal Engine 5. Runs, then freezes.
 | Cause | `IDXGIAdapter3::QueryVideoMemoryInfo` succeeds for node indices the adapter does not have |
 | Fix | Refuse them, which is what Windows does |
 | winevideo | Not required — the fault is in DXGI, nowhere near video. No paired with-and-without run was made on this title; the controlled comparison is [Mortal Shell 2](Mortal-Shell-2.md)'s |
-| CrossOver | `crossover-preview-arm64-20260821`. **Freezes on 26.3**, with or without the fix — see below |
+| CrossOver | Stable 26.3. **Freezes on the D3DMetal 3.0 that build ships**, with or without the fix; this title needs Game Porting Toolkit 4.0b2 — see below |
 
 **It is not a deadlock.** A spindump taken while it was stuck shows the
 GameThread burning 1.27 seconds of CPU across 128 samples while RenderThread 0
@@ -91,6 +91,12 @@ of this.
 That is where it stands: reproduced, controlled, and not ours. What has not been
 established is why GPTK 3 freezes here, and the guard's own evidence is no help
 because the guard never runs.
+
+The Preview runs above are a record of what was measured on that build and not a
+route: Preview is no longer a supported engine here. What the comparison leaves
+is a toolkit requirement rather than an engine one — on stable 26.3 this title
+needs Game Porting Toolkit 4.0b2, and the toolkit that build ships is the 3.0
+described above.
 
 ## Also affects
 

@@ -5,18 +5,28 @@
 #     apply-webm-handler.sh <bottle> [engine]      add it
 #     apply-webm-handler.sh <bottle> [engine] --check   report only
 #
+# [engine] is the .app filename of the engine to drive. It defaults to
+# CrossOver, which is stable CrossOver 26.3 -- the only supported engine -- and
+# is given explicitly to reach a copy of it this project has patched.
+#
 # Written to test one question: on CrossOver Preview, is this single mapping
 # the whole of what winevideo provides for a WebM/VP9 game? Preview already
 # carries the demuxer and a hardware VP9 decoder; a clean bottle has zero
 # extensions mapped to the handler, while a bottle winevideo has touched has
 # three (.mkv, .msd, .webm).
 #
+# That question was asked on Preview, which stopped being a supported engine on
+# 2026-08-31. The paragraph above is the record of why this exists; it is not a
+# suggestion to run anything there.
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 set -u
 BOTTLE="${1:-}"
-ENGINE="${2:-CrossOver Preview}"
-[ -n "$BOTTLE" ] || { sed -n '3,16p' "$0" >&2; exit 1; }
+ENGINE="${2:-CrossOver}"
+# The usage block above, which now runs to the line marking the Preview question
+# as history. It used to end at 16, which was the SPDX line and `set -u`.
+[ -n "$BOTTLE" ] || { sed -n '3,20p' "$0" >&2; exit 1; }
 
 B="$HOME/Library/Application Support/CrossOver/Bottles/$BOTTLE"
 [ -d "$B" ] || { echo "error: no bottle named $BOTTLE" >&2; exit 1; }

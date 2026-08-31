@@ -11,7 +11,7 @@ it is working correctly.
 | Carrier | `NvCloth_x64.dll` → `NvCloth_x64_real.dll`, 42 forwarders |
 | Backend | D3DMetal, D3D12 |
 | Display | **Must be 16:9.** Nothing else in this project can supply that |
-| CrossOver | 26.3 (`cxoffice-26.3.0rc2`), Game Porting Toolkit 3.0 and 4.0b2 alike |
+| CrossOver | Stable 26.3 (`cxoffice-26.3.0rc2`), Game Porting Toolkit 3.0 and 4.0b2 alike |
 
 ## The floor, not the device
 

@@ -4,6 +4,11 @@ Internal notes. No wiki entry and no fix: what stops this game is not a defect
 in the translation layer, and the one thing that would "fix" it is out of scope.
 Written down so the next attempt starts from here.
 
+**Preview is no longer supported.** As of 2026-08-31 the only supported engine
+is stable CrossOver 26.3, and CrossOver Preview was dropped. The Preview
+measurements below are kept as a record of what was measured, not as guidance
+about where to run anything.
+
 **Symptom.** Opens, shows a window with an FPS counter in the title bar for a
 second or two, and closes.
 

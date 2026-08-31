@@ -9,6 +9,11 @@ them.
 It is kept because most of these cost a run, several cost a wrong claim that
 reached the wiki, and the same shapes keep recurring.
 
+**Preview is no longer supported.** As of 2026-08-31 the only supported engine
+is stable CrossOver 26.3, and CrossOver Preview was dropped. The Preview
+measurements below are kept as a record of what was measured, not as guidance
+about where to run anything.
+
 ## Claims that reached the wiki and were withdrawn
 
 - **That the H.264 half explains the Life is Strange crash on 26.3.** The policy

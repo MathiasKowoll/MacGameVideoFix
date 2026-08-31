@@ -1,5 +1,10 @@
 # What winevideo is still for, on CrossOver Preview
 
+**Preview is no longer supported.** As of 2026-08-31 the only supported engine
+is stable CrossOver 26.3, and CrossOver Preview was dropped. Everything below
+was measured on Preview and is kept as a record of what was measured, not as
+guidance about where to run anything.
+
 Measured on an M4 Max against `crossover-preview-arm64-20260821`
 (CFBundleVersion 27.0.0.40921).
 Claims are marked **[RUN]** where something was executed and **[READ]** where
