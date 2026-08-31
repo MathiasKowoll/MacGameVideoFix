@@ -3411,8 +3411,14 @@ static void arm_startup_trace(void)
  * environment. They do not -- RaccoonBot sets these per game -- and reasoning
  * from one title's variables to another's is guessing with extra steps.
  *
- * Named variables only: dumping the whole block would print the user's paths
- * and tokens into a log that gets pasted into bug reports. */
+ * Named variables only for VALUES: dumping the whole block would print the
+ * user's paths and tokens into a log that gets pasted into bug reports.
+ *
+ * But every NAME is listed, and that is new. A named-only dump answers "what is
+ * the value of X" and cannot answer "is there an X we never thought of" -- and
+ * that second question cost an evening. Chasing why one title starts by hand and
+ * not from a launcher, every comparison was made against this list, and the list
+ * was not the environment. A name leaks nothing: it is a knob, not a secret. */
 static void dump_environment(void)
 {
     static const char *names[] = {
@@ -3423,13 +3429,47 @@ static void dump_environment(void)
         "MTL_HUD_ENABLED", "MVK_CONFIG_LOG_LEVEL",
         "GST_PLUGIN_PATH", "GST_PLUGIN_SYSTEM_PATH", "GST_PLUGIN_SCANNER", "GST_REGISTRY",
     };
+    /* Families whose values are engine knobs rather than anything private.
+     * Anything outside them is listed by name with its value withheld. */
+    static const char *const open_[] = {
+        "CX_", "D3DM_", "DXMT_", "DXVK_", "MTL_", "MVK_", "NAS_",
+        "WINE", "GST_", "ROSETTA_",
+    };
     char v[512];
-    size_t i;
+    size_t i, j;
+
     logf_("environment this process was given:");
     for (i = 0; i < sizeof(names) / sizeof(names[0]); i++)
     {
         DWORD n = GetEnvironmentVariableA(names[i], v, sizeof(v) - 1);
         if (n && n < sizeof(v)) logf_("    %s=%s", names[i], v);
+    }
+
+    /* Every name present, so a variable nobody thought to ask about is still
+     * visible. Values only for the open families above. */
+    {
+        LPCH block = GetEnvironmentStringsA();
+        LPCH p = block;
+        int shown = 0;
+        if (!block) { logf_("    (could not read the environment block)"); return; }
+        logf_("  every variable present, values only where they are engine knobs:");
+        while (*p)
+        {
+            const char *eq = strchr(p, '=');
+            size_t nlen = eq ? (size_t)(eq - p) : strlen(p);
+            int open = 0;
+            if (nlen && nlen < 200 && p[0] != '=')   /* skip cmd.exe's "=C:" entries */
+            {
+                for (j = 0; j < sizeof(open_) / sizeof(open_[0]); j++)
+                    if (!strncmp(p, open_[j], strlen(open_[j]))) { open = 1; break; }
+                if (open) logf_("    %s", p);
+                else      logf_("    %.*s=<withheld>", (int)nlen, p);
+                ++shown;
+            }
+            p += strlen(p) + 1;
+        }
+        logf_("  %d variable(s) in all", shown);
+        FreeEnvironmentStringsA(block);
     }
 }
 

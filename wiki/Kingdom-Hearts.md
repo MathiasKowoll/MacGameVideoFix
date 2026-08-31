@@ -258,36 +258,41 @@ its executable is in `KINGDOM HEARTS 0.2 Birth by Sleep/Binaries/Win64`, and
 directly it runs and plays its video, four times out of four, with nothing of
 ours installed.
 
-### What actually fails for 0.2, and what it is not
+### Why 0.2 does not start from a launcher: `-applaunch`
 
-Launched **by a launcher**, its process is never created at all. The selector
-sits at 0% CPU, `WaitTitleProject.exe` draws the loading heart at 16% and waits
-in `mach_msg` for an event that does not come, and no `CreateProcessInternalW`
-for the game ever appears in a `WINEDEBUG=+process` trace. Launched by hand from
-the same engine, the same bottle and the same executable, the trace shows the
-process created and the game runs.
+Isolated to one token. Same flags, same environment, same engine, same bottle,
+same wine binary, same shell:
 
-So something about **how** it is launched decides it, and what that something is
-remains unknown. Eliminated by measurement, one variable at a time: the game
-itself, this project's patch (absent), the three `GST_*` variables (which come
-from the engine's own wine, not from a launcher), MetalFX, the graphics backend,
-the toolkit generation, which executable is launched, the process tree, Wine
-tracing, the Metal HUD, and — tested last, at the launcher author's own
-suggestion — invoking the executable by native path from a foreign working
-directory instead of through `--cx-app`. That was the strongest remaining
-hypothesis, and the game started anyway.
+    fails   Steam.exe <flags>  -applaunch 2552440
+    works   Steam.exe <flags>  steam://run/2552440//
 
-**This page deliberately does not name a culprit.** "A launcher's launch fails"
-is measured; "the launcher does X wrong" is not, and every specific X proposed
-so far has been tested and survived. Naming one would be inventing a cause to
-finish a sentence.
+**This package is not a game, it is a menu that asks Steam for a title**, and
+that second request is what `-applaunch` does not service. Captured live while it
+was hung: one shell process and no `steam.exe steam://run/...` anywhere, against
+two shells in every working run. Almost no other title makes a second request of
+Steam, which is why nothing else shows this.
 
-**A warning about the instrument, paid for twice.** With a probe DLL beside it,
-0.2 launched; without, it did not — which looked like a finding and was noise
-from whatever the probe changed. And the probe's environment dump lists a fixed
-set of variable names rather than the whole environment, so several hours were
-spent testing against a list that was never complete. Both are the same mistake:
-believing an instrument about a question it was not built to answer.
+The route to it is worth as much as the answer. Every candidate was tested one
+at a time and every one came back negative — the game, this project's patch
+(absent), the three `GST_*` variables, MetalFX, the graphics backend, the
+toolkit, `WINEMSYNC`, the Metal HUD and its elements, the UE4 hack, Metal
+argument buffers, `ROSETTA_ADVERTISE_AVX`, `D3DM_MTL4`, which executable is
+launched, the process tree, Wine tracing, the working directory, `--cx-app`
+versus a native path, a cold Steam, and finally all fourteen environment
+variables at once. Nineteen negatives.
+
+It broke open only when the launcher's own log was read instead of its author's
+description of it. The log showed the real command launched **Steam**, not the
+game — so every replication all evening had been of the wrong chain — and that
+three of the values reported had the opposite settings in what actually ran.
+
+**Two instrument failures are recorded here rather than dropped.** A probe DLL
+beside the game made it launch, which looked like a finding and was noise from
+whatever the probe changed. And the probe's environment dump listed a fixed set
+of names rather than the whole environment, so hours of comparison were made
+against a list that could not have contained the answer. Both are the same
+mistake: trusting an instrument about a question it was not built to answer. The
+dump now lists every name present, values only for engine knobs.
 
 ## Caveats
 
