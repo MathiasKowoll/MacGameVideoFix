@@ -1,4 +1,9 @@
-# Built app — distributed as a release asset, not tracked
+# Built app — distributed as a release asset, not tracked.
+# The path is the CURRENT bundle name: this rule kept naming
+# MortalShell2MacFix.app after the rename, so the built bundle -- including
+# third-party codec payloads that must not live in the repository -- was
+# silently tracked from the rename commit onward.
+app/MacGameVideoFix.app/
 app/MortalShell2MacFix.app/
 *.zip
 .DS_Store
