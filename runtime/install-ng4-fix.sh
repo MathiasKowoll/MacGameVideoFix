@@ -36,10 +36,12 @@
 # title takes another I/O path and plays; with it in place it dies earlier, for
 # reasons that are its own and not this project's.
 #
-# TOOLKIT. This title runs on Apple's Game Porting Toolkit 3.0 and stalls on
-# 4.0b2, which is what CrossOver Preview ships by default. That is a defect in
-# the newer toolkit rather than anything a proxy can reach -- see the wiki --
-# and the app can put 3.0 back.
+# TOOLKIT. This title needs Apple's Game Porting Toolkit 3.0. On 4.0b2, measured
+# 2026-08-31, the Metal 4 submission queue parks in IOGPUCommandQueueWaitMTLEvent
+# with the GPU idle, so nothing is ever presented and the window does not reach
+# full screen; it also takes about five times as long to reach a cutscene. Setting
+# D3DM_MTL4=0 removes that queue and the stall with it. Neither is anything a
+# proxy can reach -- see the wiki -- and the app can put 3.0 back.
 #
 # Part of MacGameVideoFix — https://github.com/MathiasKowoll/MacGameVideoFix
 # SPDX-License-Identifier: GPL-3.0-or-later
