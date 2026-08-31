@@ -931,6 +931,7 @@ static HRESULT (WINAPI *real_MFTEnumEx)(GUID, UINT32, const REG_TYPE_INFO *,
                                         const REG_TYPE_INFO *, void ***, UINT32 *);
 static HRESULT (WINAPI *real_MFCreateSourceReaderFromByteStream)(void *, void *, void **);
 static HRESULT (WINAPI *real_MFCreateSourceReaderFromURL)(LPCWSTR, void *, void **);
+static HRESULT (WINAPI *real_MFCreateSourceReaderFromMediaSource)(void *, void *, void **);
 static HRESULT (WINAPI *real_MFCreateDXGIDeviceManager)(UINT *, void **);
 
 /* Refuse the DXGI device manager.
@@ -1056,6 +1057,55 @@ static HRESULT WINAPI my_SetCurrentMediaType(void *self, DWORD stream, DWORD *re
     return hr;
 }
 
+/* The geometry of one decoded frame, read rather than guessed.
+ *
+ * A green band along the bottom of Peace Walker's cutscenes survived filling
+ * the buffer's unwritten tail, so the tail was not the cause. What settles it
+ * is the buffer's own numbers: whether it is a 2D buffer at all, what it says
+ * its lengths are, and what pitch it reports. Raw vtable calls, like the rest
+ * of this file -- no Media Foundation headers are included here.
+ *
+ *   IMFSample:      GetBufferByIndex 40 (IUnknown 0-2, IMFAttributes 3-32)
+ *   IMFMediaBuffer: QueryInterface 0, GetCurrentLength 5, GetMaxLength 7
+ *   IMF2DBuffer2:   GetScanline0AndPitch 5, GetContiguousLength 7
+ */
+static const GUID guid_IID_IMF2DBuffer2 =
+    { 0x33ae5ea6, 0x4316, 0x436f, { 0x8d, 0xdd, 0xd7, 0x3d, 0x22, 0xf8, 0x29, 0xec } };
+
+static void log_frame_geometry(void *sample)
+{
+    void **svt, *buffer = NULL, *two = NULL;
+    DWORD cur = 0, max = 0, contig = 0;
+    BYTE *scan0 = NULL;
+    LONG pitch = 0;
+
+    if (!sample) return;
+    svt = *(void ***)sample;
+    if (FAILED(((HRESULT (WINAPI *)(void *, DWORD, void **))svt[40])(sample, 0, &buffer)) || !buffer)
+        return;
+
+    {
+        void **bvt = *(void ***)buffer;
+        ((HRESULT (WINAPI *)(void *, DWORD *))bvt[5])(buffer, &cur);
+        ((HRESULT (WINAPI *)(void *, DWORD *))bvt[7])(buffer, &max);
+
+        if (SUCCEEDED(((HRESULT (WINAPI *)(void *, const GUID *, void **))bvt[0])
+                          (buffer, &guid_IID_IMF2DBuffer2, &two)) && two)
+        {
+            void **tvt = *(void ***)two;
+            ((HRESULT (WINAPI *)(void *, DWORD *))tvt[7])(two, &contig);
+            ((HRESULT (WINAPI *)(void *, BYTE **, LONG *))tvt[5])(two, &scan0, &pitch);
+            logf_("frame geometry: 2D yes | current %lu | max %lu | contiguous %lu | pitch %ld",
+                  (unsigned long)cur, (unsigned long)max, (unsigned long)contig, (long)pitch);
+            ((ULONG (WINAPI *)(void *))tvt[2])(two);
+        }
+        else
+            logf_("frame geometry: 2D NO | current %lu | max %lu", (unsigned long)cur, (unsigned long)max);
+
+        ((ULONG (WINAPI *)(void *))bvt[2])(buffer);
+    }
+}
+
 static HRESULT WINAPI my_ReadSample(void *self, DWORD stream, DWORD flags,
                                     DWORD *actual, DWORD *sflags,
                                     LONGLONG *ts, void **sample)
@@ -1068,6 +1118,7 @@ static HRESULT WINAPI my_ReadSample(void *self, DWORD stream, DWORD flags,
         LONG g = InterlockedIncrement(&got);
         if (g == 1 || g == 50)
             logf_("ReadSample: sample %ld arrived  << the reader is producing", g);
+        if (g == 1) log_frame_geometry(*sample);
     }
     else if (FAILED(hr))
     {
@@ -1087,6 +1138,38 @@ static HRESULT WINAPI my_MFCreateSourceReaderFromByteStream(void *stream, void *
     LONG n = InterlockedIncrement(&made);
     if (n == 1 || FAILED(hr))
         logf_("MFCreateSourceReaderFromByteStream -> 0x%08lx (reader %ld)", hr, n);
+    if (SUCCEEDED(hr) && reader && *reader)
+    {
+        static void *gn, *sc, *rs;
+        patch_slot("GetNativeMediaType",  *reader, SLOT_GET_NATIVE_TYPE,
+                   (void *)my_GetNativeMediaType,  &gn);
+        patch_slot("SetCurrentMediaType", *reader, SLOT_SET_CURRENT_TYPE,
+                   (void *)my_SetCurrentMediaType, &sc);
+        patch_slot("ReadSample",          *reader, SLOT_READ_SAMPLE,
+                   (void *)my_ReadSample,          &rs);
+        real_GetNativeMediaType  = (HRESULT (WINAPI *)(void *, DWORD, DWORD, void **))gn;
+        real_SetCurrentMediaType = (HRESULT (WINAPI *)(void *, DWORD, DWORD *, void *))sc;
+        real_ReadSample = (HRESULT (WINAPI *)(void *, DWORD, DWORD, DWORD *, DWORD *,
+                                              LONGLONG *, void **))rs;
+    }
+    return hr;
+}
+
+/* The third way in, and the one this file did not watch.
+ *
+ * Metal Gear Solid Peace Walker decrypts its video in memory and builds its own
+ * media source, so it reaches the reader through neither a URL nor a byte
+ * stream. The reader was therefore never wrapped, GetNativeMediaType never
+ * hooked, and the log had nothing to say about the format -- which is what was
+ * needed to explain a green band along the bottom of its frames. */
+static HRESULT WINAPI my_MFCreateSourceReaderFromMediaSource(void *source, void *attrs, void **reader)
+{
+    static LONG made;
+    HRESULT hr = real_MFCreateSourceReaderFromMediaSource(source, attrs, reader);
+    LONG n = InterlockedIncrement(&made);
+
+    if (n == 1 || FAILED(hr))
+        logf_("MFCreateSourceReaderFromMediaSource -> 0x%08lx (reader %ld)", hr, n);
     if (SUCCEEDED(hr) && reader && *reader)
     {
         static void *gn, *sc, *rs;
@@ -2490,6 +2573,37 @@ static HRESULT WINAPI my_Direct3DCreate9Ex(UINT sdk, void **out)
  *
  * First-chance and non-intrusive -- it always continues the search, so it
  * changes no behaviour and only writes what would have happened anyway. */
+/* Which media libraries are in the process, asked at a chosen instant.
+ *
+ * The 5 s tick reports these as they appear, which answers "did it load" but
+ * not "had it loaded when the fault happened" -- a tick says only that the
+ * module was there by that tick. In two Peace Walker runs the first access
+ * violation and the winegstreamer load fell inside the same tick, and the order
+ * between them decides whether the faulting buffer could have come from the
+ * media source at all. Reading an order out of the tick would be reading the
+ * instrument, not the game, so the fault handler asks again at the fault. */
+static const char *const media_modules[] = {
+    "mfplat.dll", "mfreadwrite.dll", "mf.dll", "mfmediaengine.dll",
+    "winegstreamer.dll", "quartz.dll", "msdmo.dll", "dxva2.dll",
+    "evr.dll", "mfsrcsnk.dll", "mfmp4srcsnk.dll", "d3d11.dll", "d3d12.dll"
+};
+
+static void log_media_modules(const char *why)
+{
+    char line[600];
+    unsigned m;
+
+    line[0] = 0;
+    for (m = 0; m < sizeof(media_modules) / sizeof(media_modules[0]); m++)
+    {
+        if (!GetModuleHandleA(media_modules[m])) continue;
+        if (line[0]) lstrcatA(line, " ");
+        lstrcatA(line, media_modules[m]);
+    }
+    logf_("    media modules %s: %s", why, line[0] ? line : "(none)");
+}
+
+
 static LONG CALLBACK note_exception(EXCEPTION_POINTERS *info)
 {
     static LONG said;
@@ -2566,6 +2680,10 @@ static LONG CALLBACK note_exception(EXCEPTION_POINTERS *info)
             logf_("    access violation %s address %p",
                   info->ExceptionRecord->ExceptionInformation[0] ? "writing" : "reading",
                   (void *)info->ExceptionRecord->ExceptionInformation[1]);
+
+        /* Asked here, not at a tick: this is the only moment that answers
+         * whether a media source existed when the pointer was dereferenced. */
+        log_media_modules("at this fault");
     }
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -3308,19 +3426,14 @@ static DWORD WINAPI watchdog(LPVOID unused)
          * Asking whether a module is present answers that without caring how
          * it got there. */
         {
-            static const char *const media[] = {
-                "mfplat.dll", "mfreadwrite.dll", "mf.dll", "mfmediaengine.dll",
-                "winegstreamer.dll", "quartz.dll", "msdmo.dll", "dxva2.dll",
-                "evr.dll", "mfsrcsnk.dll", "mfmp4srcsnk.dll", "d3d11.dll", "d3d12.dll"
-            };
             static LONG modules_present;
             unsigned m;
-            for (m = 0; m < sizeof(media) / sizeof(media[0]); m++)
+            for (m = 0; m < sizeof(media_modules) / sizeof(media_modules[0]); m++)
             {
-                if (!(modules_present & (1 << m)) && GetModuleHandleA(media[m]))
+                if (!(modules_present & (1 << m)) && GetModuleHandleA(media_modules[m]))
                 {
                     modules_present |= (1 << m);
-                    logf_("  now loaded: %s", media[m]);
+                    logf_("  now loaded: %s", media_modules[m]);
                 }
             }
         }
@@ -3510,6 +3623,9 @@ static DWORD WINAPI worker(LPVOID unused)
             { "mfreadwrite.dll", "MFCreateSourceReaderFromURL",
               (void *)my_MFCreateSourceReaderFromURL,
               (void **)&real_MFCreateSourceReaderFromURL },
+            { "mfreadwrite.dll", "MFCreateSourceReaderFromMediaSource",
+              (void *)my_MFCreateSourceReaderFromMediaSource,
+              (void **)&real_MFCreateSourceReaderFromMediaSource },
         };
         size_t i;
         int got = 0;

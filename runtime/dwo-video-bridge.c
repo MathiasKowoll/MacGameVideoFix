@@ -1002,10 +1002,79 @@ static void *dxgibuf_vtbl[] =
     dxgibuf_GetUnknown, dxgibuf_SetUnknown,
 };
 
-static HRESULT (WINAPI *real_buffer_qi)(void *, REFIID, void **);
+/* One buffer class was enough until 2026-08-31.
+ *
+ * The comment further down said it before it mattered: a vtable patch covers
+ * every instance of that class -- but only that class. Engine patch 0036 gives
+ * video frames a 2D-capable buffer, a different mfplat class from the plain
+ * memory buffer, and a hook placed once on the first buffer seen then missed
+ * every frame of a stream that changed class. NieR Replicant asks its frame for
+ * IMFDXGIBuffer, does not check the HRESULT, and dereferenced the NULL that
+ * Wine handed back when the query arrived unhooked.
+ *
+ * So every class is registered as it appears, each with its own original. The
+ * table is published before the hook is installed, so a query that arrives
+ * mid-registration finds the original rather than a hole. */
+typedef HRESULT (WINAPI *buffer_qi_fn)(void *, REFIID, void **);
+
+static struct { void **vtbl; buffer_qi_fn orig; } buffer_classes[8];
+static LONG buffer_classes_used;
+
+static buffer_qi_fn buffer_class_original(void *object)
+{
+    void **vtbl = *(void ***)object;
+    LONG i, n = buffer_classes_used;
+
+    for (i = 0; i < n && i < 8; i++)
+        if (buffer_classes[i].vtbl == vtbl) return buffer_classes[i].orig;
+    return NULL;
+}
+
+static HRESULT WINAPI buffer_qi(void *self, REFIID iid, void **out);
+
+/* Additive by construction: a class already known is left alone, and a failed
+ * patch withdraws its own entry. */
+static void register_buffer_class(void *object)
+{
+    void **vtbl;
+    LONG n;
+
+    if (!object || buffer_class_original(object)) return;
+
+    vtbl = *(void ***)object;
+    if (vtbl[0] == (void *)buffer_qi) return;   /* ours already; never chain to self */
+
+    n = buffer_classes_used;
+    if (n >= 8) return;
+
+    buffer_classes[n].vtbl = vtbl;
+    buffer_classes[n].orig = (buffer_qi_fn)vtbl[0];
+    buffer_classes_used = n + 1;
+
+    if (!patch_vtable_slot(object, 0, buffer_qi))
+    {
+        buffer_classes_used = n;
+        logf_("buffer class %p could NOT be hooked", (void *)vtbl);
+        return;
+    }
+    logf_("buffer class %p hooked (%ld known)", (void *)vtbl, (long)(n + 1));
+}
+
 
 static HRESULT WINAPI buffer_qi(void *self, REFIID iid, void **out)
 {
+    buffer_qi_fn real_buffer_qi = buffer_class_original(self);
+
+    if (!real_buffer_qi)
+    {
+        /* Cannot happen while the table is only ever appended to, but a query
+         * answered by guesswork would be worse than one refused. */
+        static LONG told;
+        if (InterlockedIncrement(&told) == 1)
+            logf_("buffer QI from an unregistered class %p -- refusing", (void *)*(void ***)self);
+        if (out) *out = NULL;
+        return E_NOINTERFACE;
+    }
     {
         static LONG told;
         if (InterlockedIncrement(&told) <= 6)
@@ -1042,8 +1111,19 @@ static void upload_frame(IMFSample *sample)
     if (!sample || !video_device) return;
     if (FAILED(IMFSample_ConvertToContiguousBuffer(sample, &buffer)) || !buffer) return;
 
-    if (!real_buffer_qi)
-        real_buffer_qi = patch_vtable_slot(buffer, 0, buffer_qi);
+    /* Every frame, not once: a stream can change buffer class mid-flight, and a
+     * class already known costs one pointer compare. The buffer the sample owns
+     * is registered too -- the game queries the one it was given, and that is
+     * not always the contiguous one. */
+    register_buffer_class(buffer);
+    {
+        IMFMediaBuffer *own = NULL;
+        if (SUCCEEDED(IMFSample_GetBufferByIndex(sample, 0, &own)) && own)
+        {
+            register_buffer_class(own);
+            IMFMediaBuffer_Release(own);
+        }
+    }
 
     /*
      * ConvertToContiguousBuffer may hand back a different object from the one
