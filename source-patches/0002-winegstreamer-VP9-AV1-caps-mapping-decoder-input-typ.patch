@@ -1,0 +1,87 @@
+CARRIED FROM winevideo, NOT WRITTEN HERE
+========================================
+
+Origin      the winevideo project -- https://github.com/Jfishin/winevideo
+File        0002-winegstreamer-VP9-AV1-caps-mapping-decoder-input-typ.patch
+Carried     2026-08-31, from winevideo Patcher 0.5.0
+
+This patch is winevideo's work. It is copied here unchanged so that building
+this project's engine does not require their application to be installed; it is
+not ours, and nothing about carrying it makes it ours. The finding, the
+diagnosis and the code are theirs.
+
+LICENCE. It modifies dlls/winegstreamer, which is Wine -- copyright CodeWeavers
+and others, GNU Lesser General Public License version 2.1 or later. A patch to
+LGPL code is a derivative of it and carries the same terms, which is what makes
+carrying it here permitted. The notices in the files it touches are untouched.
+Source for everything built from it is this repository plus the Wine tree named
+in runtime/engine-built-for.json.
+
+If you want these patches, take them from winevideo rather than from us: theirs
+is where they are maintained, and this copy is a snapshot that will go stale.
+
+--- the patch as it was received begins here ---
+
+From c61def9b7a0e5dc092e50960a3433ae2c7d4f0f4 Mon Sep 17 00:00:00 2001
+From: winevideo contributors <contributors@winevideo.invalid>
+Date: Mon, 29 Jun 2026 02:40:37 -0400
+Subject: [PATCH 02/33] winegstreamer: VP9/AV1 caps mapping + decoder input
+ types
+
+---
+ dlls/winegstreamer/video_decoder.c |  2 ++
+ dlls/winegstreamer/wg_media_type.c | 18 ++++++++++++++++++
+ 2 files changed, 20 insertions(+)
+
+diff --git a/dlls/winegstreamer/video_decoder.c b/dlls/winegstreamer/video_decoder.c
+index 0f40241b2564ae1a2856e1b1aa21f68603b6f848..67f55008776b6b0d74ac2d673335ea6e23e44ab5 100644
+--- a/dlls/winegstreamer/video_decoder.c
++++ b/dlls/winegstreamer/video_decoder.c
+@@ -1818,6 +1818,8 @@ static const GUID *const wmv_decoder_input_types[] =
+     &MEDIASUBTYPE_WVC1,
+     &MEDIASUBTYPE_WMV3,
+     &MEDIASUBTYPE_VC1S,
++    &MFVideoFormat_AV1,
++    &MFVideoFormat_VP90,
+ };
+ static const GUID *const wmv_decoder_output_types[] =
+ {
+diff --git a/dlls/winegstreamer/wg_media_type.c b/dlls/winegstreamer/wg_media_type.c
+index b5ce04ef03e8af92a52217c0e4adfd16a2b52f1a..5ca350303c8a5e4534d8261063997c889d89936c 100644
+--- a/dlls/winegstreamer/wg_media_type.c
++++ b/dlls/winegstreamer/wg_media_type.c
+@@ -336,6 +336,20 @@ static void init_caps_from_video_mpeg(GstCaps *caps, const struct mpeg_video_for
+     gst_caps_set_simple(caps, "parsed", G_TYPE_BOOLEAN, TRUE, NULL);
+ }
+ 
++static void init_caps_from_video_vp9(GstCaps *caps, const MFVIDEOFORMAT *format, UINT format_size)
++{
++    init_caps_codec_data(caps, format + 1, format_size - sizeof(*format));
++    gst_structure_remove_field(gst_caps_get_structure(caps, 0), "format");
++    gst_structure_set_name(gst_caps_get_structure(caps, 0), "video/x-vp9");
++}
++
++static void init_caps_from_video_av1(GstCaps *caps, const MFVIDEOFORMAT *format, UINT format_size)
++{
++    init_caps_codec_data(caps, format + 1, format_size - sizeof(*format));
++    gst_structure_remove_field(gst_caps_get_structure(caps, 0), "format");
++    gst_structure_set_name(gst_caps_get_structure(caps, 0), "video/x-av1");
++}
++
+ static void init_caps_from_video_subtype(GstCaps *caps, const GUID *subtype, const void *format, UINT format_size)
+ {
+     if (IsEqualGUID(subtype, &MFVideoFormat_CVID))
+@@ -356,6 +370,10 @@ static void init_caps_from_video_subtype(GstCaps *caps, const GUID *subtype, con
+         return init_caps_from_video_indeo(caps, format, format_size);
+     if (IsEqualGUID(subtype, &MEDIASUBTYPE_MPEG1Payload))
+         return init_caps_from_video_mpeg(caps, format, format_size);
++    if (IsEqualGUID(subtype, &MFVideoFormat_AV1))
++        return init_caps_from_video_av1(caps, format, format_size);
++    if (IsEqualGUID(subtype, &MFVideoFormat_VP90))
++        return init_caps_from_video_vp9(caps, format, format_size);
+ 
+     GST_FIXME("Unsupported subtype " WG_GUID_FORMAT, WG_GUID_ARGS(*subtype));
+ }
+-- 
+2.50.1 (Apple Git-155)
+

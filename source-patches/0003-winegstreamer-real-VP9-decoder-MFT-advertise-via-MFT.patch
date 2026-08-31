@@ -1,0 +1,151 @@
+CARRIED FROM winevideo, NOT WRITTEN HERE
+========================================
+
+Origin      the winevideo project -- https://github.com/Jfishin/winevideo
+File        0003-winegstreamer-real-VP9-decoder-MFT-advertise-via-MFT.patch
+Carried     2026-08-31, from winevideo Patcher 0.5.0
+
+This patch is winevideo's work. It is copied here unchanged so that building
+this project's engine does not require their application to be installed; it is
+not ours, and nothing about carrying it makes it ours. The finding, the
+diagnosis and the code are theirs.
+
+LICENCE. It modifies dlls/winegstreamer, which is Wine -- copyright CodeWeavers
+and others, GNU Lesser General Public License version 2.1 or later. A patch to
+LGPL code is a derivative of it and carries the same terms, which is what makes
+carrying it here permitted. The notices in the files it touches are untouched.
+Source for everything built from it is this repository plus the Wine tree named
+in runtime/engine-built-for.json.
+
+If you want these patches, take them from winevideo rather than from us: theirs
+is where they are maintained, and this copy is a snapshot that will go stale.
+
+--- the patch as it was received begins here ---
+
+From bc48444176cabae3ee6148c81f4718c273d326cd Mon Sep 17 00:00:00 2001
+From: winevideo contributors <contributors@winevideo.invalid>
+Date: Mon, 29 Jun 2026 09:59:17 -0400
+Subject: [PATCH 03/33] winegstreamer: real VP9 decoder MFT (advertise via
+ MFTEnumEx + decode)
+
+Add CLSID_wg_vp9_decoder + vp9_decoder_create (mirrors h264 MFT, VP90/VP80
+in, NV12/I420/etc out) wired into mfplat.c class_objects[]. Makes
+MFTEnumEx(MFT_CATEGORY_VIDEO_DECODER, VP90) return a real winegstreamer-backed
+decoder so games' VP9 capability probe (e.g. Ninja Gaiden 4) passes instead of
+showing 'Failed to Play VP9'. Revert the earlier misplaced VP90/AV1 entries on
+wmv_decoder_input_types (wrong vehicle; never advertised in the registry).
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ dlls/winegstreamer/gst_private.h   |  1 +
+ dlls/winegstreamer/mfplat.c        |  3 ++
+ dlls/winegstreamer/video_decoder.c | 53 ++++++++++++++++++++++++++++--
+ 3 files changed, 55 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/winegstreamer/gst_private.h b/dlls/winegstreamer/gst_private.h
+index 84b7db4a14ce3c5b67cfe13496b19e711f98ac10..b5ff338a7bc09a08c7ab85a5a32b6920659da3cf 100644
+--- a/dlls/winegstreamer/gst_private.h
++++ b/dlls/winegstreamer/gst_private.h
+@@ -182,6 +182,7 @@ bool wg_video_format_is_rgb(enum wg_video_format format);
+ 
+ HRESULT aac_decoder_create(REFIID riid, void **ret);
+ HRESULT h264_decoder_create(REFIID riid, void **ret);
++HRESULT vp9_decoder_create(REFIID riid, void **ret);
+ HRESULT video_processor_create(REFIID riid, void **ret);
+ 
+ HRESULT h264_encoder_create(REFIID riid, void **ret);
+diff --git a/dlls/winegstreamer/mfplat.c b/dlls/winegstreamer/mfplat.c
+index 4088a935625c89e81837ab35eb0b9fadb4207032..6d618fad3da24da91ef115a948ab6efc20eb46af 100644
+--- a/dlls/winegstreamer/mfplat.c
++++ b/dlls/winegstreamer/mfplat.c
+@@ -125,6 +125,8 @@ static const GUID CLSID_wg_video_processor = {0xd527607f,0x89cb,0x4e94,{0x95,0x7
+ static const GUID CLSID_wg_aac_decoder = {0xe7889a8a,0x2083,0x4844,{0x83,0x70,0x5e,0xe3,0x49,0xb1,0x45,0x03}};
+ static const GUID CLSID_wg_h264_decoder = {0x1f1e273d,0x12c0,0x4b3a,{0x8e,0x9b,0x19,0x33,0xc2,0x49,0x8a,0xea}};
+ static const GUID CLSID_wg_h264_encoder = {0x6c34de69,0x4670,0x46cd,{0x8c,0xb4,0x1f,0x2f,0xa1,0xdf,0xfb,0x65}};
++/* winevideo VP9 decoder MFT (public CLSID, InprocServer32 -> winegstreamer.dll) */
++static const GUID CLSID_wg_vp9_decoder = {0xe3aaf548,0xc9a4,0x4c6e,{0x23,0x4d,0x5a,0xda,0x37,0x4b,0x00,0x00}};
+ 
+ static const struct class_object
+ {
+@@ -138,6 +140,7 @@ class_objects[] =
+     { &CLSID_wg_aac_decoder, &aac_decoder_create },
+     { &CLSID_wg_h264_decoder, &h264_decoder_create },
+     { &CLSID_wg_h264_encoder, &h264_encoder_create },
++    { &CLSID_wg_vp9_decoder, &vp9_decoder_create },
+ };
+ 
+ HRESULT mfplat_get_class_object(REFCLSID rclsid, REFIID riid, void **obj)
+diff --git a/dlls/winegstreamer/video_decoder.c b/dlls/winegstreamer/video_decoder.c
+index 67f55008776b6b0d74ac2d673335ea6e23e44ab5..9f905b4929e8db425ba6b6be406517a4d7895108 100644
+--- a/dlls/winegstreamer/video_decoder.c
++++ b/dlls/winegstreamer/video_decoder.c
+@@ -1767,6 +1767,57 @@ HRESULT h264_decoder_create(REFIID riid, void **out)
+     return hr;
+ }
+ 
++static const GUID *const vp9_decoder_input_types[] =
++{
++    &MFVideoFormat_VP90,
++    &MFVideoFormat_VP80,
++};
++
++HRESULT vp9_decoder_create(REFIID riid, void **out)
++{
++    const MFVIDEOFORMAT output_format =
++    {
++        .dwSize = sizeof(MFVIDEOFORMAT),
++        .videoInfo = {.dwWidth = 1920, .dwHeight = 1080},
++        .guidFormat = MFVideoFormat_I420,
++    };
++    const MFVIDEOFORMAT input_format =
++    {
++        .dwSize = sizeof(MFVIDEOFORMAT),
++        .guidFormat = MFVideoFormat_VP90,
++    };
++    struct video_decoder *decoder;
++    HRESULT hr;
++
++    TRACE("riid %s, out %p.\n", debugstr_guid(riid), out);
++
++    if (FAILED(hr = check_video_transform_support(&input_format, &output_format)))
++    {
++        ERR_(winediag)("GStreamer doesn't support VP9 decoding, please install appropriate plugins\n");
++        return hr;
++    }
++
++    if (FAILED(hr = video_decoder_create_with_types(vp9_decoder_input_types, ARRAY_SIZE(vp9_decoder_input_types),
++            video_decoder_output_types, ARRAY_SIZE(video_decoder_output_types), NULL, &decoder)))
++        return hr;
++
++    decoder->input_info.dwFlags = MFT_INPUT_STREAM_WHOLE_SAMPLES | MFT_INPUT_STREAM_SINGLE_SAMPLE_PER_BUFFER
++            | MFT_INPUT_STREAM_FIXED_SAMPLE_SIZE;
++    decoder->input_info.cbSize = 0x1000;
++    decoder->output_info.dwFlags = MFT_OUTPUT_STREAM_WHOLE_SAMPLES | MFT_OUTPUT_STREAM_SINGLE_SAMPLE_PER_BUFFER
++            | MFT_OUTPUT_STREAM_FIXED_SAMPLE_SIZE;
++    decoder->output_info.cbSize = 1920 * 1088 * 2;
++
++    decoder->wg_transform_attrs.output_plane_align = 15;
++    decoder->wg_transform_attrs.allow_format_change = TRUE;
++
++    TRACE("Created vp9 transform %p.\n", &decoder->IMFTransform_iface);
++
++    hr = IMFTransform_QueryInterface(&decoder->IMFTransform_iface, riid, out);
++    IMFTransform_Release(&decoder->IMFTransform_iface);
++    return hr;
++}
++
+ extern GUID MFVideoFormat_IV50;
+ static const GUID *const iv50_decoder_input_types[] =
+ {
+@@ -1818,8 +1869,6 @@ static const GUID *const wmv_decoder_input_types[] =
+     &MEDIASUBTYPE_WVC1,
+     &MEDIASUBTYPE_WMV3,
+     &MEDIASUBTYPE_VC1S,
+-    &MFVideoFormat_AV1,
+-    &MFVideoFormat_VP90,
+ };
+ static const GUID *const wmv_decoder_output_types[] =
+ {
+-- 
+2.50.1 (Apple Git-155)
+

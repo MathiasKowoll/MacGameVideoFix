@@ -1,0 +1,99 @@
+CARRIED FROM winevideo, NOT WRITTEN HERE
+========================================
+
+Origin      the winevideo project -- https://github.com/Jfishin/winevideo
+File        0008-winegstreamer-always-provide-2D-capable-output-sampl.patch
+Carried     2026-08-31, from winevideo Patcher 0.5.0
+
+This patch is winevideo's work. It is copied here unchanged so that building
+this project's engine does not require their application to be installed; it is
+not ours, and nothing about carrying it makes it ours. The finding, the
+diagnosis and the code are theirs.
+
+LICENCE. It modifies dlls/winegstreamer, which is Wine -- copyright CodeWeavers
+and others, GNU Lesser General Public License version 2.1 or later. A patch to
+LGPL code is a derivative of it and carries the same terms, which is what makes
+carrying it here permitted. The notices in the files it touches are untouched.
+Source for everything built from it is this repository plus the Wine tree named
+in runtime/engine-built-for.json.
+
+If you want these patches, take them from winevideo rather than from us: theirs
+is where they are maintained, and this copy is a snapshot that will go stale.
+
+--- the patch as it was received begins here ---
+
+From 5772f38d1084c707afab984079fa133a0799e5c5 Mon Sep 17 00:00:00 2001
+From: winevideo contributors <contributors@winevideo.invalid>
+Date: Wed, 1 Jul 2026 22:28:48 -0400
+Subject: [PATCH 08/33] winegstreamer: always provide 2D-capable output samples
+ on macOS
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+UE Electra QIs the decoded frame's media buffer for IMF2DBuffer and rejects
+the frame (and tears down the whole playback session) when it is absent —
+which it always was, since without a D3D manager the decoder filled the
+caller-provided plain memory buffer. Wine's sample allocator already creates
+IMF2DBuffer-capable system-memory buffers (MFCreate2DMediaBuffer), so on
+macOS set MFT_OUTPUT_STREAM_PROVIDES_SAMPLES unconditionally and route
+output through the allocator. The h264/vp9 creator functions overwrote
+output_info.dwFlags after common init; make those assignments additive.
+
+Verified headlessly with mft2d_probe (drives the MFT by CLSID exactly like
+Electra, feeds Screamer's milestone.h264): PROVIDES_SAMPLES=1, frames
+deliver, QI(IMF2DBuffer) + Lock2D succeed, pitch 1920.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ dlls/winegstreamer/video_decoder.c | 13 ++++++++++---
+ 1 file changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/dlls/winegstreamer/video_decoder.c b/dlls/winegstreamer/video_decoder.c
+index 7a62a15738c478970af43e8849ebdae2bb91dce7..fa7148bef616ac5af40e5938d8d155450f7c3dd8 100644
+--- a/dlls/winegstreamer/video_decoder.c
++++ b/dlls/winegstreamer/video_decoder.c
+@@ -882,7 +882,7 @@ static HRESULT WINAPI transform_ProcessMessage(IMFTransform *iface, MFT_MESSAGE_
+ 
+         uninit_allocator(decoder);
+         decoder->have_d3d_manager = !!param;
+-        if (param)
++        if (param || is_macos())
+             decoder->output_info.dwFlags |= MFT_OUTPUT_STREAM_PROVIDES_SAMPLES;
+         else
+             decoder->output_info.dwFlags &= ~MFT_OUTPUT_STREAM_PROVIDES_SAMPLES;
+@@ -1698,6 +1698,13 @@ static HRESULT video_decoder_create_with_types(const GUID *const *input_types, U
+                     &MFT_DECODER_EXPOSE_OUTPUT_TYPES_IN_NATIVE_ORDER, FALSE)))
+         goto failed;
+ 
++    /* winevideo: on macOS always provide output samples ourselves — the
++     * sample allocator's system-memory buffers implement IMF2DBuffer, which
++     * consumers like UE Electra require on video frames (a caller-provided
++     * plain memory buffer does not, so they reject every frame). */
++    if (is_macos())
++        decoder->output_info.dwFlags |= MFT_OUTPUT_STREAM_PROVIDES_SAMPLES;
++
+     if (FAILED(hr = MFCreateAttributes(&decoder->output_attributes, 0)))
+         goto failed;
+     if (FAILED(hr = wg_sample_queue_create(&decoder->wg_sample_queue)))
+@@ -1772,7 +1779,7 @@ HRESULT h264_decoder_create(REFIID riid, void **out)
+     decoder->input_info.dwFlags = MFT_INPUT_STREAM_WHOLE_SAMPLES | MFT_INPUT_STREAM_SINGLE_SAMPLE_PER_BUFFER
+             | MFT_INPUT_STREAM_FIXED_SAMPLE_SIZE;
+     decoder->input_info.cbSize = 0x1000;
+-    decoder->output_info.dwFlags = MFT_OUTPUT_STREAM_WHOLE_SAMPLES | MFT_OUTPUT_STREAM_SINGLE_SAMPLE_PER_BUFFER
++    decoder->output_info.dwFlags |= MFT_OUTPUT_STREAM_WHOLE_SAMPLES | MFT_OUTPUT_STREAM_SINGLE_SAMPLE_PER_BUFFER
+             | MFT_OUTPUT_STREAM_FIXED_SAMPLE_SIZE;
+     decoder->output_info.cbSize = 1920 * 1088 * 2;
+ 
+@@ -1823,7 +1830,7 @@ HRESULT vp9_decoder_create(REFIID riid, void **out)
+     decoder->input_info.dwFlags = MFT_INPUT_STREAM_WHOLE_SAMPLES | MFT_INPUT_STREAM_SINGLE_SAMPLE_PER_BUFFER
+             | MFT_INPUT_STREAM_FIXED_SAMPLE_SIZE;
+     decoder->input_info.cbSize = 0x1000;
+-    decoder->output_info.dwFlags = MFT_OUTPUT_STREAM_WHOLE_SAMPLES | MFT_OUTPUT_STREAM_SINGLE_SAMPLE_PER_BUFFER
++    decoder->output_info.dwFlags |= MFT_OUTPUT_STREAM_WHOLE_SAMPLES | MFT_OUTPUT_STREAM_SINGLE_SAMPLE_PER_BUFFER
+             | MFT_OUTPUT_STREAM_FIXED_SAMPLE_SIZE;
+     decoder->output_info.cbSize = 1920 * 1088 * 2;
+ 
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,216 @@
+From: MacGameVideoFix <https://github.com/MathiasKowoll/MacGameVideoFix>
+Subject: [PATCH] winegstreamer: 2D-capable buffers from the media source too
+
+WHERE THIS CAME FROM
+
+This patch belongs to MacGameVideoFix's own series, `mgvf-NNNN`, which is kept
+separate from winevideo's precisely so that neither is mistaken for the other.
+It is applied alongside theirs and after them, but it is not one of theirs. It was written on 2026-08-31 in
+MacGameVideoFix, from reading winegstreamer's own source, after a title crashed
+in a way winevideo's 0008 describes exactly but does not reach. It is offered
+here so that winevideo, Procyon, or anyone else carrying a patched winegstreamer
+can take it if they want it; nothing in it is specific to this project.
+
+THE FAULT
+
+An application asks a decoded video frame for IMF2DBuffer2, is told the
+interface does not exist, and dereferences the NULL it was handed. Measured in
+METAL GEAR SOLID: Peace Walker (Master Collection) on wine-11.0-8726-g2e2f5fca349,
+x86_64, macOS on Apple Silicon:
+
+    EXCEPTION 0xc0000005 at 0x1400609e7   movq (%rcx), %rax
+    rcx = 0            the pointer being dereferenced
+    rax = 0x80004002   E_NOINTERFACE, the HRESULT the call just returned
+    rdx = 0x140dacf70  -> {33AE5EA6-4316-436F-8DDD-D73D22F829EC} = IID_IMF2DBuffer2
+    r8  = a stack address, the ppv out-parameter
+
+Those are the arguments of QueryInterface(this, riid, ppv) in the x64 calling
+convention, still in place when the fault hit. The game does not check the
+HRESULT. A module dump taken inside the fault handler, at the instant of the
+fault, showed winegstreamer.dll among the loaded modules, which is what places
+the buffer in this source rather than somewhere else.
+
+The refusal comes from mfplat: memory_buffer_QueryInterface (dlls/mfplat/buffer.c)
+answers only IID_IMFMediaBuffer and IID_IUnknown and returns E_NOINTERFACE for
+everything else. The 1D/2D buffer in the same file would have answered.
+
+WHY 0008 DOES NOT COVER IT
+
+winevideo's 0008, "winegstreamer: always provide 2D-capable output samples on
+macOS", is this same fault, found through UE Electra, and its comment states the
+mechanism plainly:
+
+    the sample allocator's system-memory buffers implement IMF2DBuffer, which
+    consumers like UE Electra require on video frames (a caller-provided plain
+    memory buffer does not, so they reject every frame)
+
+But 0008 changes dlls/winegstreamer/video_decoder.c -- the decoder MFT. A title
+whose video arrives through winegstreamer's MEDIA SOURCE never goes near it: the
+media source produces its own samples in media_stream_send_sample, which called
+MFCreateMemoryBuffer and so handed out exactly the buffer 0008 exists to avoid.
+Any title that resolves its own byte stream takes that path. This patch applies
+the same idea one file over.
+
+WHAT IT DOES
+
+For video streams the buffer now comes from MFCreateMediaBufferFromMediaType,
+which returns a 2D-capable buffer when the media type carries a subtype and a
+frame size, and falls back to a 1-D buffer of min_length when it does not --
+which is the previous behaviour exactly. Two guards ride along:
+
+  - If the locked linear view turns out SMALLER than what the parser produced,
+    that frame goes back on a plain buffer rather than overrunning the
+    allocation. The two are negotiated together and should agree; this is for
+    the case where they do not.
+  - If it is LARGER, the tail would never be written, and a fresh allocation is
+    not blank. It is filled with black -- luma 0, chroma 128 -- rather than left
+    as whatever the heap held. Zeros would be bright green in YUV.
+
+Audio is deliberately left on MFCreateMemoryBuffer: it has no geometry, nothing
+asks it for IMF2DBuffer2, and the audio branch of
+MFCreateMediaBufferFromMediaType computes a length of its own that there is no
+reason to disturb here.
+
+WHAT WAS MEASURED, AND WHAT WAS NOT
+
+With this patch the title plays its cutscenes: eleven minutes of play, two
+separate Media Foundation sessions, two different video files, zero exceptions,
+where before it died on the first frame of the first one.
+
+Nineteen titles that use Media Foundation, DirectShow or neither were exercised
+on an engine carrying this patch, and no failure was traced to it. That is
+weaker than it sounds and is stated plainly: the graphics toolkit generation was
+not pinned per launch during that pass, so no individual result is tied to a
+known toolkit.
+
+A green band along the bottom of the frame in some of that title's cutscenes is
+NOT caused by this patch, though an earlier version of this message said it was.
+Measured from inside the process: the video is I420 1920x1080 and the buffer
+reports current 3110400, max 3110400, contiguous 3110400 -- three equal lengths,
+so there is no unwritten tail for the fill above to touch. The plain buffer this
+patch replaces was allocated at exactly the same size, so the bytes reaching the
+application are identical either way; only the buffer's type changed. The band
+appears in some cutscenes and not others, and nothing in this path distinguishes
+one from another. Before this patch nobody had seen a frame of that title at
+all, because it crashed on the first one.
+
+SPDX-License-Identifier: LGPL-2.1-or-later
+
+diff --git a/dlls/winegstreamer/media_source.c b/dlls/winegstreamer/media_source.c
+--- a/dlls/winegstreamer/media_source.c
++++ b/dlls/winegstreamer/media_source.c
+@@ -710,22 +710,112 @@
+         flush_token_queue(source->streams[i], FALSE);
+ 
+     return IMFMediaEventQueue_QueueEventParamVar(source->event_queue, MESourceStopped, &GUID_NULL, S_OK, NULL);
++}
++
++/* winevideo: video frames must arrive in a buffer that implements IMF2DBuffer2.
++ *
++ * MFCreateMemoryBuffer makes a plain 1-D buffer, and mfplat's
++ * memory_buffer_QueryInterface answers only IMFMediaBuffer and IUnknown, so a
++ * caller that asks a frame for IMF2DBuffer2 is handed E_NOINTERFACE with the
++ * out-pointer left NULL. Metal Gear Solid Peace Walker asks and does not check
++ * the HRESULT: it loads the vtable from that NULL and dies on its first frame.
++ * video_decoder.c already provides its own samples on macOS for the same
++ * reason; the decoder MFT was covered and this media source was not, so a title
++ * that resolves its own byte stream never benefited.
++ *
++ * MFCreateMediaBufferFromMediaType returns a 2D-capable buffer when the type
++ * carries a subtype and a frame size, and falls back to a 1-D buffer of
++ * min_length when it does not, which is what happened before. Audio is left on
++ * the old path deliberately: it has no geometry, nothing asks it for
++ * IMF2DBuffer2, and the audio branch computes a length of its own.
++ *
++ * luma_size is where the luma plane ends in the buffer's linear view, which is
++ * the planes packed with no row padding. It is what lets an unwritten tail be
++ * filled with black rather than with zeros -- see the fill below. Zero means
++ * the format was not one whose split is known here. */
++static HRESULT media_stream_create_buffer(struct media_stream *stream, DWORD size,
++        DWORD *luma_size, IMFMediaBuffer **buffer)
++{
++    IMFMediaType *media_type;
++    GUID major, subtype;
++    UINT64 frame_size;
++
++    *buffer = NULL;
++    *luma_size = 0;
++
++    if (SUCCEEDED(stream_descriptor_get_media_type(stream->descriptor, &media_type)))
++    {
++        if (SUCCEEDED(IMFMediaType_GetMajorType(media_type, &major)) && IsEqualGUID(&major, &MFMediaType_Video))
++        {
++            MFCreateMediaBufferFromMediaType(media_type, 0, size, 0, buffer);
++
++            if (*buffer
++                    && SUCCEEDED(IMFMediaType_GetGUID(media_type, &MF_MT_SUBTYPE, &subtype))
++                    && SUCCEEDED(IMFMediaType_GetUINT64(media_type, &MF_MT_FRAME_SIZE, &frame_size))
++                    && (IsEqualGUID(&subtype, &MFVideoFormat_NV12)
++                        || IsEqualGUID(&subtype, &MFVideoFormat_I420)
++                        || IsEqualGUID(&subtype, &MFVideoFormat_IYUV)
++                        || IsEqualGUID(&subtype, &MFVideoFormat_YV12)))
++                *luma_size = (DWORD)(frame_size >> 32) * (DWORD)frame_size;
++        }
++        IMFMediaType_Release(media_type);
++    }
++
++    if (*buffer)
++        return S_OK;
++
++    return MFCreateMemoryBuffer(size, buffer);
+ }
+ 
+ static HRESULT media_stream_send_sample(struct media_stream *stream, const struct wg_parser_buffer *wg_buffer, IUnknown *token)
+ {
+     IMFSample *sample = NULL;
+     IMFMediaBuffer *buffer;
++    DWORD max_length = 0, luma_size = 0;
+     HRESULT hr;
+     BYTE *data;
+ 
+-    if (FAILED(hr = MFCreateMemoryBuffer(wg_buffer->size, &buffer)))
++    if (FAILED(hr = media_stream_create_buffer(stream, wg_buffer->size, &luma_size, &buffer)))
+         return hr;
+     if (FAILED(hr = IMFMediaBuffer_SetCurrentLength(buffer, wg_buffer->size)))
+         goto out;
+-    if (FAILED(hr = IMFMediaBuffer_Lock(buffer, &data, NULL, NULL)))
++    if (FAILED(hr = IMFMediaBuffer_Lock(buffer, &data, &max_length, NULL)))
+         goto out;
+ 
++    /* A 2D buffer's linear view is sized from the media type; the parser fills
++     * only what it produced. The two are negotiated together and should agree,
++     * but if the view is smaller the copy below would run off the end, so that
++     * frame goes back on a plain buffer rather than trusting they agree. */
++    if (max_length < wg_buffer->size)
++    {
++        IMFMediaBuffer_Unlock(buffer);
++        IMFMediaBuffer_Release(buffer);
++        if (FAILED(hr = MFCreateMemoryBuffer(wg_buffer->size, &buffer)))
++            return hr;
++        if (FAILED(hr = IMFMediaBuffer_SetCurrentLength(buffer, wg_buffer->size)))
++            goto out;
++        if (FAILED(hr = IMFMediaBuffer_Lock(buffer, &data, NULL, NULL)))
++            goto out;
++    }
++    /* And if the view is larger, its tail is never written. Fresh allocations
++     * are not blank, and in YUV a run of zeros is bright green -- which is what
++     * a green band along the bottom of a Peace Walker cutscene was, once the
++     * frames started arriving in 2D buffers at all. Fill it with black: luma 0,
++     * chroma 128. A format whose split is not known here is zeroed, which is at
++     * least the same colour every frame instead of whatever was in the heap. */
++    else if (max_length > wg_buffer->size)
++    {
++        DWORD from = wg_buffer->size;
++
++        if (luma_size > from)
++        {
++            memset(data + from, 0, luma_size - from);
++            from = luma_size;
++        }
++        if (max_length > from)
++            memset(data + from, luma_size ? 0x80 : 0, max_length - from);
++    }
++
+     if (!wg_parser_stream_copy_buffer(stream->wg_stream, data, 0, wg_buffer->size))
+     {
+         hr = S_FALSE;

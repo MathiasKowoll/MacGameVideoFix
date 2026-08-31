@@ -33,6 +33,11 @@ GST="$SOURCES/gstreamer/subprojects"
 # in its path, and the failure reads as clang being handed half a filename.
 OUT="${MGVF_BUILD_OUT:-$HOME/Development/mgvf-winegstreamer-build}"
 PATCHDIR="${MGVF_PATCHES:-/Applications/winevideo Patcher.app/Contents/Resources/review/build/source-patches/0.5.0}"
+# Our own patches live in the repo, winevideo's in its installed app. Looking in
+# one place only meant the command this project documents -- with mgvf-0001 in
+# the list -- aborted unless MGVF_PATCHES had been exported by hand, which is how
+# it was run all day without anyone noticing the default was wrong.
+OWNPATCHES="$(cd "$(dirname "$0")/.." && pwd)/source-patches"
 ENGINE="${MGVF_ENGINE:-$HOME/Applications/Crossover_patched.app/Contents/SharedSupport/CrossOver}"
 
 want=()
@@ -88,8 +93,14 @@ TREE="$OUT/wine-src"
 rm -rf "$TREE"; cp -R "$WINE" "$TREE"
 for p in "${want[@]:-}"; do
   [ -n "$p" ] || continue
-  f=$(ls "$PATCHDIR/$p"-*.patch 2>/dev/null | head -1)
-  [ -n "$f" ] || { say "no patch numbered $p"; exit 1; }
+  # Ours first. Every patch this build needs now lives in the repository --
+  # winevideo's four are carried there with their provenance and their licence --
+  # so an installed winevideo Patcher is an override, not a requirement. It used
+  # to be the other way round, and the build simply did not run without their
+  # application present.
+  f=$(ls "$OWNPATCHES/$p"-*.patch 2>/dev/null | head -1)
+  [ -n "$f" ] || f=$(ls "$PATCHDIR/$p"-*.patch 2>/dev/null | head -1)
+  [ -n "$f" ] || { say "no patch numbered $p in $PATCHDIR or $OWNPATCHES"; exit 1; }
   if ( cd "$TREE" && patch -p1 --forward -l -F3 <"$f" >/dev/null 2>&1 ); then
     say "applied $(basename "$f")"
   else

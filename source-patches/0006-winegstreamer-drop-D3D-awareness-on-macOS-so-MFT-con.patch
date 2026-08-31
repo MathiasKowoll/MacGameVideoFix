@@ -1,0 +1,116 @@
+CARRIED FROM winevideo, NOT WRITTEN HERE
+========================================
+
+Origin      the winevideo project -- https://github.com/Jfishin/winevideo
+File        0006-winegstreamer-drop-D3D-awareness-on-macOS-so-MFT-con.patch
+Carried     2026-08-31, from winevideo Patcher 0.5.0
+
+This patch is winevideo's work. It is copied here unchanged so that building
+this project's engine does not require their application to be installed; it is
+not ours, and nothing about carrying it makes it ours. The finding, the
+diagnosis and the code are theirs.
+
+LICENCE. It modifies dlls/winegstreamer, which is Wine -- copyright CodeWeavers
+and others, GNU Lesser General Public License version 2.1 or later. A patch to
+LGPL code is a derivative of it and carries the same terms, which is what makes
+carrying it here permitted. The notices in the files it touches are untouched.
+Source for everything built from it is this repository plus the Wine tree named
+in runtime/engine-built-for.json.
+
+If you want these patches, take them from winevideo rather than from us: theirs
+is where they are maintained, and this copy is a snapshot that will go stale.
+
+--- the patch as it was received begins here ---
+
+From 2a50e796b7b3a1c7dcd7cfd7377163d61f6f0d88 Mon Sep 17 00:00:00 2001
+From: winevideo contributors <contributors@winevideo.invalid>
+Date: Wed, 1 Jul 2026 21:26:04 -0400
+Subject: [PATCH 06/33] winegstreamer: drop D3D awareness on macOS so MFT
+ consumers take their software path
+
+No macOS backend (d3dmetal/dxmt) can create NV12 D3D11 video textures, so
+D3D-bound decoder output can never be displayed. CrossOver's existing hack
+(CW 26265) hides NV12 from GetOutputAvailableType instead, which starves
+direct-IMFTransform consumers like UE Electra that require NV12: they
+enumerate output types, find no NV12, and abandon playback (Screamer Demo,
+black cutscenes with audio).
+
+Instead: advertise MF_SA_D3D_AWARE/MF_SA_D3D11_AWARE as FALSE on macOS,
+refuse MFT_MESSAGE_SET_D3D_MANAGER with E_NOTIMPL like any non-D3D-aware
+MFT, and narrow the NV12 enumeration hack to D3D-bound output only (which
+can no longer occur). Consumers then run their software decode path with
+system-memory NV12 frames and upload textures themselves in formats the
+backends support.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ dlls/winegstreamer/video_decoder.c | 27 +++++++++++++++++++++++----
+ 1 file changed, 23 insertions(+), 4 deletions(-)
+
+diff --git a/dlls/winegstreamer/video_decoder.c b/dlls/winegstreamer/video_decoder.c
+index 9f905b4929e8db425ba6b6be406517a4d7895108..7a62a15738c478970af43e8849ebdae2bb91dce7 100644
+--- a/dlls/winegstreamer/video_decoder.c
++++ b/dlls/winegstreamer/video_decoder.c
+@@ -106,6 +106,7 @@ struct video_decoder
+ 
+     IMFVideoSampleAllocatorEx *allocator;
+     BOOL allocator_initialized;
++    BOOL have_d3d_manager;
+     IMFTransform *copier;
+     IMFMediaBuffer *temp_buffer;
+ 
+@@ -605,8 +606,12 @@ static HRESULT WINAPI transform_GetOutputAvailableType(IMFTransform *iface, DWOR
+     if (index >= decoder->output_type_count)
+         return MF_E_NO_MORE_TYPES;
+ 
+-    /* CW HACK 26265 */
+-    if (is_macos() && IsEqualGUID(decoder->output_types[index], &MFVideoFormat_NV12))
++    /* CW HACK 26265, narrowed by winevideo: NV12 is only poisonous when the
++     * output is bound to a D3D device (no macOS backend can create NV12
++     * D3D11 textures). As a plain system-memory format it is fine, and UE
++     * Electra's software path requires it to be enumerable. */
++    if (is_macos() && decoder->have_d3d_manager
++            && IsEqualGUID(decoder->output_types[index], &MFVideoFormat_NV12))
+     {
+         WARN("Skipping NV12 output format\n");
+         index++;
+@@ -863,10 +868,20 @@ static HRESULT WINAPI transform_ProcessMessage(IMFTransform *iface, MFT_MESSAGE_
+     switch (message)
+     {
+     case MFT_MESSAGE_SET_D3D_MANAGER:
++        /* winevideo: no macOS backend can make NV12/D3D11 video textures, so
++         * D3D-bound output starves direct-IMFTransform consumers (UE Electra).
++         * Refuse the manager like a non-D3D-aware MFT would; callers then use
++         * their software path and upload CPU frames themselves. */
++        if (is_macos() && param)
++        {
++            WARN("Refusing D3D device manager on macOS; forcing system-memory output.\n");
++            return E_NOTIMPL;
++        }
+         if (FAILED(hr = IMFVideoSampleAllocatorEx_SetDirectXManager(decoder->allocator, (IUnknown *)param)))
+             return hr;
+ 
+         uninit_allocator(decoder);
++        decoder->have_d3d_manager = !!param;
+         if (param)
+             decoder->output_info.dwFlags |= MFT_OUTPUT_STREAM_PROVIDES_SAMPLES;
+         else
+@@ -1672,9 +1687,13 @@ static HRESULT video_decoder_create_with_types(const GUID *const *input_types, U
+         goto failed;
+     if (FAILED(hr = MFCreateAttributes(&decoder->attributes, 16)))
+         goto failed;
++    /* winevideo: on macOS, advertise no D3D awareness at all — D3D-bound
++     * output would need NV12 D3D11 textures no backend can create. Callers
++     * (UE Electra, SourceReader) then take their software/system-memory
++     * paths, which work. */
+     if (FAILED(hr = IMFAttributes_SetUINT32(decoder->attributes, &MF_LOW_LATENCY, FALSE))
+-            || FAILED(hr = IMFAttributes_SetUINT32(decoder->attributes, &MF_SA_D3D_AWARE, TRUE))
+-            || FAILED(hr = IMFAttributes_SetUINT32(decoder->attributes, &MF_SA_D3D11_AWARE, TRUE))
++            || FAILED(hr = IMFAttributes_SetUINT32(decoder->attributes, &MF_SA_D3D_AWARE, !is_macos()))
++            || FAILED(hr = IMFAttributes_SetUINT32(decoder->attributes, &MF_SA_D3D11_AWARE, !is_macos()))
+             || FAILED(hr = IMFAttributes_SetUINT32(decoder->attributes,
+                     &MFT_DECODER_EXPOSE_OUTPUT_TYPES_IN_NATIVE_ORDER, FALSE)))
+         goto failed;
+-- 
+2.50.1 (Apple Git-155)
+
