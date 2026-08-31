@@ -178,6 +178,32 @@ fi
 # pointing a bottle at the wrong one is the two-cores crash this whole script
 # exists to avoid.
 stage_one() {
+  # An engine that already carries these plugins needs nothing staged.
+  #
+  # Staging exists because stock CrossOver ships eighteen GStreamer plugins and
+  # none of them decodes VC-1, WMV3 or VP9: the three that do are put in a
+  # directory of their own and the bottle is pointed at it with GST_PLUGIN_PATH.
+  # That is a per-bottle arrangement with a per-engine directory behind it, and
+  # this project now also builds engines that carry the three inside
+  # lib64/gstreamer-1.0, where CrossOver's own eighteen live. For those, staging
+  # would put a second copy of each plugin on the search path -- two GStreamer
+  # cores in one process is the crash this whole script is written to avoid.
+  #
+  # So: look, and if they are already there, say so and do nothing.
+  if [ -d "$ENGINE/Contents/SharedSupport/CrossOver/lib64/gstreamer-1.0" ]; then
+    have=0
+    for plug in libgstlibav libgstmatroska libgstvpx; do
+      [ -f "$ENGINE/Contents/SharedSupport/CrossOver/lib64/gstreamer-1.0/$plug.dylib" ] && have=$((have + 1))
+    done
+    if [ "$have" = 3 ]; then
+      echo "engine    : $ENGINE"
+      echo "            carries libgstlibav, libgstmatroska and libgstvpx already."
+      echo "            Nothing staged, and no GST_PLUGIN_PATH is needed for a bottle"
+      echo "            on this engine."
+      return 0
+    fi
+  fi
+
   VER="$1"; APP="$2"
   ENGINE="$(plist_value "$APP" CFBundleName)"
   ENGINE="${ENGINE:-$(basename "$APP" .app)}"
