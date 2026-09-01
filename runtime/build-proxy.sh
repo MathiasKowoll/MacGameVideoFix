@@ -80,7 +80,17 @@ DLL="$OUT/$NAME"
 count=$(($(wc -l < "$DEF") - 2))
 [ "$count" -gt 0 ] || { echo "error: $REF exports nothing to forward" >&2; exit 1; }
 
-"$CC" -shared -O2 -I"$HERE" \
+# Extra defines, because one source builds two different things.
+#
+# ng4-observe.c is a probe by default and the shipped fix when built with
+# -DNG4_FIX, which turns its two levers on rather than leaving them to
+# environment variables. check-builds.sh knows that and passes it; this script
+# had no way to, so building the shipped DLL here produced a probe that looked
+# identical and would have left the title reporting "the VP9 codec is not
+# installed" -- the exact failure NG4_FIX exists to prevent.
+#
+#   MGVF_CFLAGS="-DNG4_FIX" runtime/build-proxy.sh <carrier> ng4-observe.c
+"$CC" -shared -O2 ${MGVF_CFLAGS:-} -I"$HERE" \
   -o "$DLL" "$SOURCE" "$DEF" \
   -Wl,--enable-stdcall-fixup \
   -lmfuuid -lole32 -luuid -lshlwapi -lkernel32 -static-libgcc

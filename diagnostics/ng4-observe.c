@@ -1175,14 +1175,69 @@ static HRESULT WINAPI my_MFTEnumEx(GUID category, UINT32 flags,
  *   GetCurrentMediaType 6, SetCurrentMediaType 7, SetCurrentPosition 8,
  *   ReadSample 9, Flush 10, GetServiceForStream 11, GetPresentationAttribute 12
  */
+#define SLOT_GET_STREAM_SEL   3
+#define SLOT_SET_STREAM_SEL   4
 #define SLOT_GET_NATIVE_TYPE  5
 #define SLOT_SET_CURRENT_TYPE 7
 #define SLOT_READ_SAMPLE      9
 
+/* Why these two were added, since the vtable comment above has named them all
+ * along and nobody hooked them.
+ *
+ * ReadSample returns no sample, 200 calls running, flags 0 -- no error and no
+ * end of stream. Meanwhile winegstreamer's reader thread sits in
+ * wg_parser_get_next_read_offset, waiting for GStreamer to ask for bytes it
+ * never asks for. So the pipeline read enough to typefind the container and
+ * negotiate a format -- which happens during preroll, from the first bytes --
+ * and then stopped pulling.
+ *
+ * A pipeline that negotiates and does not pull is one that never left PAUSED.
+ * In Media Foundation terms the reader starts the source on the first ReadSample
+ * only if a stream is SELECTED; with none selected there is nothing to start,
+ * nobody asks for bytes, and ReadSample returns "no sample" for ever -- without
+ * an error, which is exactly what is measured.
+ *
+ * That is a hypothesis, and these two slots are how it is tested rather than
+ * argued. Three outcomes, each naming a different culprit: the game never calls
+ * SetStreamSelection at all; it calls it and we refuse; or it selects, we agree,
+ * and nothing flows -- which kills the hypothesis and moves the search
+ * downstream. */
+#define MF_FIRST_VIDEO_STREAM 0xFFFFFFFCu
+
+static HRESULT (WINAPI *real_GetStreamSelection)(void *, DWORD, BOOL *);
+static HRESULT (WINAPI *real_SetStreamSelection)(void *, DWORD, BOOL);
 static HRESULT (WINAPI *real_GetNativeMediaType)(void *, DWORD, DWORD, void **);
 static HRESULT (WINAPI *real_SetCurrentMediaType)(void *, DWORD, DWORD *, void *);
 static HRESULT (WINAPI *real_ReadSample)(void *, DWORD, DWORD, DWORD *, DWORD *,
                                          LONGLONG *, void **);
+
+static const char *stream_name(DWORD s)
+{
+    switch (s)
+    {
+    case 0xFFFFFFFEu: return "FIRST_AUDIO";
+    case 0xFFFFFFFCu: return "FIRST_VIDEO";
+    case 0xFFFFFFFFu: return "ALL";
+    default:          return "index";
+    }
+}
+
+static HRESULT WINAPI my_GetStreamSelection(void *self, DWORD stream, BOOL *selected)
+{
+    HRESULT hr = real_GetStreamSelection(self, stream, selected);
+    logf_("GetStreamSelection(%s %lu) -> 0x%08lx, selected=%s",
+          stream_name(stream), stream, hr,
+          (SUCCEEDED(hr) && selected) ? (*selected ? "TRUE" : "FALSE") : "?");
+    return hr;
+}
+
+static HRESULT WINAPI my_SetStreamSelection(void *self, DWORD stream, BOOL selected)
+{
+    HRESULT hr = real_SetStreamSelection(self, stream, selected);
+    logf_("SetStreamSelection(%s %lu, %s) -> 0x%08lx  << the game asked",
+          stream_name(stream), stream, selected ? "TRUE" : "FALSE", hr);
+    return hr;
+}
 
 static HRESULT WINAPI my_GetNativeMediaType(void *self, DWORD stream, DWORD index, void **type)
 {
@@ -1222,6 +1277,29 @@ static HRESULT WINAPI my_ReadSample(void *self, DWORD stream, DWORD flags,
                                     LONGLONG *ts, void **sample)
 {
     static LONG calls, got, failed;
+
+    /* NG4_SELECT_STREAM=1 turns the reading above from a hypothesis into a test.
+     *
+     * Selecting the video stream ourselves, once, before the first read. If the
+     * game never selected it, this is the missing call and frames should follow.
+     * If frames still do not follow, the hypothesis is wrong and we have spent
+     * one run to know it. Off by default: a probe that changes what it measures
+     * is an instrument that has become the fix, and this project has been caught
+     * by that before. */
+    if (InterlockedCompareExchange(&calls, 0, 0) == 0 && real_SetStreamSelection)
+    {
+        char v[8];
+        if (GetEnvironmentVariableA("NG4_SELECT_STREAM", v, sizeof(v)) && v[0] == '1')
+        {
+            BOOL was = FALSE;
+            HRESULT q = real_GetStreamSelection
+                      ? real_GetStreamSelection(self, MF_FIRST_VIDEO_STREAM, &was) : 0x80004005L;
+            HRESULT s2 = real_SetStreamSelection(self, MF_FIRST_VIDEO_STREAM, TRUE);
+            logf_("NG4_SELECT_STREAM: was %s (query 0x%08lx), selecting -> 0x%08lx",
+                  SUCCEEDED(q) ? (was ? "TRUE" : "FALSE") : "unknown", q, s2);
+        }
+    }
+
     HRESULT hr = real_ReadSample(self, stream, flags, actual, sflags, ts, sample);
     LONG n = InterlockedIncrement(&calls);
     if (SUCCEEDED(hr) && sample && *sample)
@@ -1250,13 +1328,19 @@ static HRESULT WINAPI my_MFCreateSourceReaderFromByteStream(void *stream, void *
         logf_("MFCreateSourceReaderFromByteStream -> 0x%08lx (reader %ld)", hr, n);
     if (SUCCEEDED(hr) && reader && *reader)
     {
-        static void *gn, *sc, *rs;
+        static void *gn, *sc, *rs, *gs, *ss;
+        patch_slot("GetStreamSelection",  *reader, SLOT_GET_STREAM_SEL,
+                   (void *)my_GetStreamSelection,  &gs);
+        patch_slot("SetStreamSelection",  *reader, SLOT_SET_STREAM_SEL,
+                   (void *)my_SetStreamSelection,  &ss);
         patch_slot("GetNativeMediaType",  *reader, SLOT_GET_NATIVE_TYPE,
                    (void *)my_GetNativeMediaType,  &gn);
         patch_slot("SetCurrentMediaType", *reader, SLOT_SET_CURRENT_TYPE,
                    (void *)my_SetCurrentMediaType, &sc);
         patch_slot("ReadSample",          *reader, SLOT_READ_SAMPLE,
                    (void *)my_ReadSample,          &rs);
+        real_GetStreamSelection  = (HRESULT (WINAPI *)(void *, DWORD, BOOL *))gs;
+        real_SetStreamSelection  = (HRESULT (WINAPI *)(void *, DWORD, BOOL))ss;
         real_GetNativeMediaType  = (HRESULT (WINAPI *)(void *, DWORD, DWORD, void **))gn;
         real_SetCurrentMediaType = (HRESULT (WINAPI *)(void *, DWORD, DWORD *, void *))sc;
         real_ReadSample = (HRESULT (WINAPI *)(void *, DWORD, DWORD, DWORD *, DWORD *,
@@ -1306,13 +1390,19 @@ static HRESULT WINAPI my_MFCreateSourceReaderFromURL(LPCWSTR url, void *attrs, v
      * the reader created, the slots patched, and not one call arriving. */
     if (SUCCEEDED(hr) && reader && *reader)
     {
-        static void *gn, *sc, *rs;
+        static void *gn, *sc, *rs, *gs, *ss;
+        patch_slot("GetStreamSelection",  *reader, SLOT_GET_STREAM_SEL,
+                   (void *)my_GetStreamSelection,  &gs);
+        patch_slot("SetStreamSelection",  *reader, SLOT_SET_STREAM_SEL,
+                   (void *)my_SetStreamSelection,  &ss);
         patch_slot("GetNativeMediaType",  *reader, SLOT_GET_NATIVE_TYPE,
                    (void *)my_GetNativeMediaType,  &gn);
         patch_slot("SetCurrentMediaType", *reader, SLOT_SET_CURRENT_TYPE,
                    (void *)my_SetCurrentMediaType, &sc);
         patch_slot("ReadSample",          *reader, SLOT_READ_SAMPLE,
                    (void *)my_ReadSample,          &rs);
+        real_GetStreamSelection  = (HRESULT (WINAPI *)(void *, DWORD, BOOL *))gs;
+        real_SetStreamSelection  = (HRESULT (WINAPI *)(void *, DWORD, BOOL))ss;
         real_GetNativeMediaType  = (HRESULT (WINAPI *)(void *, DWORD, DWORD, void **))gn;
         real_SetCurrentMediaType = (HRESULT (WINAPI *)(void *, DWORD, DWORD *, void *))sc;
         real_ReadSample = (HRESULT (WINAPI *)(void *, DWORD, DWORD, DWORD *, DWORD *,
