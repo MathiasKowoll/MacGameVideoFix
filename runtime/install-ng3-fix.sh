@@ -131,6 +131,11 @@ DLLS="d3d9.dll qasf.dll quartz.dll winegstreamer.dll"
 # requirement to bring the bottle down -- which for a launcher means quitting
 # Steam and ending the prefix before it can even tell a user whether their game
 # needs the fix.
+# bottles.sh carries crossover_for_bottle. Sourced BEFORE this file's own
+# helpers so that anything defined here still wins -- this script is shipped
+# standalone as well, so it must work whether or not that file is beside it.
+[ -f "$HERE/bottles.sh" ] && . "$HERE/bottles.sh"
+
 wine_in_bottle() {
   local bottle="$1" cx="$2"
   shift 2
@@ -139,6 +144,30 @@ wine_in_bottle() {
 }
 
 find_crossover() {
+  # Ask the BOTTLE which engine belongs to it, before falling back to names.
+  #
+  # The fallback below searches by name, and its names went stale: it looks for
+  # Crossover_patched.app, which this project stopped making, and for
+  # "$HOME/Applications/CrossOver"*.app -- a glob that never matches a copy named
+  # Crossover_MGVF.app, because sh compares globs case-sensitively even where the
+  # filesystem does not. So it fell through to /Applications/CrossOver.app and ran
+  # reg.exe under stock CrossOver against a bottle a patched engine had built.
+  #
+  # Wine then does what it always does when a bottle meets an unfamiliar engine:
+  # it updates it. Measured on this machine on 2026-08-31 -- 1,475 files rewritten
+  # under drive_c/windows, which undid three of the four DLLs this installer had
+  # just placed and left the override naming all four. The install reported
+  # success. Nothing failed loudly, which is the whole problem.
+  #
+  # crossover_for_bottle answers from the bottle: first the engine whose own
+  # CX_BOTTLE_PATH holds it, then the version. Its comment already described this
+  # exact failure; it simply was not the function being called.
+  if command -v crossover_for_bottle >/dev/null 2>&1 && [ -n "${BOTTLE:-}" ]; then
+    local byBottle
+    if byBottle="$(crossover_for_bottle "$BOTTLE" 2>/dev/null)" && [ -n "$byBottle" ]; then
+      printf '%s' "$byBottle"; return 0
+    fi
+  fi
   local c
   for c in "$HOME/Applications/Crossover_patched.app" \
            "$HOME/Applications/CrossOver"*.app \
