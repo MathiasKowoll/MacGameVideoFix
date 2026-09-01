@@ -225,7 +225,7 @@ to prefer our file at all.
 | [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) | D3DMetal | 12 | 4.0b2 | `libxess.dll` | `libxess_real.dll` | `dwo-video-bridge.c` | `libgstmatroska` | — | — |
 | [Beast of Reincarnation](Beast-of-Reincarnation.md) | D3DMetal | 12 | not measured | `libogg_64.dll` | `libogg_64_real.dll` | `ue5-media-fix.c` | — | — | — |
 | [Persona 5 Strikers](Persona-5-Strikers.md) | **DXMT** | 11 | not measured | `amd_ags_x64.dll` | `amd_ags_x64_real.dll` | `p5s-video-bridge.c` | `libgstlibav` | `BEAST_FORCE_NV12`, `BEAST_REFUSE_D3D_MANAGER` | — |
-| [NINJA GAIDEN 3: Razor's Edge](Ninja-Gaiden-3-Razors-Edge.md) | **DXVK** | 9 | not measured | — | — | — | not measured | — | — |
+| [NINJA GAIDEN 3: Razor's Edge](Ninja-Gaiden-3-Razors-Edge.md) | **DXVK** | 9 | not measured | — | — | — | not measured | — | yes |
 | [Nioh](Nioh.md) | **DXMT** | 11 | 4.0b2 | `GfeSDK.dll` | `GfeSDK_real.dll` | `p5s-video-bridge.c` | `libgstlibav` | `BEAST_FORCE_NV12`, `BEAST_REFUSE_D3D_MANAGER` | — |
 | [Nioh 2](Nioh-2.md) | **DXMT** | 11 | 4.0b2 | `GfeSDK.dll` | `GfeSDK_real.dll` | `p5s-video-bridge.c` | `libgstlibav` | `BEAST_FORCE_NV12`, `BEAST_REFUSE_D3D_MANAGER` | — |
 | [Nioh 3](Nioh-3.md) | D3DMetal | 12 | 4.0b2 | `amd_ags_x64.dll` | `amd_ags_x64_real.dll` | `dwo-video-bridge.c` | — | — | — |
@@ -249,7 +249,7 @@ a copy taken from your own CrossOver and nothing is redistributed. **Bridge** is
 the source the shipped proxy was built from: 6 sources serve every title
 here, so a fault found in one is often already fixed in the others.
 
-**Registry** says whether Wine has to be told to prefer our DLL. 2 fixes
+**Registry** says whether Wine has to be told to prefer our DLL. 3 fixes
 need it, and for the same reason: their carrier is `dinput8`, which Wine
 implements, so without the override the file beside the game is never opened.
 That key is the part that goes missing on its own -- a bottle reset, a bottle
