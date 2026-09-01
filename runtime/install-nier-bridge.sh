@@ -146,6 +146,27 @@ find_bottle() {
 # whose CrossOver lives in ~/Applications was told none was installed, while the
 # per-bottle lookup would have found it.
 find_crossover() {
+  # An engine named by the caller wins over anything this script can work out.
+  #
+  # A launcher knows which engine it built; a script can only infer. Set MGVF_CX
+  # to the CrossOver directory -- the one holding bin/wine, not the .app -- and
+  # that is what runs reg.exe.
+  #
+  # Set but wrong is an ERROR, not a fallback. A caller that names an engine and
+  # is silently ignored is the worst of the three outcomes: it believes it chose,
+  # and the wrong engine does not fail loudly -- which is the whole reason this
+  # function was rewritten. Unset is fine and falls through to asking the bottle.
+  if [ -n "${MGVF_CX:-}" ]; then
+    if [ -x "${MGVF_CX%/}/bin/wine" ]; then
+      printf '%s' "${MGVF_CX%/}"; return 0
+    fi
+    echo "error: MGVF_CX is set to '$MGVF_CX' and there is no bin/wine there." >&2
+    echo "       Point it at a CrossOver directory, e.g." >&2
+    echo "       /Applications/CrossOver.app/Contents/SharedSupport/CrossOver," >&2
+    echo "       or unset it and this will ask the bottle which engine is its own." >&2
+    return 1
+  fi
+
   # Ask the BOTTLE which engine belongs to it, before falling back to names.
   #
   # The fallback below searches by name, and its names went stale: it looks for
