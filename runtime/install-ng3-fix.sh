@@ -273,15 +273,22 @@ case "$ACTION" in
           rm -f "$SYS/$d"
         fi
       done
-      if cx="$(find_crossover)" && reachable "$BOTTLE" "$cx"; then
-        wine_in_bottle "$BOTTLE" "$cx" --cx-app reg.exe delete "$KEY" /f \
-          >/dev/null 2>&1 && echo "removed the per-application overrides"
+      # The last line is what a caller reads, so it must not say "restored"
+      # when the registry key is still there. It was doing exactly that: the
+      # explanation went to stderr and stdout ended with the word meaning done.
+      # Same fault as --status counting displacements -- a true thing said where
+      # nobody looks, and a false one where they do.
+      if cx="$(find_crossover)" && reachable "$BOTTLE" "$cx" \
+         && wine_in_bottle "$BOTTLE" "$cx" --cx-app reg.exe delete "$KEY" /f >/dev/null 2>&1; then
+        echo "removed the per-application overrides"
+        echo "restored"
       else
         echo "warning: the bottle could not be asked; the overrides are still" >&2
         echo "         in its registry. The DLLs have been put back, so nothing" >&2
-        echo "         of ours is loaded, but the key remains." >&2
+        echo "         of ours is loaded, but the key remains. Ask again when the" >&2
+        echo "         bottle is reachable; --status will say broken until then." >&2
+        echo "restored-except-registry"
       fi
-      echo "restored"
       exit 0 ;;
   install)
       ;;
