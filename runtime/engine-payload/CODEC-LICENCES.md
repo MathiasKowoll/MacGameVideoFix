@@ -5,6 +5,17 @@ Twelve files, 21,632,848 bytes, copied verbatim from
 built here and not modified:
 byte-identical to that build, which is what the hashes below are for.
 
+> **Another project verifies these by hash before it will build an engine.**
+> RaccoonBot stopped carrying its own copy of the twelve as of its 0.2.0: it
+> reads them out of this app's Resources and checks all twelve against a sha256
+> table of its own before starting `make-engine-copy.sh`. So rebuilding these
+> binaries without that table moving in the same release stops their engine build
+> with a mismatch, and the failure appears on their side for a change made here.
+>
+> Told to us by the RaccoonBot session on 2026-09-01, unprompted, as a coupling
+> they created and we had not agreed to. Recorded here rather than in a message,
+> because the person who rebuilds these will read this file and not that message.
+
 **Why they are here.** Stock CrossOver 26.3 ships 17 GStreamer plugins and
 none of them decodes VC-1, WMV3 or VP9. Seven of the titles in this project need
 one that it does not ship. The two routes that existed took them from a
