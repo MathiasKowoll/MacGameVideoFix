@@ -243,10 +243,18 @@ bad = []
 note = []
 for name, (exe, script) in sorted(got.items()):
     if name not in want:
-        # A bottle-scoped installer is not in the app's LIST: the app asks for a
-        # game folder and cannot know the bottle. Saying so beats a warning that
-        # invites someone to "fix" it by wiring in an argument the app does not
-        # have.
+        # A bottle-scoped installer is not in the app's LIST. The reason has now
+        # changed twice, so it is worth being exact about what is true today.
+        #
+        # Originally: the app asked for a game folder and could not know the
+        # bottle, so it could not run this installer at all.
+        #
+        # That stopped being true when the wizard gained a bottle picker: the app
+        # sets MGVF_BOTTLE from the bottle a person chose, and install-ng3-fix.sh
+        # takes a bottle as its first argument. So the app CAN run it. It does not
+        # yet, because nobody has wired the title into the app's table -- and that
+        # is a different sentence from "it cannot", which is what this note used
+        # to say. Whoever adds it should know the pieces are already there.
         #
         # This note used to end "-- a launcher runs it", and on that reasoning the
         # files were kept out of the bundle as well. That was right while a
