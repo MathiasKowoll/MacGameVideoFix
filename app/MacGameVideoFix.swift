@@ -3300,7 +3300,15 @@ enum Graphics {
             return (nil, "This build does not carry make-engine-copy.sh.")
         }
 
-        var args = [script, "--from", source.path, "--name", name, "--force"]
+        // "default" is a statement, not an omission. make-engine-copy.sh refuses to
+        // run without --bottle-path because CX_BOTTLE_PATH is the isolation itself:
+        // an engine without the key operates on whatever bottles CrossOver finds,
+        // which on a normal Mac includes bottles this project has never touched,
+        // and it does that silently. This app is the standalone route, where the
+        // person's own CrossOver bottles ARE the target, so it says so out loud.
+        // A launcher hosting this app passes its own root instead.
+        var args = [script, "--from", source.path, "--name", name,
+                    "--bottle-path", "default", "--force"]
         // Apple's D3DMetal is not carried by this project. The argument names a
         // directory already on this Mac; without one, the copy keeps the toolkit
         // CrossOver shipped.

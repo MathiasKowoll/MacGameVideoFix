@@ -59,6 +59,8 @@ NAME="Crossover_MGVF.app"
 GPTK=""
 FORCE=0
 CHECK=0
+BOTTLE_PATH=""      # required: a path, or the word "default". Never guessed.
+NO_AUTOUPDATE=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -66,6 +68,8 @@ while [ $# -gt 0 ]; do
     --from-archive) ARCHIVE="$2"; shift 2 ;;
     --name)         NAME="$2"; shift 2 ;;
     --gptk)         GPTK="$2"; shift 2 ;;
+    --bottle-path)  BOTTLE_PATH="$2"; shift 2 ;;
+    --no-autoupdate) NO_AUTOUPDATE=1; shift ;;
     --force)        FORCE=1; shift ;;
     --check)        CHECK=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -75,6 +79,27 @@ done
 DEST="$HOME/Applications/$NAME"
 say() { printf '%s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+# --bottle-path is required and has no default, and that is the whole point.
+#
+# CX_BOTTLE_PATH is not a configuration line we also set: it IS the isolation.
+# Stock CrossOver ships no [EnvironmentVariables] section at all, so an engine
+# without the key falls through to CrossOver's own default root -- which on this
+# machine holds the user's seven bottles, including ones this project has never
+# touched. An engine built for a launcher and handed that default would operate
+# on somebody else's bottles without a word: not a degraded state, a wrong one
+# that looks normal.
+#
+# A default of any kind is a guess about where a person's bottles live, and the
+# failure mode of guessing wrong is silent. So it must be stated. Saying
+# "default" is a statement too -- it means "use CrossOver's own root, and I know
+# which one that is" -- and it is spelled out below rather than assumed.
+[ -n "$BOTTLE_PATH" ] || die "--bottle-path is required.
+       Give a directory for this engine's bottles, or the word \"default\" to
+       use CrossOver's own root at ~/Library/Application Support/CrossOver/Bottles.
+       There is no default because guessing wrong is silent: an engine without
+       the key operates on whatever bottles CrossOver finds, including ones this
+       project never touched."
 
 # --- the toolkit backups a launcher restores from -----------------------------
 #
@@ -318,6 +343,31 @@ else
   say "      none in runtime/engine-payload -- skipped"
 fi
 
+# --- 5b. the two things a launcher needs set before it is signed -------------
+#
+# Both edit files inside the bundle, so both must happen before [6/6]: signing
+# after every change is the order that stops Finder calling the copy damaged.
+if [ "$BOTTLE_PATH" = "default" ]; then
+  say "      bottles   : CrossOver's own root (no CX_BOTTLE_PATH written)"
+else
+  CONF="$CX/etc/CrossOver.conf"
+  [ -f "$CONF" ] || die "the copy has no etc/CrossOver.conf to write CX_BOTTLE_PATH into"
+  # Strip then insert, for the reason the app's own config writer does it: a key
+  # left outside its section, or written twice, gives the file two answers and
+  # therefore none. Stock ships no [EnvironmentVariables] at all, so it is added.
+  /usr/bin/sed -i '' '/^"CX_BOTTLE_PATH"[[:space:]]*=/d' "$CONF"
+  /usr/bin/grep -q '^\[EnvironmentVariables\]' "$CONF" || printf '[EnvironmentVariables]\n' >> "$CONF"
+  printf '"CX_BOTTLE_PATH" = "%s"\n' "$BOTTLE_PATH" >> "$CONF"
+  say "      bottles   : $BOTTLE_PATH"
+fi
+
+if [ "$NO_AUTOUPDATE" = 1 ]; then
+  /usr/bin/defaults write "$DEST/Contents/Info" SUFeedURL "" 2>/dev/null \
+    || die "could not blank SUFeedURL"
+  /bin/chmod 644 "$DEST/Contents/Info.plist" 2>/dev/null || true
+  say "      updates   : SUFeedURL blanked"
+fi
+
 # --- 6. sign, then clear attributes, in that order ---------------------------
 say "[6/6] signing"
 /usr/bin/codesign --force --deep --sign - "$DEST" 2>&1 | sed 's/^/      /'
@@ -329,6 +379,21 @@ fail=0
 codesign --verify "$DEST" >/dev/null 2>&1 && say "  signature : valid (ad-hoc)" || { say "  signature : INVALID"; fail=1; }
 q=$(xattr -r "$DEST" 2>/dev/null | grep -c quarantine || true)
 [ "$q" = 0 ] && say "  quarantine: none" || { say "  quarantine: $q left"; fail=1; }
+# Read back, because this is the one whose absence produces no error anywhere
+# downstream: everything keeps working and quietly works on the wrong bottles.
+if [ "$BOTTLE_PATH" = "default" ]; then
+  /usr/bin/grep -q '^"CX_BOTTLE_PATH"' "$CX/etc/CrossOver.conf" 2>/dev/null \
+    && { say "  bottles   : a CX_BOTTLE_PATH is present and none was asked for"; fail=1; } \
+    || say "  bottles   : CrossOver's own root, as asked"
+else
+  got=$(/usr/bin/sed -n 's/^"CX_BOTTLE_PATH"[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "$CX/etc/CrossOver.conf" 2>/dev/null | tail -1)
+  [ "$got" = "$BOTTLE_PATH" ] && say "  bottles   : $got" \
+    || { say "  bottles   : asked for '$BOTTLE_PATH', reads back '$got'"; fail=1; }
+fi
+if [ "$NO_AUTOUPDATE" = 1 ]; then
+  u=$(/usr/bin/defaults read "$DEST/Contents/Info" SUFeedURL 2>/dev/null)
+  [ -z "$u" ] && say "  updates   : off" || { say "  updates   : SUFeedURL still $u"; fail=1; }
+fi
 v=$("$CX/bin/wineloader" --version 2>&1 | head -1 || true)
 [ -n "$v" ] && say "  wine      : $v" || { say "  wine      : NO OUTPUT -- it is being killed, do not hand this to anyone"; fail=1; }
 say ""
