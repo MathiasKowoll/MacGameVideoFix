@@ -29,8 +29,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleName</key><string>MacGameVideoFix</string>
   <key>CFBundleDisplayName</key><string>MacGameVideoFix</string>
   <key>CFBundleIdentifier</key><string>io.github.mortalshell2macfix</string>
-  <key>CFBundleVersion</key><string>5.0.0</string>
-  <key>CFBundleShortVersionString</key><string>5.0.0</string>
+  <key>CFBundleVersion</key><string>5.0.1</string>
+  <key>CFBundleShortVersionString</key><string>5.0.1</string>
   <key>CFBundleExecutable</key><string>MacGameVideoFix</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
@@ -68,6 +68,23 @@ cp "$ROOT/runtime/install-nioh-bridge.sh" "$ROOT/runtime/install-nioh3-bridge.sh
    "$ROOT/runtime/install-ng4-fix.sh" \
     "$ROOT/runtime/install-resonance-fix.sh" "$ROOT/runtime/NvCloth_x64-resonance.dll" "$RES/"
 cp "$ROOT/runtime/stage-codecs.sh" "$RES/"
+
+# NINJA GAIDEN 3 travels in the app even though the app does not offer it.
+#
+# Its installer is MGVF-SCOPE: bottle -- it writes per-executable overrides into
+# a bottle's registry, and this app asks for a game folder and never learns which
+# bottle that is. So it stays out of the app's own list. It did not use to be in
+# the bundle either, on the reasoning that "a launcher runs it" and a launcher
+# downloaded the fixes tarball separately.
+#
+# That reasoning inverted on 2026-08-31, when the launcher became the app's host
+# rather than its downloader. A launcher that embeds this bundle knows the bottle
+# and can run this; if the files are not here it cannot, and the failure reads as
+# "this title has no fix" rather than "the payload is a subset".
+cp "$ROOT/runtime/install-ng3-fix.sh" "$RES/"
+cp "$ROOT"/runtime/ng3-*.dll "$RES/"
+cp "$ROOT/runtime/ng3-THIRD-PARTY-LICENCES.md" "$RES/"
+chmod +x "$RES/install-ng3-fix.sh"
 
 # bottles.sh, which install-kh-bridge.sh and install-nier-bridge.sh source.
 #

@@ -243,13 +243,31 @@ bad = []
 note = []
 for name, (exe, script) in sorted(got.items()):
     if name not in want:
-        # A bottle-scoped installer is deliberately not in the app: the app asks
-        # for a game folder and cannot know the bottle. Saying so beats a
-        # warning that invites someone to "fix" it by wiring in an argument the
-        # app does not have.
+        # A bottle-scoped installer is not in the app's LIST: the app asks for a
+        # game folder and cannot know the bottle. Saying so beats a warning that
+        # invites someone to "fix" it by wiring in an argument the app does not
+        # have.
+        #
+        # This note used to end "-- a launcher runs it", and on that reasoning the
+        # files were kept out of the bundle as well. That was right while a
+        # launcher downloaded the fixes tarball separately. It inverted on
+        # 2026-08-31, when the launcher became the app's HOST instead: a launcher
+        # that embeds this bundle knows the bottle and can run the installer, but
+        # only if the files travelled with it. So they ship now, and the check
+        # below says whether they actually did -- because a subset payload fails
+        # as "this title has no fix", which is not a sentence anyone can act on.
+        #
+        # Replaced rather than deleted. An exception that simply disappears reads
+        # later as though it was never reasoned about, which is how a note saying
+        # four errors were expected sat over a real defect for months.
         if "MGVF-SCOPE: bottle" in (root/"runtime"/script).read_text():
-            note.append(f"{name}: bottle-scoped, so not in the app by design "
-                        f"({script}) -- a launcher runs it")
+            shipped = (root/"app"/"MacGameVideoFix.app"/"Contents"/"Resources"/script)
+            if shipped.exists():
+                note.append(f"{name}: bottle-scoped, so not in the app's list "
+                            f"({script}) -- but it ships, for a host launcher to run")
+            else:
+                bad.append(f"{name}: bottle-scoped and {script} does NOT ship; "
+                           f"a launcher hosting the app cannot fix this title")
             continue
         bad.append(f"declared but not a game the app knows: {name}"); continue
     if want[name] != (exe, script):
