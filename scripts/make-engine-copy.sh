@@ -59,6 +59,7 @@ NAME="Crossover_MGVF.app"
 GPTK=""
 FORCE=0
 CHECK=0
+PLACED=""
 BOTTLE_PATH=""      # required: a path, or the word "default". Never guessed.
 NO_AUTOUPDATE=0
 
@@ -309,9 +310,77 @@ if [ -n "$GPTK" ]; then
     [ -e "$DST/external.orig" ] || [ ! -d "$BAK/external" ] || /usr/bin/ditto "$BAK/external" "$DST/external.orig"
     say "      toolkit backups re-laid into the new apple_gptk"
   fi
+
+  # --- what this install PLACED, as opposed to what it displaced --------------
+  #
+  # A backup answers "what was here before". It cannot answer "what did we add
+  # that was never here", and that is a real state: generation 4 ships d3d10 and
+  # CrossOver does not, so installing 4 creates a file with no backup, and a
+  # restore gives back what was displaced and cannot give back an absence. The
+  # engine then reports as generation 3 while holding one file of 4, and nothing
+  # anywhere says so.
+  #
+  # The obvious repair -- delete files with no .orig whose names belong to the
+  # other generation -- was written and withdrawn on the launcher's side because
+  # it deleted CrossOver's OWN atidxx64 and nvngx: after a restore a stock file
+  # has no backup either, and nothing on disk tells one apart from the other.
+  # Names cannot answer this. Only a record written at the time can.
+  #
+  # apple_gptk_bak is the engine exactly as it was, so the difference between it
+  # and the directory we just built IS the answer, with no inference involved.
+  PLACED=""
+  if [ -d "$BAK" ]; then
+    for f in $(cd "$DST" && /usr/bin/find . \( -type f -o -type l \) 2>/dev/null | sed 's|^\./||' | sort); do
+      case "$f" in *.orig|*/.orig) continue ;; esac
+      if [ ! -e "$BAK/$f" ] && [ ! -L "$BAK/$f" ]; then
+        PLACED="$PLACED$f
+"
+      fi
+    done
+  fi
+  n_placed=$(printf '%s' "$PLACED" | /usr/bin/grep -c . || true)
+  say "      $n_placed file(s) placed that the engine never had"
 else
   say "[4/6] toolkit: unchanged"
 fi
+
+# --- 4b. the provenance, now that there is something to record ---------------
+#
+# Rewritten rather than appended, because step 2 had to write it before the
+# engine media installer ran -- that installer recognises one of our copies by
+# this file, so it has to exist first. What it could not know then is what the
+# toolkit step would do.
+#
+# toolkit is READ FROM THE BINARY that ended up installed, not from the flag that
+# asked for it. A record of what was requested and a record of what happened
+# diverge exactly when somebody needs the truth, and this project has already
+# paid for that once -- three titles were diagnosed against a toolkit generation
+# that was not the one running.
+TOOLKIT="$(/usr/bin/defaults read "$CX/lib64/apple_gptk/external/D3DMetal.framework/Resources/Info" CFBundleShortVersionString 2>/dev/null || true)"
+{
+  printf '{\n'
+  printf '  "made_by": "MacGameVideoFix",\n'
+  printf '  "made_on": "%s",\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  printf '  "copied_from": "%s",\n' "$([ -n "$ARCHIVE" ] && echo "CrossOver.app" || basename "$FROM")"
+  printf '  "engine_version": "%s",\n' "$(/usr/bin/defaults read "$DEST/Contents/Info.plist" CFBundleVersion 2>/dev/null)"
+  printf '  "source": "%s",\n' "$([ -n "$ARCHIVE" ] && basename "$ARCHIVE" || echo "$FROM")"
+  printf '  "toolkit": "%s",\n' "${TOOLKIT:-unknown}"
+  printf '  "bottles": "%s",\n' "$BOTTLE_PATH"
+  printf '  "placed": ['
+  first=1
+  printf '%s' "$PLACED" | while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    [ "$first" = 1 ] || printf ','
+    printf '\n    "%s"' "$f"
+    first=0
+  done
+  [ -n "$(printf '%s' "$PLACED" | /usr/bin/grep -c . || true)" ] && printf '\n  '
+  printf '],\n'
+  printf '  "placedNote": "Files this copy created that the engine never had, so a restore cannot remove them by putting something back. Read this to clean up precisely; do not infer from names, because after a restore CrossOver'"'"'s own files have no backup either.",\n'
+  printf '  "why": "A copy, so the CrossOver a person bought stays exactly as CodeWeavers shipped it.",\n'
+  printf '  "order": "Patch first, sign second, clear extended attributes last."\n'
+  printf '}\n'
+} > "$CX/mgvf-origin.json"
 
 # --- 5. the codecs, inside the engine ----------------------------------------
 # In the engine rather than staged beside a bottle: one place instead of one per
