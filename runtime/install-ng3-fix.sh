@@ -219,7 +219,21 @@ src_for() {
 
 status() {
   local n=0 d key=0 cx
-  for d in $DLLS; do [ -f "$SYS/$d.mgvf-stock" ] && n=$((n+1)); done
+  # Count what is PLACED, not what was DISPLACED.
+  #
+  # This counted *.mgvf-stock -- the originals moved aside -- and that is only a
+  # proxy for "we installed here". A bottle with no d3d9.dll of its own displaces
+  # nothing, so a perfectly good install left nothing to count and the answer came
+  # back "absent" with all four of our files sitting in system32. The app maps
+  # absent to "not applied" and offers to install again, so the person installs
+  # twice and is told nothing happened either time.
+  #
+  # The honest question is whether OUR file is there, and that is answerable by
+  # comparing it with the one we would install. Same fault as generation 4's
+  # d3d10: state inferred from displacement is blind to what merely arrived.
+  for d in $DLLS; do
+    [ -f "$SYS/$d" ] && [ -f "$HERE/ng3-$d" ] && cmp -s "$SYS/$d" "$HERE/ng3-$d" && n=$((n+1))
+  done
 
   # Ask the bottle. If it cannot answer -- no CrossOver that matches its engine,
   # or a prefix that will not run reg.exe -- fall back to reading user.reg,
