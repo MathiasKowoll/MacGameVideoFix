@@ -29,8 +29,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleName</key><string>MacGameVideoFix</string>
   <key>CFBundleDisplayName</key><string>MacGameVideoFix</string>
   <key>CFBundleIdentifier</key><string>io.github.mortalshell2macfix</string>
-  <key>CFBundleVersion</key><string>5.0.3</string>
-  <key>CFBundleShortVersionString</key><string>5.0.3</string>
+  <key>CFBundleVersion</key><string>5.0.4</string>
+  <key>CFBundleShortVersionString</key><string>5.0.4</string>
   <key>CFBundleExecutable</key><string>MacGameVideoFix</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
