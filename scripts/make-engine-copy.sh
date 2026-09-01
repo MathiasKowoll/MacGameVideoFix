@@ -76,6 +76,87 @@ DEST="$HOME/Applications/$NAME"
 say() { printf '%s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
+# --- the toolkit backups a launcher restores from -----------------------------
+#
+# RaccoonBot's installd3dMetal restores every .orig under apple_gptk/wine before
+# it installs a generation, then lets its own copy step re-create them. That
+# cycle is self-maintaining only if the FIRST set is true stock. If it finds no
+# .orig it treats whatever is there as the engine's own and saves that -- so a
+# copy handed over without these enshrines OUR --gptk choice as "the engine's
+# own", permanently and silently, on the first launch.
+#
+# Two things about this that are one word apart and only one of them is right:
+#
+#   "back up before you write" -- passes any test that checks a .orig exists,
+#                                 and is wrong the moment we have touched the
+#                                 directory, because it preserves our choice
+#                                 under a name that claims to be CodeWeavers'.
+#   "back up from the source"  -- reads them out of the bundle this copy was
+#                                 MADE from. That is the only version that is
+#                                 true regardless of what we do afterwards.
+#
+# The six unix entries are SYMLINKS into ../../external. Measured: cp with no
+# flags resolves them and yields a 95,952-byte regular file where a 33-byte link
+# belongs, and the launcher's restore is a rename, so that copy would be moved
+# into place and libd3dshared.dylib would exist twice with nothing linking them.
+# Hence cp -a, and hence the assertion afterwards rather than trusting the flag.
+#
+# Names are DESTINATION names: generation 4 ships nvngx-on-metalfx and is renamed
+# on the way in, so the backup is nvngx.*.orig and never nvngx-on-metalfx.*.orig.
+# Derived, not listed. Stock CrossOver 26.3 ships d3d11, d3d12, dxgi, nvapi64,
+# nvngx and atidxx64 under apple_gptk/wine -- no d3d10, which a hand-written list
+# taken from a patched engine does include, and no atidxx64, which that same list
+# omits. A fixed list is wrong in both directions the moment two engines differ,
+# so back up whatever is actually there.
+lay_orig_backups() {
+  src=$1        # a CrossOver dir known to be stock
+  dst=$2        # the CrossOver dir inside our copy
+  laid=0; kept=0; links=0
+
+  for arch in x86_64-unix x86_64-windows; do
+    d="$src/lib64/apple_gptk/wine/$arch"
+    [ -d "$d" ] || continue
+    mkdir -p "$dst/lib64/apple_gptk/wine/$arch"
+    for from in "$d"/*; do
+      [ -e "$from" ] || [ -L "$from" ] || continue
+      case "$(basename "$from")" in *.orig) continue ;; esac
+      to="$dst/lib64/apple_gptk/wine/$arch/$(basename "$from").orig"
+      if [ -e "$to" ] || [ -L "$to" ]; then kept=$((kept + 1)); continue; fi
+      cp -a "$from" "$to" || die "could not lay $(basename "$to")"
+      laid=$((laid + 1))
+      [ -L "$to" ] && links=$((links + 1))
+    done
+  done
+
+  # external is a whole-directory backup, and libMoltenVK sits outside apple_gptk
+  # entirely -- easy to miss, and missing it is silent.
+  if [ -d "$src/lib64/apple_gptk/external" ] && [ ! -e "$dst/lib64/apple_gptk/external.orig" ]; then
+    /usr/bin/ditto "$src/lib64/apple_gptk/external" "$dst/lib64/apple_gptk/external.orig"
+    laid=$((laid + 1))
+  fi
+  if [ -e "$src/lib64/libMoltenVK.dylib" ] && [ ! -e "$dst/lib64/libMoltenVK.dylib.orig" ]; then
+    cp -a "$src/lib64/libMoltenVK.dylib" "$dst/lib64/libMoltenVK.dylib.orig"
+    laid=$((laid + 1))
+  fi
+
+  # Asserted, not assumed: anything that was a link must still be one. If cp ever
+  # resolves them the restore installs a fat duplicate and nothing complains.
+  bad=0
+  for arch in x86_64-unix x86_64-windows; do
+    for f in "$dst/lib64/apple_gptk/wine/$arch"/*.orig; do
+      [ -e "$f" ] || continue
+      orig="${f%.orig}"
+      src_f="$src/lib64/apple_gptk/wine/$arch/$(basename "$orig")"
+      if [ -L "$src_f" ] && [ ! -L "$f" ]; then
+        say "      $(basename "$f") is a regular file where stock has a link"
+        bad=$((bad + 1))
+      fi
+    done
+  done
+  [ "$bad" = 0 ] || die "toolkit backups were resolved instead of linked; a restore would break the engine"
+  say "      $laid backup(s) laid from stock, $kept already present, $links of them links"
+}
+
 # --- what we are about to do -------------------------------------------------
 if [ -n "$ARCHIVE" ]; then
   [ -f "$ARCHIVE" ] || die "no archive at $ARCHIVE"
@@ -120,6 +201,17 @@ else
 fi
 CX="$DEST/Contents/SharedSupport/CrossOver"
 [ -d "$CX" ] || die "the copy has no Contents/SharedSupport/CrossOver"
+
+# Seeded here and nowhere later, because THIS is the only instant at which the
+# copy is known to be stock: nothing below has run yet. Prefer the source bundle
+# when we have one, since it is a thing we never write to at all; fall back to
+# the copy itself, which is only true at this line and would quietly stop being
+# true if a step were inserted above.
+if [ -n "$ARCHIVE" ]; then
+  lay_orig_backups "$CX" "$CX"
+else
+  lay_orig_backups "$FROM/Contents/SharedSupport/CrossOver" "$CX"
+fi
 
 # --- 2. say where it came from ----------------------------------------------
 # The installer refuses an engine it cannot identify, and a copy answers to a
@@ -172,6 +264,26 @@ if [ -n "$GPTK" ]; then
     /usr/bin/ditto "$GPTK/$half" "$DST/$half"
     say "      $half installed"
   done
+
+  # The swap made a fresh apple_gptk, so the set laid down after the copy went
+  # with the old directory into apple_gptk_bak. Lay it again, still from stock,
+  # or a launcher restoring from .orig would find nothing and enshrine what we
+  # just installed. apple_gptk_bak is itself stock, so it is a valid source and
+  # is the one that still exists if --from-archive was used.
+  if [ -d "$BAK" ]; then
+    for arch in x86_64-unix x86_64-windows; do
+      [ -d "$BAK/wine/$arch" ] || continue
+      mkdir -p "$DST/wine/$arch"
+      for f in "$BAK/wine/$arch"/*; do
+        [ -e "$f" ] || [ -L "$f" ] || continue
+        case "$(basename "$f")" in *.orig) continue ;; esac
+        t="$DST/wine/$arch/$(basename "$f").orig"
+        [ -e "$t" ] || [ -L "$t" ] || cp -a "$f" "$t"
+      done
+    done
+    [ -e "$DST/external.orig" ] || [ ! -d "$BAK/external" ] || /usr/bin/ditto "$BAK/external" "$DST/external.orig"
+    say "      toolkit backups re-laid into the new apple_gptk"
+  fi
 else
   say "[4/6] toolkit: unchanged"
 fi
