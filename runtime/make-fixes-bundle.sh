@@ -47,6 +47,21 @@ released=true
 [ -n "$tag" ] || released=false
 version="${tag:-$(git -C "$REPO" describe --tags 2>/dev/null || echo "0.0.0")}"
 
+# Two overrides, for the one caller that cannot know what git knows.
+#
+# The app bundle carries this manifest too, and the app is BUILT BEFORE THE TAG
+# EXISTS -- release.sh checks the built app declares the version, packages it,
+# and only then tags. So a manifest generated during an app build would record
+# "fromReleasedTag": false and a version like v5.0.0-3-gabc1234, and both would
+# be wrong about the artefact that actually ships.
+#
+# Rather than let it state something false, the app build passes null: not "this
+# is not from a release" but "this copy cannot answer that". The release's own
+# tarball is generated after the tag and answers it properly. One field, two
+# contexts, neither of them lying.
+[ -n "${MGVF_MANIFEST_VERSION:-}" ] && version="$MGVF_MANIFEST_VERSION"
+[ -n "${MGVF_MANIFEST_RELEASED:-}" ] && released="$MGVF_MANIFEST_RELEASED"
+
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 

@@ -308,6 +308,33 @@ if [ -d "$bundle" ]; then
     cmp -s "$f" "$b" || { echo "  bundle stale: $(basename "$f")"; bundle_drift=$((bundle_drift + 1)); }
   done
   [ "$bundle_drift" = 0 ] && echo "  bundle: every copy matches runtime/"
+
+# Everything the fixes tarball ships must also be in the app.
+#
+# The two artefacts are for different consumers -- the tarball for anyone who is
+# not the launcher, the app for a launcher that hosts it -- and they are allowed
+# to differ. They are not allowed to differ BY OMISSION. A launcher embedding an
+# app that is a subset of the tarball fails as "this title has no fix", which is
+# not a sentence anyone can act on, and it fails at a user rather than here.
+#
+# Written the day this stopped being hypothetical: the app was missing NINJA
+# GAIDEN 3's four DLLs, its installer, its licence file and manifest.json.
+if [ -d "$ROOT/app/MacGameVideoFix.app/Contents/Resources" ]; then
+  tb="$(mktemp -d)"
+  if "$HERE/make-fixes-bundle.sh" "$tb" >/dev/null 2>&1; then
+    missing=$(comm -23 \
+      <(tar tzf "$(ls "$tb"/fixes-*.tar.gz | head -1)" | sed 's|.*/||' | grep -v '^$' | sort -u) \
+      <(ls "$ROOT/app/MacGameVideoFix.app/Contents/Resources" | sort -u))
+    if [ -z "$missing" ]; then
+      echo "  payload: everything the fixes bundle ships is also in the app"
+    else
+      echo "  payload: the app is a SUBSET of the fixes bundle -- missing:"
+      printf '%s\n' "$missing" | sed 's/^/    /'
+      drift=1
+    fi
+  fi
+  rm -rf "$tb"
+fi
 else
   echo "  bundle: not built"
 fi

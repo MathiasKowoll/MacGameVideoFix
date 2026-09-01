@@ -82,6 +82,26 @@ cp "$ROOT/runtime/stage-codecs.sh" "$RES/"
 # and can run this; if the files are not here it cannot, and the failure reads as
 # "this title has no fix" rather than "the payload is a subset".
 cp "$ROOT/runtime/install-ng3-fix.sh" "$RES/"
+
+# manifest.json travels too, so a launcher hosting this bundle has the index it
+# would otherwise have downloaded: which DLL belongs to which game, which carrier
+# it rides, under what name the original is kept, whether a registry override is
+# needed. Without it the payload is present and unreadable.
+#
+# Generated with its provenance stated honestly rather than guessed -- see the
+# override block in make-fixes-bundle.sh for why "fromReleasedTag" is null here
+# and a real answer in the release's own tarball.
+MANIFEST_TMP="$(mktemp -d)"
+# Read out of the Info.plist this build just wrote, not from a second constant.
+APP_VERSION="$(/usr/bin/defaults read "$APP/Contents/Info" CFBundleShortVersionString 2>/dev/null)"
+if MGVF_MANIFEST_VERSION="v$APP_VERSION" MGVF_MANIFEST_RELEASED=null \
+     "$ROOT/runtime/make-fixes-bundle.sh" "$MANIFEST_TMP" >/dev/null 2>&1; then
+  tar xzf "$(ls "$MANIFEST_TMP"/fixes-*.tar.gz | head -1)" -C "$MANIFEST_TMP"
+  m="$(/usr/bin/find "$MANIFEST_TMP" -name manifest.json | head -1)"
+  [ -n "$m" ] && cp "$m" "$RES/manifest.json"
+fi
+rm -rf "$MANIFEST_TMP"
+[ -f "$RES/manifest.json" ] || { echo "error: manifest.json was not generated" >&2; exit 1; }
 cp "$ROOT"/runtime/ng3-*.dll "$RES/"
 cp "$ROOT/runtime/ng3-THIRD-PARTY-LICENCES.md" "$RES/"
 chmod +x "$RES/install-ng3-fix.sh"
