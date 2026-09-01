@@ -207,6 +207,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
     case kingdomHearts1525
     case tmntSplinteredFate
     case tormentedSouls2
+    case ninjaGaiden3
     case ninjaGaiden4
     case resonance
 
@@ -231,6 +232,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .tmntSplinteredFate: return "TMNT: Splintered Fate"
         case .tormentedSouls2:    return "Tormented Souls 2"
         case .ninjaGaiden4:       return "NINJA GAIDEN 4"
+        case .ninjaGaiden3:       return "NINJA GAIDEN 3: Razor's Edge"
         case .resonance:          return "RESONANCE: A PLAGUE TALE LEGACY"
         }
     }
@@ -253,6 +255,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .tmntSplinteredFate: return "Opens a window, then closes silently"
         case .tormentedSouls2:    return "Fatal error before the first frame"
         case .ninjaGaiden4:       return "Says the VP9 codec is missing, then exits"
+        case .ninjaGaiden3:       return "Will not start: \"Insufficient VRAM\""
         case .resonance:          return "Refuses to start: Shader Model 6.7 not supported"
         }
     }
@@ -278,6 +281,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .kingdomHearts1525: return "KINGDOM HEARTS HD 1.5+2.5 Launcher.exe"
         case .tmntSplinteredFate: return "TMNTSF.exe"
         case .ninjaGaiden4:       return "NINJAGAIDEN4-Steam.exe"
+        case .ninjaGaiden3:       return "NINJA GAIDEN 3 Razor's Edge.exe"
         case .resonance:          return "Resonance.exe"
         case .tormentedSouls2:    return "TormentedSouls2.exe"
         }
@@ -297,6 +301,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
             return "the folder holding TormentedSouls2.exe"
         case .ninjaGaiden4:
             return "the folder holding NINJAGAIDEN4-Steam.exe"
+        case .ninjaGaiden3:
+            return "the folder holding NINJA GAIDEN 3 Razor's Edge.exe"
         case .resonance:
             return "the folder holding Resonance.exe"
         default:               return "the game folder, the one with Engine inside"
@@ -327,6 +333,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
             return "…/steamapps/common/Tormented Souls 2"
         case .ninjaGaiden4:
             return "…/steamapps/common/NINJAGAIDEN4"
+        case .ninjaGaiden3:
+            return "…/steamapps/common/[NINJA GAIDEN Master Collection] NINJA GAIDEN 3 Razor's Edge"
         case .resonance:
             return "…/steamapps/common/Resonance A Plague Tale Legacy"
         }
@@ -344,6 +352,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         // before it will open anything, and sends decoding to software. The
         // frames it then gets are ordinary.
         case .ninjaGaiden4:                        return [.videoBridge]
+        case .ninjaGaiden3:                        return [.bottleDriver]
         default:                                 return [.runtime]
         }
     }
@@ -392,6 +401,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
          * the one about 16:9. */
         case .tormentedSouls2: return "install-tormented-fix.sh"
         case .ninjaGaiden4:    return "install-ng4-fix.sh"
+        case .ninjaGaiden3:    return "install-ng3-fix.sh"
         case .resonance:       return "install-resonance-fix.sh"
         default:               return "install-runtime-fix.sh"
         }
@@ -477,7 +487,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
             || self == .nierReplicant || self == .woLong
             || self == .kingdomHearts28 || self == .kingdomHearts1525
             || self == .tmntSplinteredFate || self == .tormentedSouls2
-            || self == .ninjaGaiden4 || self == .resonance {
+            || self == .ninjaGaiden4 || self == .resonance
+            || self == .ninjaGaiden3 {
             guard let exe = executable else { return nil }
             var candidates = [url]
             if let subs = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
@@ -587,6 +598,10 @@ enum Mode: String, CaseIterable, Identifiable {
     case videoBridge
     /// Answer a D3D12 call that ends the process instead of returning an error.
     case guardCall
+    /// Place a driver and its filters in the BOTTLE, scoped to one executable.
+    /// Nothing goes in the game's folder at all. The other three each add a DLL
+    /// beside the game, and saying that of this one would be false.
+    case bottleDriver
 
     var id: String { rawValue }
 
@@ -595,6 +610,7 @@ enum Mode: String, CaseIterable, Identifiable {
         case .runtime:     return "Runtime patch"
         case .videoBridge: return "Video bridge"
         case .guardCall:   return "Crash guard"
+        case .bottleDriver: return "Bottle driver"
         }
     }
 
@@ -611,6 +627,10 @@ enum Mode: String, CaseIterable, Identifiable {
             return "Adds one small DLL beside the game's own. The game asks D3D12 a "
                  + "question whose answer, under D3DMetal, ends the process instead "
                  + "of coming back; this answers it first."
+        case .bottleDriver:
+            return "Adds nothing to the game's folder. Four DLLs go into the "
+                 + "bottle's own system32 and this executable alone is told to "
+                 + "prefer them, so no other title in the same bottle changes."
         }
     }
 }
@@ -774,7 +794,7 @@ final class Runner: ObservableObject {
     var state: FixState {
         switch mode {
         case .runtime:     return runtimeState
-        case .videoBridge, .guardCall: return bridgeState
+        case .videoBridge, .guardCall, .bottleDriver: return bridgeState
         }
     }
 
@@ -783,7 +803,7 @@ final class Runner: ObservableObject {
     var otherState: FixState {
         switch mode {
         case .runtime:     return legacyReencode
-        case .videoBridge, .guardCall: return .notApplied
+        case .videoBridge, .guardCall, .bottleDriver: return .notApplied
         }
     }
 
@@ -994,14 +1014,14 @@ final class Runner: ObservableObject {
     func apply() {
         switch mode {
         case .runtime:     applyRuntime()
-        case .videoBridge, .guardCall: runBridge(install: true)
+        case .videoBridge, .guardCall, .bottleDriver: runBridge(install: true)
         }
     }
 
     func revert() {
         switch mode {
         case .runtime:     revertRuntime()
-        case .videoBridge, .guardCall: runBridge(install: false)
+        case .videoBridge, .guardCall, .bottleDriver: runBridge(install: false)
         }
     }
 
@@ -3822,7 +3842,7 @@ extension SupportedGame {
         case .dynastyWarriors, .personaStrikers, .nioh, .nioh2, .nioh3,
              .nierReplicant, .woLong, .kingdomHearts28, .kingdomHearts1525,
              .tmntSplinteredFate, .tormentedSouls2, .ninjaGaiden4,
-             .resonance:
+             .ninjaGaiden3, .resonance:
             return FileManager.default.fileExists(
                 atPath: folder.appendingPathComponent(exe).path)
         default:
@@ -5840,6 +5860,7 @@ struct ContentView: View {
         case .runtime:     return "Install the proxy DLL that patches Electra at startup."
         case .videoBridge: return "Install the DLL that carries frames from the decoder to the renderer."
         case .guardCall:   return "Install the DLL that answers the call which ends the process."
+        case .bottleDriver: return "Install the driver and filters into the bottle, for this game only."
         }
     }
 

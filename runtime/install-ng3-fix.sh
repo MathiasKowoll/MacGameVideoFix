@@ -72,9 +72,36 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 usage() { sed -n '3,12p' "$0" >&2; exit 1; }
-[ $# -ge 1 ] || usage
 
-BOTTLE="${1%/}"
+# Two callers, two meanings for the first argument, and structure decides rather
+# than precedence.
+#
+# By hand this takes a bottle. The app passes every installer the GAME FOLDER it
+# found, because every other fix here goes beside the executable -- so if this
+# one simply preferred $1 it would be handed a game folder and treat it as a
+# bottle, and if it simply preferred the environment it would ignore a bottle
+# somebody typed. Neither rule is right for both callers.
+#
+# So look: a bottle has a cxbottle.conf and a drive_c. If $1 is one, use it. If
+# it is not and MGVF_BOTTLE names one, use that -- which is what the app sets,
+# from the bottle a person chose in the wizard. If neither, refuse and say so,
+# because guessing which bottle somebody meant is how a fix lands in a bottle
+# they never picked.
+is_bottle() { [ -n "$1" ] && [ -f "$1/cxbottle.conf" ] && [ -d "$1/drive_c" ]; }
+
+BOTTLE=""
+if is_bottle "${1:-}"; then
+  BOTTLE="${1%/}"
+elif is_bottle "${MGVF_BOTTLE:-}"; then
+  BOTTLE="${MGVF_BOTTLE%/}"
+else
+  echo "error: no bottle to work on." >&2
+  echo "       Pass one, e.g. ~/Library/Application Support/CrossOver/Bottles/Steam," >&2
+  echo "       or set MGVF_BOTTLE. A bottle is a folder with cxbottle.conf and drive_c." >&2
+  [ -n "${1:-}" ] && echo "       '$1' is not one." >&2
+  [ -n "${MGVF_BOTTLE:-}" ] && echo "       MGVF_BOTTLE='$MGVF_BOTTLE' is not one either." >&2
+  exit 1
+fi
 ACTION="${2:-install}"
 # A read-only caller sets MGVF_STATUS_ONLY=1. The default above is the
 # DESTRUCTIVE branch, so without this the read-only property of a survey rests
