@@ -38,24 +38,24 @@ TAG="v$VERSION"
 say() { printf '  %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-echo "[1/5] the app says what the tag says"
+echo "[1/6] the app says what the tag says"
 APP="$ROOT/app/MacGameVideoFix.app"
 [ -d "$APP" ] || die "no app bundle at $APP -- run app/build-app.sh"
 built="$(defaults read "$APP/Contents/Info" CFBundleShortVersionString 2>/dev/null)"
 [ "$built" = "$VERSION" ] || die "the built app is $built, not $VERSION. Bump build-app.sh and run it."
 say "app $built"
 
-echo "[2/5] nothing shipped has drifted from its source"
+echo "[2/6] nothing shipped has drifted from its source"
 "$ROOT/runtime/check-builds.sh" >/dev/null 2>&1 \
   || die "runtime/check-builds.sh reports drift. Run it to see what, and fix it first."
 say "every DLL rebuilds from the source it names; the bundle matches runtime/"
 
-echo "[3/5] the tables and the prose agree"
+echo "[3/6] the tables and the prose agree"
 ( cd "$ROOT/wiki" && python3 games.py --check >/dev/null 2>&1 ) \
   || die "wiki/games.py --check fails. Run it to see what, and fix it first."
 say "generated tables current, no hand-written counts"
 
-echo "[4/5] packaging"
+echo "[4/6] packaging"
 # ditto, not zip: it keeps the symlinks and the signature.
 OUT="$(mktemp -d)"; trap 'rm -rf "$OUT"' EXIT
 ZIP="$OUT/MacGameVideoFix-$VERSION.zip"
@@ -70,7 +70,7 @@ if [ "$DRY" = 1 ]; then
   exit 0
 fi
 
-echo "[5/5] tag, push, upload"
+echo "[5/6] tag, push, upload"
 git -C "$ROOT" tag -a "$TAG" -m "$TAG" 2>/dev/null || say "$TAG already exists, reusing it"
 git -C "$ROOT" push -q origin "$TAG" || die "could not push $TAG"
 gh release view "$TAG" >/dev/null 2>&1 \
@@ -106,5 +106,43 @@ say "fixes-v$VERSION.tar.gz  $(( $(stat -f%z "$BUNDLE") / 1024 )) KB"
 gh release upload "$TAG" "$BUNDLE" "$BUNDLE.sha256" --clobber >/dev/null \
   || die "could not upload the fixes bundle"
 say "$TAG published with the app, the fixes bundle and its checksum"
+
+echo "[6/6] what was published, not what was built"
+# Every guard above this line asks "is what I am about to build correct". None of
+# them asked "is what I just published correct", and on 5.0.1 that difference
+# cost a file: the tag was cut between the commit that put NINJA GAIDEN 3 in the
+# app and the commit that put manifest.json there, so the published bundle was a
+# subset and nothing said so. check-builds.sh had already passed -- on the tree.
+#
+# This is the same argument as the read-back in make-engine-copy.sh. A write
+# without a read-back rots, and a release process that only writes is a write
+# without a read-back with a version number on it.
+#
+# Read from the uploaded asset, downloaded again, so this cannot pass by looking
+# at the zip still sitting in the temp directory it was made in.
+VERIFY="$(mktemp -d)"; trap 'rm -rf "$OUT" "$VERIFY"' EXIT
+if gh release download "$TAG" -p "MacGameVideoFix-$VERSION.zip" -D "$VERIFY" --clobber >/dev/null 2>&1 \
+   && ditto -x -k "$VERIFY/MacGameVideoFix-$VERSION.zip" "$VERIFY/x" 2>/dev/null; then
+  # The real bundle. A plain find also matches __MACOSX, the zip's metadata
+  # folder, which answers a question nobody asked and answers it wrongly.
+  PUB="$VERIFY/x/MacGameVideoFix.app/Contents/Resources"
+  if [ -d "$PUB" ]; then
+    lost=$(comm -23 \
+      <(tar tzf "$BUNDLE" | sed 's|.*/||' | grep -v '^$' | sort -u) \
+      <(ls "$PUB" | sort -u))
+    if [ -z "$lost" ]; then
+      say "the published app carries everything the published fixes bundle does"
+    else
+      say "PUBLISHED APP IS A SUBSET of the published fixes bundle. Missing:"
+      printf '%s\n' "$lost" | sed 's/^/    /'
+      say "The release exists and is wrong. Fix and publish again; do not leave it."
+      exit 1
+    fi
+  else
+    say "could not find the app inside the published zip -- verify by hand"
+  fi
+else
+  say "could not download the published asset to check it -- verify by hand"
+fi
 echo
 say "Write the notes with: gh release edit $TAG --notes-file <file>"
