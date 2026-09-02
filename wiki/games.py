@@ -186,7 +186,7 @@ the table nothing.
 
 Those {gptk_n} rows in bold are where that stops being a footnote, and they
 fall into two camps pointing opposite ways. **NINJA GAIDEN 4 is measured working
-on 3.0, and on 4.0b2 its video has sound and no picture. Life is Strange -- both
+on 3.0, and on 4.0b2 nothing is ever presented -- the game runs blind while every `Present` succeeds. Life is Strange -- both
 packages -- runs on 4.0b2 and crashes
 on 3.0.** Opposite requirements, same machine, so there is no single toolkit
 that serves the whole table.
@@ -731,7 +731,7 @@ GPTK_BY_TITLE = {
     # it" is retracted; it was never measured. "Preview stalls before video" is
     # measured but names a CrossOver build, which is what the CrossOver cell is
     # for -- putting it here said nothing about the toolkit twice over.
-    "NINJA GAIDEN 4": "**3.0 only** -- on 4.0b2 the video has sound and no picture",
+    "NINJA GAIDEN 4": "**3.0 only** -- on 4.0b2 nothing is ever presented: the game runs blind, every `Present` succeeds, the window stays black",
     "Life is Strange: Reunion": "**4.0b2 only** -- 3.0 crashes it",
     "Life is Strange: Double Exposure": "**4.0b2 only** -- 3.0 crashes it",
 }

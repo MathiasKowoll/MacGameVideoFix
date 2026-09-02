@@ -197,80 +197,85 @@ DYNASTY WARRIORS: ORIGINS ships 355 `.webm` cutscenes, and its row records 26.3
 patched engine. Nobody has yet watched it play on a stock 26.3 with the demuxer
 staged, and that is the run still owed.
 
-## Open: with GPTK 4.0b2 it has sound and no picture
+## Closed on our side: with GPTK 4.0b2 nothing is ever presented
 
 **This title is the exception to the project's toolkit rule.** The general rule
 is GPTK 4.0b2; NINJA GAIDEN 4 is measured working on 3.0, and that is what its
-row says. What follows is what 4.0b2 does instead. It is being looked at now.
+row says. What follows is what 4.0b2 does instead, measured over 2026-09-01 and
+2026-09-02 on this project's patched stable 26.3 engine, an M4 Max on macOS 27,
+with the toolkit set to 4.0b2 and `D3DM_MTL4=0`.
 
-Observed 2026-08-31, on this project's patched stable 26.3 engine with the
-toolkit set to 4.0b2 and saved: the game runs, the cutscene plays its audio, no
-picture appears, and the window never reaches full screen. It does not stall and
-it does not exit.
+**The symptom, stated correctly.** On 4.0b2 the game is alive and blind. Audio
+plays, keyboard input takes effect, the process sits at 3 GB of resident memory
+against 10 GB on 3.0, the Metal HUD never appears, and nothing is ever seen --
+not the logos, not the menu, not the movie. The one run of 2026-09-01 that
+showed logos turned out to be on 3.0 front-ends: its patch attempts were refused
+with error 87, which is how 3.0's native D3D objects answer.
 
-From the outside that is the shape several other titles here turned out to have,
-sound without picture, where the decoder produces frames and something
-downstream never draws them. **It is not that shape.** No video file was ever
-opened in that run and Media Foundation recorded nothing, so there is no frame
-to lose, and neither the staged demuxer nor the MFT gate this page is about is
-involved. The fault sits before the video path rather than in it.
+**Everything up to the screen works, and each link was measured.** In order:
 
-**Where it is waiting.** Sampling the process put the Metal submission queue in
-`IOGPUCommandQueueWaitMTLEvent` for essentially every sample, with the GPU at 0%
-utilisation, and D3DMetal's own thread waiting on `os_sync_wait_on_address`.
+| Link | Measured on 4.0b2 |
+|---|---|
+| Container and codec | `matroskademux` parses the WebM, `vp9dec` decodes; 681 buffers into `sink_chain_cb`, 327 queued, flush events paired |
+| Media Foundation | the reader is **asynchronous** (NULL out parameters), frames arrive in `OnReadSample`: 300 of them, timestamps rising, one buffer of 3,110,400 bytes = 1920x1080 NV12 |
+| The picture | the luma plane sampled across the frame reads min 25, max 222, mean 61 -- a real image, not a black frame of the right size |
+| The game reads it | `Lock` on every frame; overwriting the buffer with flat white (verified by reading it back) changes nothing on screen |
+| The game uploads it | at movie open it creates a placed `1920x1080 R8G8B8A8_UNORM_SRGB` texture and a buffer of exactly 8,294,400 bytes; it converts NV12 to RGBA itself |
+| The swap chain | created 1280x720 RGBA8, three buffers, `SEQUENTIAL` swap effect; re-created at 2560x1440 (or 1920x1242 R10G10B10A2) on the mode switch |
+| Present | thousands of `Present` calls, every one `S_OK`; the swap chain's own `GetLastPresentCount` advances in step |
+| The window | exists, is on screen, 2560x1440, and captured from the host is 0% non-black; on 3.0 the same window captures 100% non-black |
+| D3DMetal's own HUD | `D3DM_SHOW_HUD_STATS=1` draws nothing either |
 
-The wait is not immediate and not certain. A second run was still doing real
-work a minute and a half in, with the GPU at 27%, so this is a state the process
-falls into rather than one it starts in.
+**Excluded, each with the run that excluded it.** Wine reports nothing: with
+`fixme+d3d11,fixme+dxgi` active and the DLLs loaded, zero lines -- the game does
+not use D3D11 video processing. CoreAnimation and Metal log nothing. The four
+capabilities 4.0b2 advertises and 3.0 does not (`DepthBoundsTest`,
+`EnhancedBarriers`, `UnrestrictedBufferTextureCopyPitch`,
+`UnrestrictedVertexElementAlignment`) are never queried by the title; masking
+them to 3.0's values changed nothing. Format support is identical on both
+toolkits. Allowing the DXGI device manager crashes the game on a null write
+before any frame, with our D3D11 patch and without it -- so refusing it is load
+bearing, not a leftover from Beast. Stripping `ALLOW_TEARING`, forcing the flip
+model (accepted; the game then presents at interval 1), dropping the
+frame-latency waitable object: accepted, still black. Forcing a windowed swap
+chain crashes inside `libd3dshared`. `CaptureDisplaysForFullscreen` moves the
+window from wine's level 26 to the shielding level: still black. `mtl3on4`,
+Apple's Metal-3-on-4 shim on macOS 27, is mapped on both toolkits.
 
-**Then it was run, and the queue went away.** Apple's D3DMetal 4.0b2 reads an
-environment variable `D3DM_MTL4` that its 3.0 generation does not have -- the
-switch for the Metal 4 path whose queue was measured parked. Set to `0` in
-CrossOver's own Run dialog, the thread `com.Metal4.SubmissionQueue` no longer
-exists at all, `IOGPUCommandQueueWaitMTLEvent` drops to zero samples, work is
-submitted again, and the game reaches full screen and opens its cutscene file.
+**So the conclusion is narrow and firm.** D3DMetal 4.0b2 accepts every
+presentation and counts it, and no pixel of its own or of the game's reaches a
+window on this host. That sits below anything a probe on the Windows side of
+the process can reach. What is actionable: this title ships on 3.0, which
+works; the chain above is the report for Apple; and the probe keeps every
+switch it grew (`NG4_WATCH_PRESENT`, `NG4_WATCH_D3D12_RESOURCES`,
+`NG4_WATCH_MOVIE_COPY`, `NG4_NO_TEARING`, `NG4_FLIP_MODEL`, `NG4_NO_WAITABLE`,
+`NG4_FORCE_WINDOWED`, `NG4_CAPS_LIKE_3`, `NG4_WATCH_CAPS`, `NG4_PAINT_TEST`,
+`NG4_WITHHOLD_D3D_FROM_MFT`, `NG4_FORCE_PATCH`), all off by default, so the
+next GPTK beta can be measured in a few minutes. `NG4_WATCH_PRESENT` is a
+4.0b2 instrument only: on 3.0 the DXGI front-end is patchable and the hooks
+hang the title.
 
-One caveat on that, because two things changed at once: `MTL_HUD_ENABLED=1` was
-set in the same run and had not been set before. The attribution to `D3DM_MTL4`
-still holds on structural grounds -- a HUD does not remove a submission queue --
-but whether the HUD also contributed to the unstall is not separated by a single
-run, and the stall was intermittent to begin with.
+**Retracted, and kept because it was written down.** An earlier version of this
+section said three things that were our instrument rather than the game.
+*"`ReadSample` returns no sample, 200 calls running, flags 0 -- the same on
+3.0"*: the reader is asynchronous, and a NULL sample pointer is what a working
+async reader looks like from inside `ReadSample`; five runs were read as a dead
+pipeline on the strength of it. *"No NG4 log on any engine has ever recorded a
+frame coming out"*: it had, once the callback was watched. *"`wg_format_from_caps:
+Unhandled caps video/x-vp9` names the fault"*: that line is a benign trace from
+the route that works. Two further instruments lied by construction before being
+fixed: a paint test that painted one frame in three hundred because it required
+a buffer length the caller does not pass, and a resource log whose cap was spent
+on loading-screen render targets before the movie opened. The Metal 4 finding
+stands: with `D3DM_MTL4=1` the game never reaches the movie at all; that is an
+earlier, separate wall.
 
-**How long each toolkit takes to reach a cutscene**, same engine, same bottle,
-only the toolkit changed: about **2 minutes 30 seconds** on 4.0b2 with the Metal
-4 path off, and about **28 seconds** on 3.0. Five times, before anything to do
-with video.
-
-**And underneath it, a second fault that is not the toolkit's.** With the stall
-gone, the cutscene file opens and `ReadSample` returns no sample, 200 calls
-running, flags 0. The same happens on 3.0 -- 200 calls, nothing -- so this one is
-not a 4.0b2 regression. GStreamer's own debug output names it:
-
-    wg_format.c:675:wg_format_from_caps: Unhandled caps video/x-vp9,
-        width=1920, height=1080, framerate=60000/1001, ...
-
-Everything upstream works: `matroskademux` parses the WebM and finds the track,
-`vp9dec` is instantiated, the caps are complete. What is missing is the mapping
-from those caps into winegstreamer's own `struct wg_format`, which the media
-source needs. The carried patch 0002 adds VP9 in the other direction, for the
-decoder transform, and does not reach this one.
-
-So the table's `**3.0 only**` stands, but it should be read for what it is: on
-3.0 this title **runs and plays** -- 60 fps, 7.8 ms of GPU at the title screen --
-not that its cutscenes are seen. No NG4 log on any engine, on any date, has ever
-recorded a frame coming out.
-
-**Retracted, and kept because it was written down.** An earlier version of the
-tables said the stall was the toolkit "executing command lists concurrently with
-no lever to turn that off". That was never measured, and what has now been
-measured is a submission queue waiting on an event. The old sentence was removed
-rather than corrected; it is recorded here so its removal is visible.
-
-Worth separating from the toolkit-selection bug found the same day: several
-titles were measured against a generation other than the one selected, because
-the selection was not applied at launch. These observations were made after that
-was understood, with 4.0b2 selected and saved.
-
+**Where the fault line between the toolkits actually runs.** D3DMetal 3.0
+implements its D3D11/D3D12 objects in native code that wine reports as
+`MEM_FREE` (so no vtable there can be patched -- the error-87 refusals recorded
+all over this project's history are that, not a property of 26.3); 4.0b2
+implements them in PE, where a single cold slot at a time is tolerated and the
+full set is not. That is a different object layer, not a version bump.
 
 ## Caveats
 

@@ -45,6 +45,12 @@ static LONG log_lines;
 static LONG CALLBACK note_exception(EXCEPTION_POINTERS *info);
 static HRESULT (WINAPI *real_D3D12CreateDevice)(void *, UINT, const GUID *, void **);
 static HRESULT WINAPI my_D3D12CreateDevice(void *, UINT, const GUID *, void **);
+static HRESULT WINAPI my_CreateDXGIFactory(const GUID *, void **);
+static HRESULT WINAPI my_CreateDXGIFactory1(const GUID *, void **);
+static HRESULT WINAPI my_CreateDXGIFactory2(UINT, const GUID *, void **);
+static HRESULT (WINAPI *real_CreateDXGIFactory)(const GUID *, void **);
+static HRESULT (WINAPI *real_CreateDXGIFactory1)(const GUID *, void **);
+static HRESULT (WINAPI *real_CreateDXGIFactory2)(UINT, const GUID *, void **);
 
 
 static void logf_(const char *fmt, ...)
@@ -176,9 +182,44 @@ static BOOL patch_slot(const char *what, void *obj, int slot,
     }
     if (!VirtualProtect(&(*vt)[slot], sizeof(void *), PAGE_READWRITE, &old))
     {
+        /* Say what the page actually is, instead of only that it was refused.
+         *
+         * "VirtualProtect refused (err 87)" was recorded for months as a fact
+         * about 26.3 and left there, and it is the reason no D3D instrumentation
+         * can be installed on this title in the configuration that ships -- so
+         * the one measurement that would explain it is worth more than another
+         * observation of it happening. ERROR_INVALID_PARAMETER from
+         * VirtualProtect means the range is not what the caller assumed: freed,
+         * spanning two allocations, or not a private commit at all. */
+        DWORD err = GetLastError();
+        MEMORY_BASIC_INFORMATION mbi;
+        SIZE_T got = VirtualQuery(&(*vt)[slot], &mbi, sizeof(mbi));
+
         logf_("  patch %s: VirtualProtect refused (err %lu) at vtable %p slot %d",
-              what, GetLastError(), (void *)*vt, slot);
-        return FALSE;
+              what, err, (void *)*vt, slot);
+        if (got)
+            logf_("    the page: base %p, alloc base %p, size %llu, "
+                  "state 0x%lx, protect 0x%lx (alloc 0x%lx), type 0x%lx",
+                  mbi.BaseAddress, mbi.AllocationBase,
+                  (unsigned long long)mbi.RegionSize, mbi.State,
+                  mbi.Protect, mbi.AllocationProtect, mbi.Type);
+        else
+            logf_("    VirtualQuery could not describe the page either -- "
+                  "the address is not mapped in this process");
+
+        /* Opt-in only: a second attempt with execute rights, for when the vtable
+         * shares a page with code. Off by default because making a patch land
+         * that has never landed on this engine changes what is being measured. */
+        {
+            char v[8];
+            if (GetEnvironmentVariableA("NG4_FORCE_PATCH", v, sizeof(v)) && v[0] == '1'
+                && VirtualProtect(&(*vt)[slot], sizeof(void *),
+                                  PAGE_EXECUTE_READWRITE, &old))
+                logf_("    NG4_FORCE_PATCH: execute+write was accepted where "
+                      "read+write was not -- continuing");
+            else
+                return FALSE;
+        }
     }
     (*vt)[slot] = replacement;
     VirtualProtect(&(*vt)[slot], sizeof(void *), old, &old);
@@ -949,6 +990,92 @@ static BOOL refuse_d3d_manager;
  * the one build where the title works these patches are refused anyway. */
 static BOOL patch_d3d12;
 
+/* NG4_CAPS_LIKE_3=1: answer CheckFeatureSupport the way D3DMetal 3.0 does.
+ *
+ * Measured 2026-09-01 with a standalone PE against both toolkits, each
+ * identified by lsof and by D3DM_DEVICE_DESCRIPTION echoing back: every
+ * capability structure is identical between 3.0 and 4.0b2 except four words,
+ * all of which 4.0b2 turns on -- OPTIONS2.DepthBoundsTestSupported,
+ * OPTIONS12.EnhancedBarriersSupported,
+ * OPTIONS13.UnrestrictedBufferTextureCopyPitchSupported and
+ * OPTIONS13.UnrestrictedVertexElementAlignmentSupported. The movie is decoded
+ * identically on both, the game reads the pixels on both, and only 3.0 draws
+ * them. A capability that flips at device creation is exactly the kind of thing
+ * a title branches its upload path on; a 1080p luma plane has a 1920-byte
+ * pitch, which is not a multiple of 256, so the copy-pitch bit in particular
+ * selects between padding rows and copying them as they are.
+ *
+ * This mode patches ONE vtable slot, CheckFeatureSupport, and nothing else.
+ * The full NG4_PATCH_D3D12 set is what this title does not survive; whether a
+ * single cold-path slot is tolerated is itself part of what the run measures,
+ * and the log reports the patch landing or being refused either way. */
+static BOOL caps_like_3;
+
+/* NG4_WATCH_D3D12_RESOURCES=1: log what the game creates through
+ * CreateCommittedResource -- one more cold slot, patched alone. The single
+ * CheckFeatureSupport slot was tolerated on 2026-09-01 where the full set was
+ * not, so the D3D12 side can be read one slot at a time. Observational only:
+ * the call is forwarded untouched and only textures large enough to hold a
+ * frame, or buffers large enough to carry one, are printed. */
+static BOOL watch_d3d12_resources;
+
+/* NG4_WATCH_CAPS=1: patch the CheckFeatureSupport slot to LOG the game's
+ * capability queries, without changing any answer. NG4_CAPS_LIKE_3 does the
+ * masking; this only listens, so the full list of what the title asks can be
+ * recorded on a run that alters nothing. */
+static BOOL watch_caps;
+
+/* NG4_WATCH_MOVIE_COPY=1: follow the two objects the movie is built from.
+ *
+ * On 4.0b2 the game creates, as the movie opens, a 1920x1080 RGBA8_SRGB
+ * texture and a buffer of exactly 1920x1080x4 bytes (2026-09-01). This mode
+ * remembers both when they are created and then watches what touches them:
+ * Map/Unmap on the buffer (and samples what the game wrote into it), and
+ * CopyTextureRegion / CopyResource on any command list where either is the
+ * source or destination. Everything else on those hot vtables is compared by
+ * pointer and forwarded. 3.0 cannot be watched this way at all -- its D3D12
+ * objects live in native code that wine reports as MEM_FREE -- so this is a
+ * 4.0b2 instrument by construction. */
+static BOOL watch_movie_copy;
+
+/* NG4_WATCH_PRESENT=1: the swap chain.
+ *
+ * Nothing has ever been seen on 4.0b2 -- not the logos, not the menu, not the
+ * movie -- and the Metal HUD, which is drawn on whatever the process presents,
+ * never appears, while on 3.0 it shows up in the first small window and stays
+ * through fullscreen. The one run of 2026-09-01 in which logos were seen turns
+ * out to have been on 3.0 front-ends (its patches were refused with error 87).
+ * So the question is not what the game draws but whether anything is ever
+ * presented: creation of the swap chain and every Present, with its result,
+ * watched and forwarded untouched. */
+static BOOL watch_present;
+
+/* NG4_NO_TEARING=1 and NG4_NO_WAITABLE=1: two experiments on the swap chain.
+ *
+ * Measured 2026-09-01 on 4.0b2: the game creates its swap chain, switches to
+ * windowed, resizes with flags 0x842 (ALLOW_MODE_SWITCH |
+ * FRAME_LATENCY_WAITABLE_OBJECT | ALLOW_TEARING) and then presents with
+ * interval 0 and DXGI_PRESENT_ALLOW_TEARING -- and every Present returns S_OK
+ * while nothing reaches the screen, not even the Metal HUD, which is drawn on
+ * whatever is presented. A Present that succeeds and shows nothing is the
+ * signature of a path D3DMetal accepts but does not perform. These strip the
+ * tearing flag from Present and from the swap chain, and the waitable-object
+ * flag from the swap chain, so the title takes the ordinary vsynced path. Opt
+ * in, off by default, and each says in the log what it changed. */
+static BOOL no_tearing, no_waitable;
+
+/* NG4_FLIP_MODEL=1: rewrite the swap effect from the bitblt model (DISCARD 0 /
+ * SEQUENTIAL 1) to FLIP_DISCARD (4). The title asks for SEQUENTIAL, which on
+ * Windows a D3D12 device would refuse outright; D3DMetal 4.0b2 accepts it and
+ * shows nothing, and the bitblt model is the kind of legacy path a new major
+ * version drops first. NG4_FORCE_WINDOWED=1: ask for a windowed swap chain
+ * even when the title asks for exclusive fullscreen, since the game keeps
+ * re-creating swap chains and switching to windowed as if the mode switch
+ * never settles. Both opt-in and logged. */
+static BOOL flip_model, force_windowed;
+static void *movie_tex_, *movie_buf_;
+static void watch_movie_resource_vtable(void *res);   /* defined with the copy hooks below */
+
 
 /* Follow the DXGI device manager, which is where this stops.
  *
@@ -1241,7 +1368,10 @@ static HRESULT WINAPI my_SetStreamSelection(void *self, DWORD stream, BOOL selec
 
 static HRESULT WINAPI my_GetNativeMediaType(void *self, DWORD stream, DWORD index, void **type)
 {
-    HRESULT hr = real_GetNativeMediaType(self, stream, index, type);
+    HRESULT hr;
+    if (index == 0)
+        logf_("GetNativeMediaType(stream %lu) -- calling", stream);
+    hr = real_GetNativeMediaType(self, stream, index, type);
     if (SUCCEEDED(hr) && type && *type)
     {
         GUID sub;
@@ -1259,7 +1389,14 @@ static HRESULT WINAPI my_GetNativeMediaType(void *self, DWORD stream, DWORD inde
 
 static HRESULT WINAPI my_SetCurrentMediaType(void *self, DWORD stream, DWORD *reserved, void *type)
 {
-    HRESULT hr = real_SetCurrentMediaType(self, stream, reserved, type);
+    HRESULT hr;
+    /* Logged before the call as well as after. With a DXGI device manager bound
+     * to the reader the process aborts from the unix side (SIGABRT, surfaced as
+     * EXCEPTION_WINE_ASSERTION) somewhere after the reader is created, and both
+     * media-type hooks only spoke after returning -- so a crash inside either of
+     * them was indistinguishable from the game never calling it. */
+    logf_("SetCurrentMediaType(stream %lu) -- calling", stream);
+    hr = real_SetCurrentMediaType(self, stream, reserved, type);
     GUID sub;
     if (type && type_subtype(type, &sub))
     {
@@ -1300,8 +1437,12 @@ static HRESULT WINAPI my_ReadSample(void *self, DWORD stream, DWORD flags,
         }
     }
 
-    HRESULT hr = real_ReadSample(self, stream, flags, actual, sflags, ts, sample);
-    LONG n = InterlockedIncrement(&calls);
+    HRESULT hr;
+    LONG n;
+    if (InterlockedCompareExchange(&calls, 0, 0) == 0)
+        logf_("ReadSample -- first call");
+    hr = real_ReadSample(self, stream, flags, actual, sflags, ts, sample);
+    n = InterlockedIncrement(&calls);
     if (SUCCEEDED(hr) && sample && *sample)
     {
         LONG g = InterlockedIncrement(&got);
@@ -1314,10 +1455,321 @@ static HRESULT WINAPI my_ReadSample(void *self, DWORD stream, DWORD flags,
             logf_("ReadSample -> 0x%08lx on call %ld  << nothing comes out", hr, n);
     }
     else if (n == 1 || n == 200)
-        logf_("ReadSample: no sample, flags 0x%lx (call %ld, %ld so far)",
-              sflags ? *sflags : 0, n, got);
+        /* Say which out parameters the caller passed, because without that this
+         * line cannot be read.
+         *
+         * Media Foundation requires a caller in asynchronous mode to pass NULL
+         * for the stream index, the flags, the timestamp and the sample: the
+         * frames are delivered to IMFSourceReaderCallback::OnReadSample instead,
+         * on a worker thread. So in async mode `sample` is NULL, `*sample` is
+         * never written, the `got` counter above cannot increment, and `sflags`
+         * is NULL so the flags print as zero -- all of which is exactly what a
+         * working reader looks like from here.
+         *
+         * This printed "no sample, flags 0x0" for four NG4 runs and was read each
+         * time as the reader producing nothing. It is not evidence of that until
+         * the mode is known. If sample is NULL below, this counter is measuring a
+         * channel that is supposed to be empty and the frames have to be looked
+         * for in the callback. */
+        logf_("ReadSample: no sample, flags 0x%lx (call %ld, %ld so far)"
+              " -- caller passed sample=%s flags=%s%s",
+              sflags ? *sflags : 0, n, got,
+              sample ? "buffer" : "NULL", sflags ? "buffer" : "NULL",
+              sample ? "" : "  << NULL out params: the reader is ASYNCHRONOUS and"
+                            " the frames go to OnReadSample, which we do not watch."
+                            " This counter cannot see them.");
     return hr;
 }
+
+/* Counted separately from what is printed.
+ *
+ * The first build of this hook logged only textures of 640x360 or more, and the
+ * run produced none at all -- which reads as "the game creates no texture for
+ * the video" but is equally consistent with "it creates them smaller" or "this
+ * device is never used". Those need different next steps, so the total is
+ * reported alongside the frame rather than inferred from a silence. */
+static LONG tex2d_calls;
+
+/* The frame size, taken from the buffer itself rather than from the caller.
+ *
+ * Lock's length parameters are optional and NG4 passes NULL for them on most
+ * calls -- only the first asked for a length. A paint test conditioned on the
+ * caller supplying one therefore painted exactly one frame out of three
+ * hundred, and the black screen that followed was read as "the game does not
+ * draw what we hand it" when nothing had actually been handed to it. The size
+ * is a property of the buffer, so it is read once from GetCurrentLength and
+ * kept. */
+static DWORD known_buffer_len;
+
+/* Whether the game ever reads the pixels it is handed.
+ *
+ * With the DXGI device manager refused -- which is what this title needs, since
+ * allowing it crashes the game on a null write -- the frames arrive in system
+ * memory. 300 of them were measured arriving on 2026-09-01 with correct
+ * timestamps, and nothing was drawn. That leaves exactly two possibilities and
+ * they need different repairs: the game locks the buffer and reads it, in which
+ * case what is wrong is the content or the format and the magenta picture this
+ * title once showed was this same state half solved; or it never locks at all,
+ * in which case it is rejecting the sample for a reason that has to be found in
+ * the sample itself.
+ *
+ * Patching Lock reaches every buffer in the process, because the vtable is
+ * shared by the class rather than owned by the instance. That is acceptable for
+ * a probe that only logs, and is the same technique used everywhere else in
+ * this file -- but it is the reason this must never grow a side effect. */
+#define SLOT_SAMPLE_BUFCOUNT    39
+#define SLOT_SAMPLE_GET_BUFFER  40
+#define SLOT_BUF_LOCK            3
+#define SLOT_BUF_GETLENGTH       5
+#define SLOT_2D_LOCK2D           3
+
+static HRESULT (WINAPI *real_px_Lock)(void *, BYTE **, DWORD *, DWORD *);
+static HRESULT (WINAPI *real_px_Lock2D)(void *, BYTE **, LONG *);
+
+static HRESULT WINAPI my_px_Lock(void *self, BYTE **data, DWORD *maxlen, DWORD *curlen)
+{
+    static LONG n;
+    HRESULT hr = real_px_Lock ? real_px_Lock(self, data, maxlen, curlen) : 0x80004005L;
+    LONG i = InterlockedIncrement(&n);
+
+    /* NG4_PAINT_TEST=1 -- overwrite the frame with flat white.
+     *
+     * This is the one place in this file where changing the data IS the
+     * measurement, so it is opt-in and says so in the log every time it fires.
+     *
+     * Everything upstream is now known good: the game is handed a correct
+     * 1920x1080 NV12 frame with a real picture in it and reads the pixels, and
+     * the screen stays black. What cannot be seen from here is whether those
+     * pixels are ever drawn, because the game is D3D12 and patching its D3D
+     * vtables stops it dead. Writing a value we choose answers it without
+     * touching D3D at all: if the screen turns white the game draws what we
+     * hand it and the fault is in the colour conversion, which is where the
+     * magenta this title once showed points too. If it stays black, nothing we
+     * put in this buffer reaches the screen and the search moves past the
+     * upload entirely.
+     *
+     * NV12: the luma plane is the first two thirds, 235 is white in video
+     * range; the interleaved chroma that follows is neutral at 128. */
+    {
+        DWORD blen = (curlen && *curlen) ? *curlen : known_buffer_len;
+        char v[8];
+        if (SUCCEEDED(hr) && data && *data && blen >= 4096
+            && GetEnvironmentVariableA("NG4_PAINT_TEST", v, sizeof(v)) && v[0] == '1')
+        {
+            DWORD luma = (blen * 2) / 3;
+            memset(*data, 235, luma);
+            memset(*data + luma, 128, blen - luma);
+            if (i == 1 || i == 50)
+                logf_("  NG4_PAINT_TEST: frame %ld overwritten with flat white, "
+                      "%lu bytes (length %s) -- a white screen now means the game "
+                      "draws what we hand it", i, blen,
+                      (curlen && *curlen) ? "from the caller" : "from the buffer");
+        }
+    }
+
+    if (i == 1 || i == 50)
+    {
+        /* Say whether the pixels are a picture or are black.
+         *
+         * A frame of the right size, delivered on time, with the game reading
+         * it, is indistinguishable from a working video until someone looks at
+         * the bytes -- and an all-zero NV12 frame satisfies every check this
+         * probe made before this line existed. The luma plane is the first
+         * width*height bytes; sampling it across the frame separates "the
+         * decoder produced black" from "the game was given a picture and did
+         * not draw it", which need repairs at opposite ends of the pipeline. */
+        unsigned lo = 255, hi = 0;
+        unsigned long long sum = 0;
+        int taken = 0;
+        DWORD blen2 = (curlen && *curlen) ? *curlen : known_buffer_len;
+        if (SUCCEEDED(hr) && data && *data && blen2 >= 4096)
+        {
+            const BYTE *p8 = *data;
+            DWORD luma = (blen2 * 2) / 3;   /* NV12: luma is two thirds */
+            DWORD step = luma / 512;
+            DWORD off;
+            if (!step) step = 1;
+            for (off = 0; off < luma; off += step)
+            {
+                BYTE v = p8[off];
+                if (v < lo) lo = v;
+                if (v > hi) hi = v;
+                sum += v;
+                taken++;
+            }
+        }
+        if (taken)
+            logf_("  Lock #%ld -> 0x%08lx, %lu bytes | luma min %u max %u mean %u over %d samples%s",
+                  i, hr, blen2, lo, hi, (unsigned)(sum / taken), taken,
+                  hi == 0 ? "  << THE FRAME IS ENTIRELY BLACK"
+                          : "  << there is a real picture in this buffer");
+        else
+            logf_("  Lock #%ld -> 0x%08lx, %lu bytes  << the game IS reading the pixels",
+                  i, hr, (curlen && SUCCEEDED(hr)) ? *curlen : 0);
+    }
+    return hr;
+}
+
+static HRESULT WINAPI my_px_Lock2D(void *self, BYTE **scan0, LONG *pitch)
+{
+    static LONG n;
+    HRESULT hr = real_px_Lock2D ? real_px_Lock2D(self, scan0, pitch) : 0x80004005L;
+    LONG i = InterlockedIncrement(&n);
+    if (i == 1 || i == 50)
+        logf_("  Lock2D #%ld -> 0x%08lx, pitch %ld  << the game IS reading the pixels (2D)",
+              i, hr, (pitch && SUCCEEDED(hr)) ? *pitch : 0);
+    return hr;
+}
+
+/* Look inside the first sample and arm the pixel hooks. Read-only: the buffer is
+ * fetched by index rather than converted, so the sample is left as the game will
+ * find it. */
+static void watch_sample_pixels(void *sample)
+{
+    void ***svt, ***bvt;
+    HRESULT (WINAPI *get_count)(void *, DWORD *);
+    HRESULT (WINAPI *get_buffer)(void *, DWORD, void **);
+    HRESULT (WINAPI *qi)(void *, const GUID *, void **);
+    ULONG (WINAPI *rel)(void *);
+    HRESULT (WINAPI *get_len)(void *, DWORD *);
+    static void *l1, *l2;
+    void *buf = NULL, *two = NULL;
+    DWORD count = 0, len = 0;
+
+    if (!sample || real_px_Lock || real_px_Lock2D)
+        return;
+
+    svt = (void ***)sample;
+    get_count  = (HRESULT (WINAPI *)(void *, DWORD *))(*svt)[SLOT_SAMPLE_BUFCOUNT];
+    get_buffer = (HRESULT (WINAPI *)(void *, DWORD, void **))(*svt)[SLOT_SAMPLE_GET_BUFFER];
+
+    if (FAILED(get_count(sample, &count)) || !count)
+    {
+        logf_("  the sample carries no buffer at all (count %lu)", count);
+        return;
+    }
+    if (FAILED(get_buffer(sample, 0, &buf)) || !buf)
+    {
+        logf_("  GetBufferByIndex(0) gave nothing");
+        return;
+    }
+
+    bvt = (void ***)buf;
+    get_len = (HRESULT (WINAPI *)(void *, DWORD *))(*bvt)[SLOT_BUF_GETLENGTH];
+    if (FAILED(get_len(buf, &len))) len = 0;
+    logf_("  sample carries %lu buffer(s), first is %lu bytes", count, len);
+    known_buffer_len = len;
+
+    if (patch_slot("buffer Lock", buf, SLOT_BUF_LOCK, (void *)my_px_Lock, &l1))
+        real_px_Lock = (HRESULT (WINAPI *)(void *, BYTE **, DWORD *, DWORD *))l1;
+
+    qi = (HRESULT (WINAPI *)(void *, const GUID *, void **))(*bvt)[0];
+    if (SUCCEEDED(qi(buf, &IID_IMF2DBuffer_, &two)) && two)
+    {
+        void ***tvt = (void ***)two;
+        if (patch_slot("buffer Lock2D", two, SLOT_2D_LOCK2D, (void *)my_px_Lock2D, &l2))
+            real_px_Lock2D = (HRESULT (WINAPI *)(void *, BYTE **, LONG *))l2;
+        rel = (ULONG (WINAPI *)(void *))(*tvt)[2];
+        rel(two);
+    }
+    else
+        logf_("  the buffer is not an IMF2DBuffer -- flat only");
+
+    rel = (ULONG (WINAPI *)(void *))(*bvt)[2];
+    rel(buf);
+}
+
+/* The frames of an asynchronous reader, which is where this title's actually are.
+ *
+ * Measured 2026-09-01: NG4 passes NULL for the sample and flags out parameters
+ * of ReadSample, which is what Media Foundation requires of a caller in
+ * asynchronous mode. The samples are delivered here instead, on a worker
+ * thread. Until this hook existed the probe watched only ReadSample, whose
+ * emptiness is not a symptom but the defined behaviour of that mode -- five NG4
+ * runs were read as a dead pipeline on the strength of it.
+ *
+ * The callback is not reachable from the reader; it is handed to Media
+ * Foundation in the creation attributes, so it is fetched from there. Both
+ * creation paths carry attributes and both are wired, because this title was
+ * already once found taking the path that had not been instrumented. */
+#define SLOT_ON_READ_SAMPLE   3
+#define SLOT_ATTR_GET_UNKNOWN 17
+
+static const GUID guid_MF_SOURCE_READER_ASYNC_CALLBACK =
+    { 0x1e3dbeac, 0xbb43, 0x4c35, { 0xb5, 0x07, 0xcd, 0x64, 0x44, 0x64, 0xc9, 0x65 } };
+static const GUID IID_IMFSourceReaderCallback_ =
+    { 0xdeec8d99, 0xfa1d, 0x4d82, { 0x84, 0xc2, 0x2c, 0x89, 0x69, 0x94, 0x48, 0x67 } };
+
+static HRESULT (WINAPI *real_OnReadSample)(void *, HRESULT, DWORD, DWORD,
+                                           LONGLONG, void *);
+
+static HRESULT WINAPI my_OnReadSample(void *self, HRESULT status, DWORD stream,
+                                      DWORD sflags, LONGLONG ts, void *sample)
+{
+    static LONG calls, frames;
+    LONG n = InterlockedIncrement(&calls);
+
+    if (sample)
+    {
+        LONG f = InterlockedIncrement(&frames);
+        if (f == 1)
+            watch_sample_pixels(sample);
+        if (f == 1 || f == 50 || f == 300)
+            logf_("OnReadSample: frame %ld arrived, pts %lld  << the reader IS producing",
+                  f, (long long)ts);
+    }
+    else if (n == 1 || n == 20 || n == 200)
+        logf_("OnReadSample: no sample (call %ld, %ld frames so far), "
+              "status 0x%08lx, stream %lu, flags 0x%lx",
+              n, frames, status, stream, sflags);
+
+    if (FAILED(status))
+    {
+        static LONG bad;
+        if (InterlockedIncrement(&bad) == 1)
+            logf_("OnReadSample: status 0x%08lx on call %ld  << the reader is reporting failure",
+                  status, n);
+    }
+
+    return real_OnReadSample ? real_OnReadSample(self, status, stream, sflags, ts, sample)
+                             : 0;
+}
+
+/* Pull the callback out of the creation attributes and patch it. */
+static void watch_async_callback(void *attrs)
+{
+    HRESULT (WINAPI *get_unknown)(void *, const GUID *, const GUID *, void **);
+    void ***vt;
+    void *cb = NULL;
+    static void *saved;
+
+    if (!attrs || real_OnReadSample)
+        return;
+
+    vt = (void ***)attrs;
+    get_unknown = (HRESULT (WINAPI *)(void *, const GUID *, const GUID *, void **))
+                  (*vt)[SLOT_ATTR_GET_UNKNOWN];
+    if (FAILED(get_unknown(attrs, &guid_MF_SOURCE_READER_ASYNC_CALLBACK,
+                           &IID_IMFSourceReaderCallback_, &cb)) || !cb)
+    {
+        logf_("  no async callback in the reader attributes -- this reader is synchronous");
+        return;
+    }
+
+    if (patch_slot("OnReadSample", cb, SLOT_ON_READ_SAMPLE,
+                   (void *)my_OnReadSample, &saved))
+        real_OnReadSample = (HRESULT (WINAPI *)(void *, HRESULT, DWORD, DWORD,
+                                                LONGLONG, void *))saved;
+
+    /* Give back the reference GetUnknown took; the reader holds its own. */
+    {
+        void ***cvt = (void ***)cb;
+        ULONG (WINAPI *rel)(void *) = (ULONG (WINAPI *)(void *))(*cvt)[2];
+        rel(cb);
+    }
+}
+
+static volatile LONG reader_exists_;   /* set when MFCreateSourceReaderFromURL succeeds */
 
 static HRESULT WINAPI my_MFCreateSourceReaderFromByteStream(void *stream, void *attrs, void **reader)
 {
@@ -1345,6 +1797,7 @@ static HRESULT WINAPI my_MFCreateSourceReaderFromByteStream(void *stream, void *
         real_SetCurrentMediaType = (HRESULT (WINAPI *)(void *, DWORD, DWORD *, void *))sc;
         real_ReadSample = (HRESULT (WINAPI *)(void *, DWORD, DWORD, DWORD *, DWORD *,
                                               LONGLONG *, void **))rs;
+        watch_async_callback(attrs);
     }
     return hr;
 }
@@ -1374,6 +1827,7 @@ static HRESULT WINAPI my_MFCreateSourceReaderFromURL(LPCWSTR url, void *attrs, v
 {
     HRESULT hr = real_MFCreateSourceReaderFromURL(url, attrs, reader);
     logf_("MFCreateSourceReaderFromURL(%ls) -> 0x%08lx", url ? url : L"(null)", hr);
+    if (SUCCEEDED(hr)) InterlockedExchange(&reader_exists_, 1);
 
     /* Watch this reader too.
      *
@@ -1407,6 +1861,7 @@ static HRESULT WINAPI my_MFCreateSourceReaderFromURL(LPCWSTR url, void *attrs, v
         real_SetCurrentMediaType = (HRESULT (WINAPI *)(void *, DWORD, DWORD *, void *))sc;
         real_ReadSample = (HRESULT (WINAPI *)(void *, DWORD, DWORD, DWORD *, DWORD *,
                                               LONGLONG *, void **))rs;
+        watch_async_callback(attrs);
     }
 
     if (FAILED(hr) && url && reader
@@ -1439,6 +1894,27 @@ static FARPROC (WINAPI *real_GetProcAddress)(HMODULE, LPCSTR);
 static FARPROC WINAPI my_GetProcAddress(HMODULE module, LPCSTR name)
 {
     FARPROC proc = real_GetProcAddress(module, name);
+    {
+        static LONG decided;
+        if (!decided && InterlockedExchange(&decided, 1) == 0)
+        {
+            char v[8] = { 0 };
+            if (GetEnvironmentVariableA("NG4_WATCH_PRESENT", v, sizeof(v)) && v[0] == '1')
+                watch_present = TRUE;
+        v[0] = 0;
+        if (GetEnvironmentVariableA("NG4_NO_TEARING", v, sizeof(v)) && v[0] == '1')
+            no_tearing = TRUE;
+        v[0] = 0;
+        if (GetEnvironmentVariableA("NG4_NO_WAITABLE", v, sizeof(v)) && v[0] == '1')
+            no_waitable = TRUE;
+        v[0] = 0;
+        if (GetEnvironmentVariableA("NG4_FLIP_MODEL", v, sizeof(v)) && v[0] == '1')
+            flip_model = TRUE;
+        v[0] = 0;
+        if (GetEnvironmentVariableA("NG4_FORCE_WINDOWED", v, sizeof(v)) && v[0] == '1')
+            force_windowed = TRUE;
+        }
+    }
     if (!proc || !name || ((ULONG_PTR)name >> 16) == 0)
         return proc;
 
@@ -1454,11 +1930,17 @@ static FARPROC WINAPI my_GetProcAddress(HMODULE module, LPCSTR name)
     SWAP(MFCreateSourceReaderFromURL)
     SWAP(MFCreateDXGIDeviceManager)
     SWAP(D3D12CreateDevice)
+    if (watch_present)
+    {
+        SWAP(CreateDXGIFactory)
+        SWAP(CreateDXGIFactory1)
+        SWAP(CreateDXGIFactory2)
+    }
 #undef SWAP
 
     /* Name every media entry point the game asks for, resolved or not. The
      * list of what it looks for is itself evidence about which player it uses. */
-    if (name[0] == 'M' && name[1] == 'F')
+    if ((name[0] == 'M' && name[1] == 'F') || strncmp(name, "CreateDXGI", 10) == 0)
         logf_("GetProcAddress(\"%s\") -> %s", name, proc ? "ok" : "NOT FOUND");
     return proc;
 }
@@ -2026,6 +2508,62 @@ static HRESULT WINAPI my_OpenSharedResource(void *self, HANDLE handle,
     return real_OpenSharedResource(self, handle, iid, out);
 }
 
+/* What the game creates to put the video in.
+ *
+ * The picture reaches the game intact -- 1920x1080 NV12, 3110400 bytes, luma
+ * measured min 25 max 222 mean 61 -- and it locks the buffer and reads it. So
+ * the remaining question is what it copies those bytes into. A destination that
+ * is not NV12, or whose dimensions do not match, produces exactly what has been
+ * seen: a game that draws its frame and shows nothing useful, and once showed
+ * magenta.
+ *
+ * Observational only. It forwards every call unchanged and logs the first few
+ * descriptions, because this title has twice been broken by a probe that did
+ * more than watch. */
+#define SLOT_DEV11_CREATE_TEX2D_ 5
+
+static HRESULT (WINAPI *real_CreateTexture2D)(void *, const void *, const void *, void **);
+
+
+static const char *dxgi_name(UINT f)
+{
+    switch (f)
+    {
+        case 0:   return "UNKNOWN";
+        case 28:  return "R8G8B8A8_UNORM";
+        case 87:  return "B8G8R8A8_UNORM";
+        case 61:  return "R8_UNORM";
+        case 49:  return "R8G8_UNORM";
+        case 103: return "NV12";
+        case 104: return "P010";
+        default:  return "other";
+    }
+}
+
+static HRESULT WINAPI my_CreateTexture2D(void *self, const void *desc,
+                                         const void *data, void **tex)
+{
+    HRESULT hr = real_CreateTexture2D ? real_CreateTexture2D(self, desc, data, tex)
+                                      : 0x80004005L;
+    if (desc)
+    {
+        const UINT *d = (const UINT *)desc;
+        LONG i = InterlockedIncrement(&tex2d_calls);
+        /* Only the ones that could hold a 1080p frame, and only a few of them:
+         * this title creates hundreds of textures and the log is not the place
+         * for all of them. */
+        if (d[0] >= 640 && d[1] >= 360 && i < 4000)
+        {
+            static LONG shown;
+            if (InterlockedIncrement(&shown) <= 12)
+                logf_("  CreateTexture2D %ux%u fmt %u (%s) usage %u bind 0x%x "
+                      "cpu 0x%x misc 0x%x -> 0x%08lx",
+                      d[0], d[1], d[4], dxgi_name(d[4]), d[7], d[8], d[9], d[10], hr);
+        }
+    }
+    return hr;
+}
+
 static HRESULT WINAPI my_D3D11CreateDevice(void *adapter, UINT type, void *sw, UINT flags,
                                            const UINT *levels, UINT nlevels, UINT sdk,
                                            void **device, UINT *got, void **context)
@@ -2045,6 +2583,17 @@ static HRESULT WINAPI my_D3D11CreateDevice(void *adapter, UINT type, void *sw, U
         else if (!patch_slot("d3d11 OpenSharedResource", *device, SLOT_DEV11_OPENSHARED,
                              (void *)my_OpenSharedResource, &os))
             real_OpenSharedResource = NULL;
+
+        /* CreateTexture2D is deliberately NOT patched.
+         *
+         * Measured 2026-09-01: with the hook installed the title stops dead
+         * immediately after the patch lands -- the log ends at that line, no
+         * device manager, no reader, no frames, and the audio that had been
+         * playing stops. One device, so this is not the vtable being
+         * self-assigned; the patch itself is what NG4 will not survive, which is
+         * the same thing already recorded for its D3D12 vtables. The hook and
+         * its formatting are kept because they cost nothing while unwired and
+         * the next attempt should not have to write them again. */
     }
     return hr;
 }
@@ -2575,6 +3124,38 @@ static HRESULT WINAPI my_CheckFeature(void *self, UINT feature, void *data, UINT
      * Saying yes does not make the capability exist. If it turns the refusal into
      * a queue, it names the requirement, which is what this run is for; whether
      * that queue then works is the next question, not this one. */
+    if (caps_like_3 && (feature == 18 || feature == 41 || feature == 42))
+    {
+        static LONG asked;
+        if (InterlockedIncrement(&asked) <= 6)
+            logf_("  caps-like-3.0: the game asked for %s (hr 0x%08lx)",
+                  feature == 18 ? "OPTIONS2" : feature == 41 ? "OPTIONS12" : "OPTIONS13", hr);
+    }
+    if (caps_like_3 && SUCCEEDED(hr) && data && size >= 4 && readable_(data, size))
+    {
+        UINT32 *w = (UINT32 *)data;
+        static LONG said2, said12, said13;
+        if (feature == 18 && w[0])                         /* OPTIONS2 */
+        {
+            w[0] = 0;
+            if (InterlockedIncrement(&said2) == 1)
+                logf_("  caps-like-3.0: OPTIONS2.DepthBoundsTestSupported 1 -> 0");
+        }
+        else if (feature == 41 && size >= 8 && w[1])       /* OPTIONS12 */
+        {
+            w[1] = 0;
+            if (InterlockedIncrement(&said12) == 1)
+                logf_("  caps-like-3.0: OPTIONS12.EnhancedBarriersSupported 1 -> 0");
+        }
+        else if (feature == 42 && size >= 8 && (w[0] || w[1]))   /* OPTIONS13 */
+        {
+            w[0] = 0; w[1] = 0;
+            if (InterlockedIncrement(&said13) == 1)
+                logf_("  caps-like-3.0: OPTIONS13.UnrestrictedBufferTextureCopyPitch and "
+                      "UnrestrictedVertexElementAlignment 1 -> 0");
+        }
+    }
+
     if (fake_options17 && in_create_queue_ && feature == 46 && SUCCEEDED(hr) &&
         data && size >= 8 && readable_(data, 8))
     {
@@ -2583,7 +3164,7 @@ static HRESULT WINAPI my_CheckFeature(void *self, UINT feature, void *data, UINT
         logf_("  [in CreateQueue] answering yes to OPTIONS17 (was all zeros)");
     }
 
-    if (in_create_queue_ || InterlockedIncrement(&outside) <= 8)
+    if (in_create_queue_ || InterlockedIncrement(&outside) <= 48)
     {
         char vals[16 * 9 + 1];
         UINT n = size / 4, i;
@@ -2702,6 +3283,500 @@ static HRESULT WINAPI my_dev12_QI(void *self, const GUID *iid, void **out)
     return hr;
 }
 
+/* ---- swap chain watch ---- */
+static HRESULT (WINAPI *real_SC_Present)(void *, UINT, UINT);
+static HRESULT (WINAPI *real_SC_Present1)(void *, UINT, UINT, const void *);
+static HRESULT (WINAPI *real_SC_GetBuffer)(void *, UINT, const GUID *, void **);
+static HRESULT (WINAPI *real_SC_SetFullscreen)(void *, BOOL, void *);
+static HRESULT (WINAPI *real_SC_ResizeBuffers)(void *, UINT, UINT, UINT, UINT, UINT);
+static HRESULT (WINAPI *real_F_CreateSwapChain)(void *, void *, const void *, void **);
+static HRESULT (WINAPI *real_F_CreateSwapChainForHwnd)(void *, void *, HWND, const void *, const void *, void *, void **);
+static HRESULT (WINAPI *real_F_CreateSwapChainForComposition)(void *, void *, const void *, void *, void **);
+static const GUID IID_IDXGISwapChain1_ = { 0x790a45f7, 0x0d42, 0x4876, { 0x98, 0x3a, 0x0a, 0x55, 0xcf, 0xe6, 0xf4, 0xaa } };
+
+static const char *hr_name(HRESULT hr)
+{
+    switch ((ULONG)hr)
+    {
+        case 0: return "S_OK"; case 0x087A0001: return "DXGI_STATUS_OCCLUDED";
+        case 0x887A0001: return "DXGI_ERROR_INVALID_CALL"; case 0x887A0005: return "DXGI_ERROR_DEVICE_REMOVED";
+        case 0x887A0006: return "DXGI_ERROR_DEVICE_HUNG"; case 0x887A0007: return "DXGI_ERROR_DEVICE_RESET";
+        case 0x887A0004: return "DXGI_ERROR_UNSUPPORTED"; case 0x887A000A: return "DXGI_ERROR_WAS_STILL_DRAWING";
+        case 0x887A0020: return "DXGI_ERROR_ACCESS_DENIED"; case 0x80004001: return "E_NOTIMPL";
+        case 0x80004005: return "E_FAIL"; case 0x80070057: return "E_INVALIDARG"; default: return "?";
+    }
+}
+
+static HRESULT WINAPI my_SC_Present(void *self, UINT interval, UINT flags)
+{
+    HRESULT hr;
+    if (no_tearing && (flags & 0x200))
+    {
+        static LONG said;
+        flags &= ~0x200u;
+        if (InterlockedIncrement(&said) == 1)
+            logf_("  NG4_NO_TEARING: DXGI_PRESENT_ALLOW_TEARING stripped from Present (interval %u kept)", interval);
+    }
+    hr = real_SC_Present(self, interval, flags);
+    static LONG n, bad;
+    LONG i = InterlockedIncrement(&n);
+    /* D3DMetal's own count of presentations, asked of the swap chain itself
+     * (IDXGISwapChain::GetLastPresentCount, slot 17). A Present that returns
+     * S_OK while this number stands still is a presentation accepted and
+     * dropped inside the toolkit; one that advances is a frame that reached a
+     * drawable, whatever the screen shows. */
+    if (i == 5 || i == 300 || i == 900 || i == 1800 || i == 3600)
+    {
+        UINT count = 0xFFFFFFFFu;
+        HRESULT (WINAPI *glpc)(void *, UINT *) = (HRESULT (WINAPI *)(void *, UINT *))(*(void ***)self)[17];
+        HRESULT h2 = glpc(self, &count);
+        logf_("  GetLastPresentCount after Present #%ld -> 0x%08lx, count %u%s", i, h2, count,
+              (SUCCEEDED(h2) && count == 0) ? "  << D3DMetal has presented NOTHING" :
+              (SUCCEEDED(h2) && count > 0) ? "  << D3DMetal counts presented frames" : "");
+    }
+    if (FAILED(hr) || hr == 0x087A0001) { if (InterlockedIncrement(&bad) <= 5 || (bad % 300) == 0)
+        logf_("  Present #%ld -> 0x%08lx %s  (interval %u flags 0x%x)", i, hr, hr_name(hr), interval, flags); }
+    else if (i <= 5 || (i % 300) == 0)
+        logf_("  Present #%ld -> S_OK  (interval %u flags 0x%x)  << something IS being presented", i, interval, flags);
+    return hr;
+}
+static HRESULT WINAPI my_SC_Present1(void *self, UINT interval, UINT flags, const void *params)
+{
+    HRESULT hr;
+    if (no_tearing && (flags & 0x200)) flags &= ~0x200u;
+    hr = real_SC_Present1(self, interval, flags, params);
+    static LONG n, bad;
+    LONG i = InterlockedIncrement(&n);
+    if (FAILED(hr) || hr == 0x087A0001) { if (InterlockedIncrement(&bad) <= 5 || (bad % 300) == 0)
+        logf_("  Present1 #%ld -> 0x%08lx %s  (interval %u flags 0x%x)", i, hr, hr_name(hr), interval, flags); }
+    else if (i <= 5 || (i % 300) == 0)
+        logf_("  Present1 #%ld -> S_OK  (interval %u flags 0x%x)  << something IS being presented", i, interval, flags);
+    return hr;
+}
+static HRESULT WINAPI my_SC_GetBuffer(void *self, UINT idx, const GUID *iid, void **out)
+{
+    HRESULT hr = real_SC_GetBuffer(self, idx, iid, out);
+    static LONG n; if (InterlockedIncrement(&n) <= 4 || FAILED(hr))
+        logf_("  swapchain GetBuffer(%u) -> 0x%08lx %s", idx, hr, hr_name(hr));
+    return hr;
+}
+static HRESULT WINAPI my_SC_SetFullscreen(void *self, BOOL fs, void *target)
+{
+    HRESULT hr;
+    if (force_windowed && fs)
+    {
+        logf_("  NG4_FORCE_WINDOWED: SetFullscreenState(FULLSCREEN) answered S_OK without switching");
+        return 0;
+    }
+    hr = real_SC_SetFullscreen(self, fs, target);
+    logf_("  swapchain SetFullscreenState(%s) -> 0x%08lx %s", fs ? "FULLSCREEN" : "windowed", hr, hr_name(hr));
+    return hr;
+}
+static HRESULT WINAPI my_SC_ResizeBuffers(void *self, UINT count, UINT w, UINT h, UINT fmt, UINT flags)
+{
+    HRESULT hr;
+    UINT asked = flags;
+    if (no_tearing)  flags &= ~0x800u;
+    if (no_waitable) flags &= ~0x40u;
+    if (flags != asked)
+        logf_("  swap chain flags 0x%x -> 0x%x (%s%s)", asked, flags,
+              (asked & ~flags & 0x800) ? "tearing off " : "", (asked & ~flags & 0x40) ? "waitable off" : "");
+    hr = real_SC_ResizeBuffers(self, count, w, h, fmt, flags);
+    logf_("  swapchain ResizeBuffers(%u x %ux%u fmt %u flags 0x%x) -> 0x%08lx %s", count, w, h, fmt, flags, hr, hr_name(hr));
+    return hr;
+}
+
+static void watch_swapchain(void *sc)
+{
+    static void *p, *p1, *gb, *fs, *rb;
+    void *sc1 = NULL;
+    if (!sc || real_SC_Present) return;
+    real_SC_Present       = (HRESULT (WINAPI *)(void *, UINT, UINT))(*(void ***)sc)[8];
+    real_SC_GetBuffer     = (HRESULT (WINAPI *)(void *, UINT, const GUID *, void **))(*(void ***)sc)[9];
+    real_SC_SetFullscreen = (HRESULT (WINAPI *)(void *, BOOL, void *))(*(void ***)sc)[10];
+    real_SC_ResizeBuffers = (HRESULT (WINAPI *)(void *, UINT, UINT, UINT, UINT, UINT))(*(void ***)sc)[13];
+    if (!patch_slot("swapchain Present", sc, 8, (void *)my_SC_Present, &p)) real_SC_Present = NULL;
+    if (!patch_slot("swapchain GetBuffer", sc, 9, (void *)my_SC_GetBuffer, &gb)) real_SC_GetBuffer = NULL;
+    if (!patch_slot("swapchain SetFullscreenState", sc, 10, (void *)my_SC_SetFullscreen, &fs)) real_SC_SetFullscreen = NULL;
+    if (!patch_slot("swapchain ResizeBuffers", sc, 13, (void *)my_SC_ResizeBuffers, &rb)) real_SC_ResizeBuffers = NULL;
+    /* Present1 lives on IDXGISwapChain1; only touch slot 22 on an object that says it is one. */
+    {
+        HRESULT (WINAPI *qi)(void *, const GUID *, void **) = (HRESULT (WINAPI *)(void *, const GUID *, void **))(*(void ***)sc)[0];
+        if (SUCCEEDED(qi(sc, &IID_IDXGISwapChain1_, &sc1)) && sc1)
+        {
+            real_SC_Present1 = (HRESULT (WINAPI *)(void *, UINT, UINT, const void *))(*(void ***)sc1)[22];
+            if (!patch_slot("swapchain Present1", sc1, 22, (void *)my_SC_Present1, &p1)) real_SC_Present1 = NULL;
+            ((ULONG (WINAPI *)(void *))(*(void ***)sc1)[2])(sc1);
+        }
+        else logf_("  swap chain is not IDXGISwapChain1 -- Present1 not watched");
+    }
+}
+
+static void log_desc1(const char *what, const void *desc, HRESULT hr)
+{
+    const UINT *d = (const UINT *)desc;
+    if (desc && readable_(desc, 44))
+        logf_("  %s: %ux%u fmt %u buffers %u swapeffect %u flags 0x%x -> 0x%08lx %s",
+              what, d[0], d[1], d[2], d[7], d[9], d[11], hr, hr_name(hr));
+    else logf_("  %s -> 0x%08lx %s", what, hr, hr_name(hr));
+}
+
+/* Which API the swap chain belongs to. For D3D12 the "device" handed to
+ * CreateSwapChain must be an ID3D12CommandQueue; for D3D11 it is the device.
+ * Asked of the object itself rather than inferred from the swap effect. */
+static const char *which_device_(void *dev)
+{
+    static const GUID IID_ID3D12CommandQueue_ = { 0x0ec870a6, 0x5d7e, 0x4c22, { 0x8c, 0xfc, 0x5b, 0xaa, 0xe0, 0x76, 0x16, 0xed } };
+    static const GUID IID_ID3D11Device_      = { 0xdb6f6ddb, 0xac77, 0x4e88, { 0x82, 0x53, 0x81, 0x9d, 0xf9, 0xbb, 0xf1, 0x40 } };
+    static const GUID IID_ID3D12Device_      = { 0x189819f1, 0x1db6, 0x4b57, { 0xbe, 0x54, 0x18, 0x21, 0x33, 0x9b, 0x85, 0xf7 } };
+    void *o = NULL;
+    HRESULT (WINAPI *qi)(void *, const GUID *, void **);
+    if (!dev || !readable_(dev, 8)) return "no device";
+    qi = (HRESULT (WINAPI *)(void *, const GUID *, void **))(*(void ***)dev)[0];
+    if (SUCCEEDED(qi(dev, &IID_ID3D12CommandQueue_, &o)) && o) { ((ULONG (WINAPI *)(void *))(*(void ***)o)[2])(o); return "D3D12 command queue"; }
+    if (SUCCEEDED(qi(dev, &IID_ID3D11Device_, &o)) && o)      { ((ULONG (WINAPI *)(void *))(*(void ***)o)[2])(o); return "D3D11 device"; }
+    if (SUCCEEDED(qi(dev, &IID_ID3D12Device_, &o)) && o)      { ((ULONG (WINAPI *)(void *))(*(void ***)o)[2])(o); return "D3D12 device (not a queue!)"; }
+    return "unknown object";
+}
+static const char *swapeffect_name(UINT e)
+{ return e == 0 ? "DISCARD" : e == 1 ? "SEQUENTIAL" : e == 3 ? "FLIP_SEQUENTIAL" : e == 4 ? "FLIP_DISCARD" : "?"; }
+
+static HRESULT WINAPI my_F_CreateSwapChain(void *self, void *dev, const void *desc, void **out)
+{
+    HRESULT hr;
+    BYTE copy[72];
+    if ((no_tearing || no_waitable || flip_model || force_windowed) && desc && readable_(desc, 72))
+    {
+        UINT *f, *effect, *windowed;
+        memcpy(copy, desc, 72);
+        f = (UINT *)(copy + 60);          /* Flags */
+        effect = (UINT *)(copy + 56);     /* SwapEffect */
+        windowed = (UINT *)(copy + 52);   /* Windowed */
+        if (no_tearing)  *f &= ~0x800u;
+        if (no_waitable) *f &= ~0x40u;
+        if (flip_model && (*effect == 0 || *effect == 1))
+        { logf_("  NG4_FLIP_MODEL: swap effect %u -> 4 (FLIP_DISCARD)", *effect); *effect = 4; }
+        if (force_windowed && !*windowed)
+        { logf_("  NG4_FORCE_WINDOWED: windowed 0 -> 1"); *windowed = 1; }
+        desc = copy;
+    }
+    hr = real_F_CreateSwapChain(self, dev, desc, out);
+    const UINT *d = (const UINT *)desc;   /* DXGI_SWAP_CHAIN_DESC: BufferDesc{w,h,rr{2},fmt,so,sc} sample{2} usage count hwnd windowed effect flags */
+    if (desc && readable_(desc, 72))
+        logf_("  CreateSwapChain on %s (%p): %ux%u fmt %u buffers %u usage 0x%x hwnd %p windowed %u swapeffect %u (%s) flags 0x%x -> 0x%08lx %s",
+              which_device_(dev), dev, d[0], d[1], d[4], d[10], d[9], *(void **)(d + 11), d[13], d[14], swapeffect_name(d[14]), d[15], hr, hr_name(hr));
+    else logf_("  CreateSwapChain -> 0x%08lx %s", hr, hr_name(hr));
+    if (SUCCEEDED(hr) && out && *out) watch_swapchain(*out);
+    return hr;
+}
+static HRESULT WINAPI my_F_CreateSwapChainForHwnd(void *self, void *dev, HWND hwnd, const void *desc,
+                                                  const void *fsdesc, void *restrict_out, void **out)
+{
+    HRESULT hr = real_F_CreateSwapChainForHwnd(self, dev, hwnd, desc, fsdesc, restrict_out, out);
+    logf_("  CreateSwapChainForHwnd on %s, hwnd %p", which_device_(dev), (void *)hwnd);
+    log_desc1("CreateSwapChainForHwnd", desc, hr);
+    if (SUCCEEDED(hr) && out && *out) watch_swapchain(*out);
+    return hr;
+}
+static HRESULT WINAPI my_F_CreateSwapChainForComposition(void *self, void *dev, const void *desc, void *restrict_out, void **out)
+{
+    HRESULT hr = real_F_CreateSwapChainForComposition(self, dev, desc, restrict_out, out);
+    log_desc1("CreateSwapChainForComposition", desc, hr);
+    if (SUCCEEDED(hr) && out && *out) watch_swapchain(*out);
+    return hr;
+}
+
+static void watch_factory(void *fac, const char *how, HRESULT hr)
+{
+    static void *a, *b, *c;
+    logf_("%s -> 0x%08lx %s", how, hr, hr_name(hr));
+    if (FAILED(hr) || !fac || real_F_CreateSwapChain) return;
+    real_F_CreateSwapChain = (HRESULT (WINAPI *)(void *, void *, const void *, void **))(*(void ***)fac)[10];
+    if (!patch_slot("factory CreateSwapChain", fac, 10, (void *)my_F_CreateSwapChain, &a)) real_F_CreateSwapChain = NULL;
+    /* slots 15 and 24 exist only on IDXGIFactory2: every factory D3DMetal hands out is one
+     * (CreateDXGIFactory2 is what modern titles call), but check the size of the vtable
+     * by asking for the interface rather than assuming. */
+    {
+        static const GUID IID_IDXGIFactory2_ = { 0x50c83a1c, 0xe072, 0x4c48, { 0x87, 0xb0, 0x36, 0x30, 0xfa, 0x36, 0xa6, 0xd0 } };
+        void *f2 = NULL;
+        HRESULT (WINAPI *qi)(void *, const GUID *, void **) = (HRESULT (WINAPI *)(void *, const GUID *, void **))(*(void ***)fac)[0];
+        if (SUCCEEDED(qi(fac, &IID_IDXGIFactory2_, &f2)) && f2)
+        {
+            real_F_CreateSwapChainForHwnd = (HRESULT (WINAPI *)(void *, void *, HWND, const void *, const void *, void *, void **))(*(void ***)f2)[15];
+            real_F_CreateSwapChainForComposition = (HRESULT (WINAPI *)(void *, void *, const void *, void *, void **))(*(void ***)f2)[24];
+            if (!patch_slot("factory CreateSwapChainForHwnd", f2, 15, (void *)my_F_CreateSwapChainForHwnd, &b)) real_F_CreateSwapChainForHwnd = NULL;
+            if (!patch_slot("factory CreateSwapChainForComposition", f2, 24, (void *)my_F_CreateSwapChainForComposition, &c)) real_F_CreateSwapChainForComposition = NULL;
+            ((ULONG (WINAPI *)(void *))(*(void ***)f2)[2])(f2);
+        }
+        else logf_("  factory is not IDXGIFactory2");
+    }
+}
+/* Patch the factory CLASS by making a factory of our own.
+ *
+ * The title's own CreateDXGIFactory2 never went through the import hook nor
+ * GetProcAddress (Streamline's interposer sits in front of DXGI here, as it
+ * did for Ronin). The vtable is per class, not per instance, so a factory we
+ * create ourselves and patch is enough: whatever path the game takes to its
+ * factory, its CreateSwapChain* calls land in the same slots. */
+static void seed_dxgi_factory_watch(void)
+{
+    static const GUID IID_IDXGIFactory1_ = { 0x770aae78, 0xf26f, 0x4dba, { 0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87 } };
+    HMODULE dxgi = LoadLibraryA("dxgi.dll");
+    HRESULT (WINAPI *mk)(const GUID *, void **) =
+        dxgi ? (void *)(real_GetProcAddress ? real_GetProcAddress : GetProcAddress)(dxgi, "CreateDXGIFactory1") : NULL;
+    void *fac = NULL;
+    if (!mk) { logf_("  seed: no CreateDXGIFactory1 in dxgi.dll"); return; }
+    watch_factory(NULL, "seed: about to make our own factory", 0);
+    if (SUCCEEDED(mk(&IID_IDXGIFactory1_, &fac)) && fac)
+    {
+        watch_factory(fac, "seed: our own IDXGIFactory1", 0);
+        ((ULONG (WINAPI *)(void *))(*(void ***)fac)[2])(fac);
+    }
+    else logf_("  seed: CreateDXGIFactory1 failed");
+}
+
+static HRESULT WINAPI my_CreateDXGIFactory(const GUID *iid, void **out)
+{ HRESULT hr = real_CreateDXGIFactory(iid, out); watch_factory(out ? *out : NULL, "CreateDXGIFactory", hr); return hr; }
+static HRESULT WINAPI my_CreateDXGIFactory1(const GUID *iid, void **out)
+{ HRESULT hr = real_CreateDXGIFactory1(iid, out); watch_factory(out ? *out : NULL, "CreateDXGIFactory1", hr); return hr; }
+static HRESULT WINAPI my_CreateDXGIFactory2(UINT flags, const GUID *iid, void **out)
+{ HRESULT hr = real_CreateDXGIFactory2(flags, iid, out); watch_factory(out ? *out : NULL, "CreateDXGIFactory2", hr); return hr; }
+
+static HRESULT (WINAPI *real_CreateCommittedWatch)(void *, const void *, UINT, const void *,
+                                                     UINT, const void *, const GUID *, void **);
+
+static const char *fmt_name(UINT f)
+{
+    switch (f)
+    {
+        case 0: return "UNKNOWN"; case 28: return "RGBA8"; case 87: return "BGRA8";
+        case 61: return "R8"; case 49: return "R8G8"; case 103: return "NV12";
+        case 104: return "P010"; case 56: return "R16"; case 35: return "R16G16";
+        case 10: return "RGBA16F"; case 2: return "RGBA32F"; default: return "?";
+    }
+}
+
+/* Placed resources and the heaps they live in. The committed hook saw nothing
+ * frame-sized after the movie opened on 2026-09-01; engines that suballocate
+ * create their textures with CreatePlacedResource on heaps of their own, which
+ * that hook cannot see. Same rule: forwarded untouched, logged only. */
+static HRESULT (WINAPI *real_CreatePlacedWatch)(void *, void *, UINT64, const void *, UINT,
+                                                const void *, const GUID *, void **);
+static HRESULT (WINAPI *real_CreateHeapWatch)(void *, const void *, const GUID *, void **);
+
+static HRESULT WINAPI my_CreateHeapWatch(void *self, const void *desc, const GUID *iid, void **out)
+{
+    HRESULT hr = real_CreateHeapWatch(self, desc, iid, out);
+    if (desc && readable_(desc, 24))
+    {
+        unsigned long long size = *(const unsigned long long *)desc;
+        UINT htype = *(const UINT *)((const BYTE *)desc + 8);
+        /* Uncapped: heaps are few, and the two the movie used on 2026-09-01
+         * were created before a 20-line cap and so their types went unrecorded. */
+        if (size >= 2097152)
+            logf_("  CreateHeap: %llu MB heap %s -> 0x%08lx  (%p)", size >> 20,
+                  htype == 1 ? "DEFAULT" : htype == 2 ? "UPLOAD" : htype == 3 ? "READBACK" : "CUSTOM",
+                  hr, out ? *out : NULL);
+    }
+    return hr;
+}
+
+static HRESULT WINAPI my_CreatePlacedWatch(void *self, void *heap, UINT64 offset, const void *desc,
+                                           UINT state, const void *clear, const GUID *iid, void **out)
+{
+    HRESULT hr = real_CreatePlacedWatch(self, heap, offset, desc, state, clear, iid, out);
+    static LONG total, shown;
+    InterlockedIncrement(&total);
+    if (desc && readable_(desc, 52))
+    {
+        const BYTE *d = (const BYTE *)desc;
+        UINT dim = *(const UINT *)d;
+        unsigned long long width = *(const unsigned long long *)(d + 16);
+        UINT height = *(const UINT *)(d + 24);
+        UINT16 mips = *(const UINT16 *)(d + 30);
+        UINT fmt = *(const UINT *)(d + 32), layout = *(const UINT *)(d + 44), flags = *(const UINT *)(d + 48);
+        BOOL frame_sized = (dim == 3 && width >= 640 && height >= 360) || (dim == 1 && width >= 524288);
+        if (watch_movie_copy && SUCCEEDED(hr) && out && *out)
+        {
+            if (dim == 3 && width == 1920 && height == 1080 && fmt == 29 && !movie_tex_)
+            { movie_tex_ = *out; logf_("  MOVIE-TEX is %p", movie_tex_); }
+            else if (dim == 1 && width == 8294400 && !movie_buf_)
+            { movie_buf_ = *out; logf_("  MOVIE-BUF is %p", movie_buf_); watch_movie_resource_vtable(*out); }
+        }
+        if (frame_sized && (reader_exists_ || InterlockedIncrement(&shown) <= 40))
+            logf_("  CreatePlacedResource #%ld: %s %llux%u mips %u fmt %u (%s) layout %u flags 0x%x "
+                  "on heap %p @%llu -> 0x%08lx",
+                  InterlockedCompareExchange(&total, 0, 0),
+                  dim == 1 ? "buffer" : dim == 3 ? "tex2d" : dim == 4 ? "tex3d" : "tex1d",
+                  width, height, mips, fmt, fmt_name(fmt), layout, flags, heap, offset, hr);
+    }
+    return hr;
+}
+
+/* --- the movie's buffer: what the game writes into it --- */
+static HRESULT (WINAPI *real_ResMap)(void *, UINT, const void *, void **);
+static void    (WINAPI *real_ResUnmap)(void *, UINT, const void *);
+static void *movie_buf_data_;
+
+static HRESULT WINAPI my_ResMap(void *self, UINT sub, const void *range, void **data)
+{
+    HRESULT hr = real_ResMap(self, sub, range, data);
+    if (self == movie_buf_)
+    {
+        static LONG n;
+        LONG i = InterlockedIncrement(&n);
+        if (data && SUCCEEDED(hr)) movie_buf_data_ = *data;
+        if (i <= 3 || i == 50)
+            logf_("  movie buffer Map #%ld -> 0x%08lx, data %p", i, hr, data ? *data : NULL);
+    }
+    return hr;
+}
+
+static void WINAPI my_ResUnmap(void *self, UINT sub, const void *range)
+{
+    if (self == movie_buf_ && movie_buf_data_)
+    {
+        static LONG n;
+        LONG i = InterlockedIncrement(&n);
+        if (i <= 3 || i == 50)
+        {
+            /* RGBA, 8,294,400 bytes: sample 512 pixels across the frame. */
+            const BYTE *p = (const BYTE *)movie_buf_data_;
+            unsigned lo = 255, hi = 0; unsigned long long sum = 0; int k;
+            if (readable_(p, 8294400))
+            {
+                for (k = 0; k < 512; k++)
+                {
+                    const BYTE *px = p + (unsigned long long)k * (8294400 / 512);
+                    unsigned g = (px[0] + px[1] + px[2]) / 3;
+                    if (g < lo) lo = g; if (g > hi) hi = g; sum += g;
+                }
+                logf_("  movie buffer Unmap #%ld: RGB min %u max %u mean %u%s", i, lo, hi,
+                      (unsigned)(sum / 512), hi == 0 ? "  << the game wrote BLACK into it"
+                                                       : "  << the game wrote a picture into it");
+            }
+            else logf_("  movie buffer Unmap #%ld: data not readable", i);
+        }
+    }
+    real_ResUnmap(self, sub, range);
+}
+
+static void watch_movie_resource_vtable(void *res)
+{
+    static void *m, *u;
+    if (!res || real_ResMap) return;
+    real_ResMap   = (HRESULT (WINAPI *)(void *, UINT, const void *, void **))(*(void ***)res)[8];
+    real_ResUnmap = (void (WINAPI *)(void *, UINT, const void *))(*(void ***)res)[9];
+    if (!patch_slot("ID3D12Resource Map (movie)", res, 8, (void *)my_ResMap, &m)) real_ResMap = NULL;
+    if (!patch_slot("ID3D12Resource Unmap (movie)", res, 9, (void *)my_ResUnmap, &u)) real_ResUnmap = NULL;
+}
+
+/* --- command lists: copies that touch the movie's objects --- */
+static void (WINAPI *real_CopyTextureRegion)(void *, const void *, UINT, UINT, UINT, const void *, const void *);
+static void (WINAPI *real_CopyResource)(void *, void *, void *);
+static HRESULT (WINAPI *real_CreateCommandListW)(void *, UINT, UINT, void *, void *, const GUID *, void **);
+
+static const char *loc_str(const void *loc, char *buf, size_t n)
+{
+    const BYTE *l = (const BYTE *)loc;
+    void *res = *(void **)l; UINT type = *(const UINT *)(l + 8);
+    if (type == 1)
+        snprintf(buf, n, "%s(footprint off %llu fmt %u %ux%u pitch %u)",
+                 res == movie_buf_ ? "MOVIE-BUF" : res == movie_tex_ ? "MOVIE-TEX" : "other",
+                 *(const unsigned long long *)(l + 16), *(const UINT *)(l + 24),
+                 *(const UINT *)(l + 28), *(const UINT *)(l + 32), *(const UINT *)(l + 40));
+    else
+        snprintf(buf, n, "%s(subresource %u)",
+                 res == movie_buf_ ? "MOVIE-BUF" : res == movie_tex_ ? "MOVIE-TEX" : "other",
+                 *(const UINT *)(l + 16));
+    return buf;
+}
+
+static void WINAPI my_CopyTextureRegion(void *self, const void *dst, UINT x, UINT y, UINT z,
+                                        const void *src, const void *box)
+{
+    if (dst && src && readable_(dst, 48) && readable_(src, 48))
+    {
+        void *dr = *(void **)dst, *sr = *(void **)src;
+        if (dr == movie_tex_ || dr == movie_buf_ || sr == movie_tex_ || sr == movie_buf_)
+        {
+            static LONG n; LONG i = InterlockedIncrement(&n);
+            if (i <= 3 || i == 50 || i == 300)
+            {
+                char a[96], b[96];
+                logf_("  CopyTextureRegion #%ld: dst %s at (%u,%u,%u)  src %s  box %s",
+                      i, loc_str(dst, a, sizeof(a)), x, y, z, loc_str(src, b, sizeof(b)),
+                      box ? "yes" : "none");
+            }
+        }
+    }
+    real_CopyTextureRegion(self, dst, x, y, z, src, box);
+}
+
+static void WINAPI my_CopyResource(void *self, void *dst, void *src)
+{
+    if (dst == movie_tex_ || dst == movie_buf_ || src == movie_tex_ || src == movie_buf_)
+    {
+        static LONG n; LONG i = InterlockedIncrement(&n);
+        if (i <= 3 || i == 50)
+            logf_("  CopyResource #%ld: dst %s src %s", i,
+                  dst == movie_tex_ ? "MOVIE-TEX" : dst == movie_buf_ ? "MOVIE-BUF" : "other",
+                  src == movie_tex_ ? "MOVIE-TEX" : src == movie_buf_ ? "MOVIE-BUF" : "other");
+    }
+    real_CopyResource(self, dst, src);
+}
+
+static HRESULT WINAPI my_CreateCommandListW(void *self, UINT node, UINT type, void *alloc,
+                                            void *pso, const GUID *iid, void **out)
+{
+    HRESULT hr = real_CreateCommandListW(self, node, type, alloc, pso, iid, out);
+    if (SUCCEEDED(hr) && out && *out && !real_CopyTextureRegion)
+    {
+        static void *c1, *c2;
+        void **vt = *(void ***)*out;
+        real_CopyTextureRegion = (void (WINAPI *)(void *, const void *, UINT, UINT, UINT, const void *, const void *))vt[16];
+        real_CopyResource      = (void (WINAPI *)(void *, void *, void *))vt[17];
+        if (!patch_slot("command list CopyTextureRegion (movie)", *out, 16, (void *)my_CopyTextureRegion, &c1))
+            real_CopyTextureRegion = NULL;
+        if (!patch_slot("command list CopyResource (movie)", *out, 17, (void *)my_CopyResource, &c2))
+            real_CopyResource = NULL;
+    }
+    return hr;
+}
+
+static HRESULT WINAPI my_CreateCommittedWatch(void *self, const void *heap, UINT hflags,
+                                              const void *desc, UINT state, const void *clear,
+                                              const GUID *iid, void **out)
+{
+    HRESULT hr = real_CreateCommittedWatch(self, heap, hflags, desc, state, clear, iid, out);
+    static LONG total, shown;
+    InterlockedIncrement(&total);
+    if (desc && readable_(desc, 52) && heap && readable_(heap, 4))
+    {
+        const BYTE *d = (const BYTE *)desc;
+        UINT dim = *(const UINT *)d;
+        unsigned long long width = *(const unsigned long long *)(d + 16);
+        UINT height = *(const UINT *)(d + 24);
+        UINT16 depth = *(const UINT16 *)(d + 28), mips = *(const UINT16 *)(d + 30);
+        UINT fmt = *(const UINT *)(d + 32), layout = *(const UINT *)(d + 44), flags = *(const UINT *)(d + 48);
+        UINT htype = *(const UINT *)heap;
+        BOOL frame_sized = (dim == 3 && width >= 640 && height >= 360) || (dim == 1 && width >= 524288);
+        /* Before the reader exists, forty lines of context; once the game has
+         * opened the movie, every frame-sized resource, uncapped. The first
+         * build spent 22 of its 40 lines on loading-screen render targets and
+         * would have gone quiet exactly where the answer is. */
+        if (frame_sized && (reader_exists_ || InterlockedIncrement(&shown) <= 40))
+            logf_("  CreateCommittedResource #%ld: %s %llux%u x%u mips %u fmt %u (%s) layout %u flags 0x%x "
+                  "heap %s state 0x%x -> 0x%08lx",
+                  InterlockedCompareExchange(&total, 0, 0),
+                  dim == 1 ? "buffer" : dim == 3 ? "tex2d" : dim == 4 ? "tex3d" : "tex1d",
+                  width, height, depth, mips, fmt, fmt_name(fmt), layout, flags,
+                  htype == 1 ? "DEFAULT" : htype == 2 ? "UPLOAD" : htype == 3 ? "READBACK" : "CUSTOM",
+                  state, hr);
+    }
+    return hr;
+}
+
 static HRESULT WINAPI my_D3D12CreateDevice(void *adapter, UINT level,
                                            const GUID *iid, void **device)
 {
@@ -2719,6 +3794,93 @@ static HRESULT WINAPI my_D3D12CreateDevice(void *adapter, UINT level,
      *
      * Set NG4_PATCH_D3D12=1 to put them back.
      */
+    if (!caps_like_3)
+    {
+        /* Read here as well as in the worker. NG4 starts two processes and the
+         * first one created its device before the worker thread had parsed the
+         * switches, so the mode logged "left untouched" there and applied only
+         * in the second -- whichever of the two plays the movie is a matter of
+         * timing, and a switch that depends on timing is not a switch. */
+        char v[8] = { 0 };
+        if (GetEnvironmentVariableA("NG4_CAPS_LIKE_3", v, sizeof(v)) && v[0] == '1')
+            caps_like_3 = TRUE;
+        v[0] = 0;
+        if (GetEnvironmentVariableA("NG4_WATCH_D3D12_RESOURCES", v, sizeof(v)) && v[0] == '1')
+            watch_d3d12_resources = TRUE;
+        v[0] = 0;
+        if (GetEnvironmentVariableA("NG4_WATCH_MOVIE_COPY", v, sizeof(v)) && v[0] == '1')
+            watch_movie_copy = TRUE;
+        v[0] = 0;
+        if (GetEnvironmentVariableA("NG4_WATCH_PRESENT", v, sizeof(v)) && v[0] == '1')
+            watch_present = TRUE;
+    }
+    if (!watch_d3d12_resources)
+    {
+        char v[8] = { 0 };
+        if (GetEnvironmentVariableA("NG4_WATCH_D3D12_RESOURCES", v, sizeof(v)) && v[0] == '1')
+            watch_d3d12_resources = TRUE;
+    }
+    if (!patch_d3d12 && watch_d3d12_resources && SUCCEEDED(hr) && device && *device)
+    {
+        static void *cw;
+        void **vt2 = *(void ***)*device;
+        real_CreateCommittedWatch = (HRESULT (WINAPI *)(void *, const void *, UINT, const void *, UINT,
+                                                        const void *, const GUID *, void **))
+                                    vt2[SLOT_D3D12_CREATECOMMITTED];
+        if (!patch_slot("d3d12 CreateCommittedResource (watch only)", *device,
+                        SLOT_D3D12_CREATECOMMITTED, (void *)my_CreateCommittedWatch, &cw))
+            real_CreateCommittedWatch = NULL;
+        {
+            static void *ch, *cp;
+            real_CreateHeapWatch = (HRESULT (WINAPI *)(void *, const void *, const GUID *, void **))vt2[28];
+            if (!patch_slot("d3d12 CreateHeap (watch only)", *device, 28, (void *)my_CreateHeapWatch, &ch))
+                real_CreateHeapWatch = NULL;
+            real_CreatePlacedWatch = (HRESULT (WINAPI *)(void *, void *, UINT64, const void *, UINT,
+                                                         const void *, const GUID *, void **))vt2[29];
+            if (!patch_slot("d3d12 CreatePlacedResource (watch only)", *device, 29,
+                            (void *)my_CreatePlacedWatch, &cp))
+                real_CreatePlacedWatch = NULL;
+        }
+        {
+            char v[8] = { 0 };
+            if (!watch_movie_copy && GetEnvironmentVariableA("NG4_WATCH_MOVIE_COPY", v, sizeof(v)) && v[0] == '1')
+                watch_movie_copy = TRUE;
+        }
+        if (watch_movie_copy)
+        {
+            static void *cl;
+            real_CreateCommandListW = (HRESULT (WINAPI *)(void *, UINT, UINT, void *, void *, const GUID *, void **))vt2[12];
+            if (!patch_slot("d3d12 CreateCommandList (movie copy watch)", *device, 12,
+                            (void *)my_CreateCommandListW, &cl))
+                real_CreateCommandListW = NULL;
+        }
+    }
+    if (!watch_caps)
+    {
+        char v[8] = { 0 };
+        if (GetEnvironmentVariableA("NG4_WATCH_CAPS", v, sizeof(v)) && v[0] == '1')
+            watch_caps = TRUE;
+    }
+    if (!patch_d3d12 && (caps_like_3 || watch_caps))
+    {
+        if (SUCCEEDED(hr) && device && *device)
+        {
+            static void *cf1;
+            void **vt1 = *(void ***)*device;
+            real_CheckFeature = (HRESULT (WINAPI *)(void *, UINT, void *, UINT))
+                                vt1[SLOT_D3D12_CHECKFEATURE];
+            if (patch_slot(caps_like_3 ? "d3d12 CheckFeatureSupport (caps-like-3.0, the only slot)"
+                                       : "d3d12 CheckFeatureSupport (watch only)",
+                           *device, SLOT_D3D12_CHECKFEATURE, (void *)my_CheckFeature, &cf1))
+            {
+                if (caps_like_3)
+                    logf_("  NG4_CAPS_LIKE_3: the four 4.0b2-only capabilities will be answered as 3.0 does");
+            }
+            else
+                real_CheckFeature = NULL;
+        }
+        return hr;
+    }
     if (!patch_d3d12) { logf_("  d3d12: left untouched"); return hr; }
     if (SUCCEEDED(hr) && device && *device)
     {
@@ -3388,6 +4550,18 @@ static void watch_directstorage(void)
             "WINEESYNC", "WINEDEBUG", "GST_PLUGIN_PATH", "GST_PLUGIN_SYSTEM_PATH",
             "GST_PLUGIN_SCANNER", "GST_REGISTRY", "MVK_CONFIG_LOG_LEVEL",
             "MTL_HUD_ENABLED", "WINEDLLOVERRIDES", "WINEDLLPATH",
+            /* The debug redirection and our own switches.
+             *
+             * A run was spent on 2026-09-01 setting CX_DEBUGMSG and CX_LOG and
+             * then being unable to tell whether they had arrived, because this
+             * list did not name them -- the same list that was once read as if
+             * it were the whole environment. Anything we ask the user to set has
+             * to be visible here, or its absence cannot be told from its
+             * silence. These are all ours, so none of them carries a secret. */
+            "CX_DEBUGMSG", "CX_LOG", "D3DM_NOT_IMPLEMENTED", "D3DM_SHOW_HUD_STATS",
+            "BEAST_REFUSE_D3D_MANAGER", "NG4_NO_D3D11_PATCH", "NG4_SELECT_STREAM",
+            "NG4_PATCH_D3D12", "NG4_FORCE_PATCH", "NG4_ANSWER_MFT",
+            "NG4_WITHHOLD_D3D_FROM_MFT", "NG4_PAINT_TEST", "NG4_CAPS_LIKE_3", "NG4_WATCH_D3D12_RESOURCES", "NG4_WATCH_CAPS", "NG4_WATCH_MOVIE_COPY", "NG4_WATCH_PRESENT", "NG4_NO_TEARING", "NG4_NO_WAITABLE", "NG4_FLIP_MODEL", "NG4_FORCE_WINDOWED",
         };
         char buf[512];
         size_t i;
@@ -3408,6 +4582,9 @@ static LONG CALLBACK note_exception(EXCEPTION_POINTERS *info)
     static LONG said;
     DWORD code = info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionCode : 0;
     void *at = info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionAddress : NULL;
+    if (code == 0x80000101)   /* EXCEPTION_WINE_ASSERTION: a unix-side abort() */
+        logf_("EXCEPTION_WINE_ASSERTION on thread %lu -- something on the unix side "
+              "called abort()", GetCurrentThreadId());
 
     /* 0xe06d7363 is a C++ throw, 0x406d1388 a thread-name notification, and
      * both are ordinary traffic in a running game. */
@@ -3478,8 +4655,21 @@ static DWORD WINAPI worker(LPVOID unused)
         if (GetEnvironmentVariableA("NG4_PATCH_D3D12", v, sizeof(v)) && v[0] == '1')
             patch_d3d12 = TRUE;
         v[0] = 0;
+        if (GetEnvironmentVariableA("NG4_CAPS_LIKE_3", v, sizeof(v)) && v[0] == '1')
+            caps_like_3 = TRUE;
+        v[0] = 0;
         if (GetEnvironmentVariableA("NG4_NO_D3D11_PATCH", v, sizeof(v)) && v[0] == '1')
             no_d3d11_patch = TRUE;
+        v[0] = 0;
+        /* NG4_WITHHOLD_D3D_FROM_MFT=1: the game keeps its DXGI device manager --
+         * which its presentation path appears to need -- but the decoder is not
+         * told about it, so samples stay in system memory. The interception in
+         * my_ProcessMessage existed without any way to turn it on. Whether it
+         * fires at all is itself the first thing to learn: the decoder the game
+         * enumerates through MFTEnumEx has never logged SET_D3D_MANAGER, so the
+         * reader may be using one of its own. */
+        if (GetEnvironmentVariableA("NG4_WITHHOLD_D3D_FROM_MFT", v, sizeof(v)) && v[0] == '1')
+            withhold_d3d_from_mft = TRUE;
         v[0] = 0;
         if (GetEnvironmentVariableA("NG4_REFUSE_DSTORAGE", v, sizeof(v)) && v[0] == '1')
             refuse_dstorage_factory = TRUE;
@@ -3545,6 +4735,12 @@ static DWORD WINAPI worker(LPVOID unused)
                 { *(void **)&real_Direct3DCreate9Ex = was; got++; }
             if ((was = hook_import("d3d11.dll", "D3D11CreateDevice", (void *)my_D3D11CreateDevice)))
                 { *(void **)&real_D3D11CreateDevice = was; got++; }
+            if (watch_present)
+            {
+                if ((was = hook_import("dxgi.dll", "CreateDXGIFactory",  (void *)my_CreateDXGIFactory)))  { *(void **)&real_CreateDXGIFactory  = was; got++; }
+                if ((was = hook_import("dxgi.dll", "CreateDXGIFactory1", (void *)my_CreateDXGIFactory1))) { *(void **)&real_CreateDXGIFactory1 = was; got++; }
+                if ((was = hook_import("dxgi.dll", "CreateDXGIFactory2", (void *)my_CreateDXGIFactory2))) { *(void **)&real_CreateDXGIFactory2 = was; got++; }
+            }
             if ((was = hook_import("d3d12.dll", "D3D12CreateDevice", (void *)my_D3D12CreateDevice)))
                 { *(void **)&real_D3D12CreateDevice = was; got++; }
             if (!real_D3D12CreateDevice
@@ -3561,6 +4757,14 @@ static DWORD WINAPI worker(LPVOID unused)
     }
 
     watch_directstorage();
+    {
+        char v[8] = { 0 };
+        if (GetEnvironmentVariableA("NG4_WATCH_PRESENT", v, sizeof(v)) && v[0] == '1')
+        {
+            watch_present = TRUE;
+            seed_dxgi_factory_watch();
+        }
+    }
     logf_("---- write-path hooks %s | painting %s ----",
           watch_write_path ? "ON" : "off",
           "the real frames");

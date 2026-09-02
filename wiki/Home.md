@@ -132,7 +132,7 @@ videos".
 | [Devil May Cry 5](RE-Engine-VC1.md) | RE Engine | Crashes when a skill preview video plays | Staged VC-1 codec. Nothing installed beside the game | D3DMetal | 12 | not measured | Stock | 26.3, our winegstreamer | Fixed |
 | [RESIDENT EVIL 2](RE-Engine-VC1.md) | RE Engine | Crashes when a video plays | The same staged VC-1 codec, unchanged | D3DMetal | 12 | not measured | Stock | 26.3, our winegstreamer | Fixed |
 | [RESIDENT EVIL 3](RE-Engine-VC1.md) | RE Engine | Crashes when a video plays | The same staged VC-1 codec, unchanged | D3DMetal | 12 | not measured | Stock | 26.3, our winegstreamer | Fixed |
-| [NINJA GAIDEN 4](Ninja-Gaiden-4.md) | Koei Tecmo, in-house | Says the VP9 codec is missing, then exits | Staged Matroska demuxer, and the MFT gate answered | D3DMetal | 12 | **3.0 only** -- on 4.0b2 the video has sound and no picture | Stock | 26.3, our winegstreamer | Fixed |
+| [NINJA GAIDEN 4](Ninja-Gaiden-4.md) | Koei Tecmo, in-house | Says the VP9 codec is missing, then exits | Staged Matroska demuxer, and the MFT gate answered | D3DMetal | 12 | **3.0 only** -- on 4.0b2 nothing is ever presented: the game runs blind, every `Present` succeeds, the window stays black | Stock | 26.3, our winegstreamer | Fixed |
 | [RESONANCE: A PLAGUE TALE LEGACY](Resonance-A-Plague-Tale-Legacy.md) | Asobo, in-house | Fatal error: Shader Model 6.7 is not supported | Shader model floor lowered in memory; needs a 16:9 display | D3DMetal | 12 | not measured | Stock | 26.3, our winegstreamer | Starts on a 16:9 display -- its cutscenes have never been visible |
 
 **One engine, and update its toolkit.** The supported engine is stable
@@ -165,11 +165,11 @@ about Wine at all -- which is why dropping Preview costs the table nothing.
 
 Those three rows in bold are where that stops being a footnote, and they fall
 into two camps pointing opposite ways. **NINJA GAIDEN 4 is measured working on
-3.0, and on 4.0b2 its video has sound and no picture. Life is Strange -- both
-packages -- runs on 4.0b2 and crashes on 3.0.** Opposite requirements, same
-machine, so there is no single toolkit that serves the whole table. Both were
-measured by moving the toolkit under a fixed CrossOver, which is the only way
-to separate the two.
+3.0, and on 4.0b2 nothing is ever presented -- the game runs blind while every
+`Present` succeeds. Life is Strange -- both packages -- runs on 4.0b2 and
+crashes on 3.0.** Opposite requirements, same machine, so there is no single
+toolkit that serves the whole table. Both were measured by moving the toolkit
+under a fixed CrossOver, which is the only way to separate the two.
 
 **Everywhere else the column says "not measured", and that is deliberate.**
 4.0b2 is what these titles need as a general rule, with NINJA GAIDEN 4 the

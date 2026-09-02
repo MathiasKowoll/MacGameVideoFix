@@ -596,3 +596,38 @@ Two habits this cost, both of which are written elsewhere in this file:
 
 What actually broke it is in f5f7cf2: the fix stood its own workaround down after
 reading the workaround's output back as the engine's answer.
+
+## NINJA GAIDEN 4 on 4.0b2: five runs measured an empty channel -- 2026-09-01/02
+
+The probe printed `ReadSample: no sample, flags 0x0` two hundred times per run,
+on both toolkits, and that was read as a decoder that produced nothing. The
+game's source reader is asynchronous: Media Foundation requires such a caller to
+pass NULL for the sample and flags, delivers frames to
+`IMFSourceReaderCallback::OnReadSample` on a worker thread, and the probe's
+counter could never have moved. The log line was ambiguous by construction --
+`sflags ? *sflags : 0` prints zero for a NULL pointer -- and the note that
+"no NG4 log has ever recorded a frame" was built on it. One line saying which
+out parameters the caller passed settled it in one run; the callback hook that
+followed showed 300 frames with rising timestamps.
+
+Three more instruments lied the same way before the day was out, all by
+answering silence with silence:
+
+- A paint test that overwrote the frame with white, conditioned on the caller
+  passing a buffer length. NG4 passes NULL on most calls; the test painted one
+  frame in three hundred and "still black" was about to be reported as the game
+  not drawing what it was handed.
+- A resource log capped at forty lines that spent twenty-two on loading-screen
+  render targets and would have gone quiet exactly where the movie opened.
+- Two "eight retries" of the movie that were eight separate launches in a log
+  file that appended and was never cleared.
+
+And one that was right for the wrong reason: the "VirtualProtect refused, error
+87" recorded for months as a property of CrossOver 26.3 is D3DMetal 3.0's
+native object layer, invisible to wine's memory manager; 4.0b2's objects are
+PE and patch cleanly, one cold slot at a time.
+
+What the corrected instruments established is in the title's wiki page. The
+short form: on 4.0b2 every link up to the screen works and is measured, D3DMetal
+counts every presentation, and no pixel of its own or the game's reaches a
+window on this host. The title ships on 3.0.
