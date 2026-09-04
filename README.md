@@ -27,8 +27,12 @@ More games than rows: the two KINGDOM HEARTS packages hold seven playable titles
 Most of these are video faults, which is what the name says. Several are not —
 the rows whose Symptom column says the game does not start — and what stops each
 one is answered the same way everything else here is fixed: by giving a better
-answer to a call the game already makes. RESONANCE needs one thing besides: a
-16:9 display, which no fix can supply. Tormented Souls 2 is the entry whose
+answer to a call the game already makes. RESONANCE needs one thing besides, and
+it is a setting rather than a monitor: it turns HDR10 on by itself on an HDR
+display and starts to a black screen, so `HDR10 0` goes into its `ENGINESETTINGS`
+file. This page used to say it needed a 16:9 display; that was wrong, and the
+[wiki page](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Resonance-A-Plague-Tale-Legacy)
+keeps the retraction. Tormented Souls 2 is the entry whose
 fault is the game's own rather than the translation layer's: it keeps 16:9
 resolutions and nothing else, and a laptop display has none.
 
@@ -58,7 +62,7 @@ resolutions and nothing else, and a laptop display has none.
 | [**RESIDENT EVIL 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/RE-Engine-VC1) | Crashes when a video plays | 26.3, our winegstreamer | Stock | Fixed |
 | [**RESIDENT EVIL 3**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/RE-Engine-VC1) | Crashes when a video plays | 26.3, our winegstreamer | Stock | Fixed |
 | [**NINJA GAIDEN 4**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Ninja-Gaiden-4) | Says the VP9 codec is missing, then exits | 26.3, our winegstreamer | Stock | Fixed |
-| [**RESONANCE: A PLAGUE TALE LEGACY**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Resonance-A-Plague-Tale-Legacy) | Fatal error: Shader Model 6.7 is not supported | 26.3, our winegstreamer | Stock | Starts on a 16:9 display -- its cutscenes have never been visible |
+| [**RESONANCE: A PLAGUE TALE LEGACY**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Resonance-A-Plague-Tale-Legacy) | Fatal error: Shader Model 6.7 is not supported | 26.3, our winegstreamer | Stock | Plays at the desktop resolution with HDR10 off -- its cutscenes have never been visible |
 
 <!-- readme-games:end -->
 

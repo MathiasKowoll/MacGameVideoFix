@@ -10,7 +10,8 @@ it is working correctly.
 | Fix | Lower the shader model floor to 6.6, in memory |
 | Carrier | `NvCloth_x64.dll` → `NvCloth_x64_real.dll`, 42 forwarders |
 | Backend | D3DMetal, D3D12 |
-| Display | **Must be 16:9.** Nothing else in this project can supply that |
+| Display | Any. The desktop resolution is fine -- see the retraction below |
+| Second fix | **`HDR10 0`** in `ENGINESETTINGS`, or it starts to a black screen |
 | CrossOver | Stable 26.3 (`cxoffice-26.3.0rc2`), Game Porting Toolkit 3.0 and 4.0b2 alike |
 
 ## The floor, not the device
@@ -45,21 +46,50 @@ compile on a device that has 6.6. Lowering the floor keeps it on the paths it
 can run; raising the device buys a launch and pays for it later, somewhere with
 no error message.
 
-## It also needs a 16:9 display
+## The black screen was HDR, not the aspect ratio
 
-Measured on a 3456x2234 panel — 1.547:1, which is every Apple laptop. With the
-floor lowered the title starts, loads 2.5 GB of textures, renders four to five
-hundred draws a frame at eighty frames a second, answers input, plays its menu
-sounds, and **shows nothing at all**. It filters the display mode list for 16:9,
-finds none, and composes into a region that is never presented.
+**Retracted, 2026-09-03.** This page said the title needed a 16:9 display and
+that no fix here could supply one. That was wrong, and the section it replaced
+is kept below so the reasoning that produced it stays visible.
 
-At 1920x1080 it plays. This is why the same title runs for people on 16:9
-monitors with the same D3DMetal and nothing but the byte, and why the community
-fix reads as complete to them and does nothing here.
+The title writes its own settings to
+`AppData/Roaming/Resonance A Plague Tale Legacy/ENGINESETTINGS`, and on a
+display it reads as HDR it turns HDR10 on by itself:
 
-Set the display with the game's own graphics options, a tool like BetterDisplay,
-or a CrossOver virtual desktop. Its command line accepts `-width`, `-height`,
-`-windowed` and `-borderless`, and they were not honoured when tried.
+    Adapter "AMD Compatibility Mode"
+    Resolution 2560 1440
+    HDR10 1                 <- written by the game, nobody set it
+
+Set that line to `HDR10 0` and the title starts and draws at the desktop
+resolution. No 16:9, no 1920x1080, no virtual desktop. Measured on a
+Liquid Retina XDR panel, which is HDR and is what triggers it.
+
+The file is created on first run, so it can be edited straight after the first
+launch. Once the graphics options are how you want them the file can be made
+read-only, and the title stops rewriting it.
+
+**What was actually established, and what was not.** That HDR10 off is
+sufficient at native resolution is measured. *Why 1920x1080 also worked* is not:
+the plausible reading is that changing the mode made the title renegotiate the
+display and drop HDR10, so the resolution was a way of turning HDR off without
+knowing it. That is a hypothesis; nobody has watched the file across a mode
+change. What is certain is that the aspect ratio was never the requirement, and
+a page that said so sent people to buy a monitor for a one-line setting.
+
+### What this replaced, kept for the reasoning
+
+Measured on a 3456x2234 panel -- 1.547:1, which is every Apple laptop. With the
+floor lowered the title started, loaded 2.5 GB of textures, rendered four to
+five hundred draws a frame at eighty frames a second, answered input, played its
+menu sounds, and **showed nothing at all**. At 1920x1080 it played. From that it
+was concluded that the title filtered the display mode list for 16:9, found
+none, and composed into a region that was never presented -- and that this was
+why the same title ran for people on 16:9 monitors with the same D3DMetal and
+nothing but the byte.
+
+Every one of those observations still stands. The conclusion drawn from them did
+not: the same black screen has a cause that a resolution change happened to
+clear, and the mode list was never shown to be filtered.
 
 ## The videos decode, arrive, and are never drawn
 

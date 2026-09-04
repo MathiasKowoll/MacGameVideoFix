@@ -146,9 +146,9 @@ GAMES = [
      "D3DMetal", "12", MEASURED,
      "Fixed", "Ninja-Gaiden-4"),
     ("RESONANCE: A PLAGUE TALE LEGACY", "Asobo, in-house",
-     "Fatal error: Shader Model 6.7 is not supported", "Shader model floor lowered in memory; needs a 16:9 display",
+     "Fatal error: Shader Model 6.7 is not supported", "Shader model floor lowered in memory; HDR10 off in ENGINESETTINGS",
      "D3DMetal", "12", MEASURED,
-     "Starts on a 16:9 display -- its cutscenes have never been visible", "Resonance-A-Plague-Tale-Legacy"),
+     "Plays at the desktop resolution with HDR10 off -- its cutscenes have never been visible", "Resonance-A-Plague-Tale-Legacy"),
 ]
 
 HEAD = ("| Game | Engine | Symptom | Fix | Backend | DX | GPTK | Motor | CrossOver | Status |\n"
