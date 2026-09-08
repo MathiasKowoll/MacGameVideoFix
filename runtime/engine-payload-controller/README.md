@@ -87,19 +87,26 @@ only the plain pad; an id whose USB descriptor is not built in is ignored
 with a warning in a `+hid` log, and so is `UsbEmulation` itself for a pad
 whose own descriptor is not.
 
-**Limits.** Only a DualSense Edge (`054c:0df2`) presented as an Edge works
-today: the plain DualSense's USB descriptor has not been captured, so
-`UsbEmulation` under a `054c/0ce6` key is refused, and so is `ProductId`
-`0x0ce6` on an Edge. The patch's own header says where the row for it is and
-how to capture it. A client that does know the pad is on Bluetooth — Steam
-for a title with category 58, SDL — sees a wired pad while the option is on
-and writes the USB report instead; that is translated too, so nothing is
-lost, but the option is per device and off is the answer for every pad that
-does not need it: set it for a pad and a title that do, and leave it off
-otherwise. And the driver half is not yet measured on a live pad: the packing
-is proven byte for byte against packets that rumbled the pad, but the option
-has not yet been turned on under a running title, so the first use belongs
-in a `+hid` trace.
+**Both pads are served.** The plain DualSense's USB report descriptor (289
+bytes) and the Edge's (405) are each read from that pad on a cable and built
+in, so `UsbEmulation` works under a `054c/0ce6` key as well as a `054c/0df2`
+one, and `ProductId` `0x0ce6` on an Edge presents it as a plain pad. Nothing
+is derived from the other pad's descriptor: they differ, and the difference
+matters — output `0x02` is 48 bytes on the plain pad and 64 on the Edge. The
+`0x31` that goes to the pad is 78 bytes either way, with the effects block at
+the same offsets, so the same translation carries both lengths.
+
+**Limits.** No pad but a DualSense, and that is a decision rather than a gap:
+a DualShock 4's descriptor, input reports and output reports all differ, so it
+would be a second translation layer, and nothing measured asks for one. A
+client that does know the pad is on Bluetooth — Steam for a title with
+category 58, SDL — sees a wired pad while the option is on and writes the USB
+report instead; that is translated too, so nothing is lost, but the option is
+per device and off is the answer for every pad that does not need it: set it
+for a pad and a title that do, and leave it off otherwise. And the driver half
+is not yet measured on a live pad: the packing is proven byte for byte against
+packets that rumbled the pad, but the option has not yet been turned on under
+a running title, so the first use belongs in a `+hid` trace.
 
 ## Optional
 

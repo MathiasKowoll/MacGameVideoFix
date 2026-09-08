@@ -32,9 +32,11 @@ HKLM\System\CurrentControlSet\Services\winebus\Devices\<vid>/<pid>, a
 DualSense (054c:0ce6 or 054c:0df2) arriving over Bluetooth is created with
 bus type USB -- so get_device_id, mgvf-0002's compatible ids and hidapi's
 flag all say USB -- and at start its report descriptor is replaced by the USB
-one of the pad, with HidP_GetCollectionDescription re-run on it. From then on
-every report is translated at the boundary, so the pad still gets what it
-expects:
+one of the pad, with HidP_GetCollectionDescription re-run on it. Both pads'
+USB descriptors are built in, the plain one's 289 bytes and the Edge's 405,
+each read from that pad on a cable; nothing is derived from the other's. From
+then on every report is translated at the boundary, so the pad still gets what
+it expects:
 
   input    0x31/78 -> 0x01/64  the USB report is bytes 2..64 of the Bluetooth
                                one; the nine reserved bytes and the CRC are
@@ -57,7 +59,12 @@ expects:
                                little-endian at 74..77 -- through a packet of
                                our own, with IoStatus.Information set back to
                                the client's length. The counter lives in the
-                               device extension.
+                               device extension. N is whatever the presented
+                               descriptor declares -- 48 on a plain pad, 64 on
+                               an Edge -- and the difference is only how many
+                               zeros follow: the 0x31 is 78 bytes either way
+                               and the effects block sits at the same offsets,
+                               which is why one translation serves both.
   feature GET                  forwarded; the last four bytes of the report --
                                its declared length, not the client's buffer --
                                are zeroed, where the pad puts its CRC and a
@@ -82,9 +89,14 @@ pointer, RtlComputeCrc32 from the driver and zlib's crc32 from the test.
 
 HOW THE LAYOUTS WERE MEASURED
 
-From +hid traces of the same DualSense Edge, wired and paired. The USB
+From +hid traces of the same DualSense Edge, wired and paired. Its USB
 descriptor, 405 bytes, is the one hidparse dumped from the wired pad, twice
-and byte-identical. The 0x31 packing was checked byte for byte, CRC included,
+and byte-identical. The plain DualSense's, 289 bytes, was read on 2026-09-08
+from that pad on a cable through IOKit's kIOHIDReportDescriptorKey -- the
+property winebus itself reads -- and differs from the Edge's in three items
+and no others: output 0x02 of 47 data bytes rather than 63, feature 0xf2 of 16
+bytes rather than 53, and no profile reports 0x60..0x7b. The input report is
+the same, which is why the input translations were not re-measured for it. The 0x31 packing was checked byte for byte, CRC included,
 against two output reports Steam itself wrote to the paired pad (CRCs
 231501b5 and 808dbf02) and against a packing sent through IOKit with no wine
 involved, which rumbled the pad. The feature reports that exist in both
@@ -114,12 +126,18 @@ derived from another pad's.
 
 NOT COVERED
 
-The plain DualSense's USB descriptor (054c:0ce6) has not been captured, so
-today only an Edge presented as an Edge works; the table in dualsense_usb.c
-has a marked empty row for it. Capture it from a wired plain pad -- any +hid
-trace prints it at start -- rather than editing the Edge's: output 0x02 is 47
-data bytes on the plain pad and 63 on the Edge, and the sets of feature
-reports differ. The pad's own CRC on its 0x31 input (seed 0xA1) is not
+A DualShock 4, and any other pad: deliberately. Its report descriptor, its
+input reports and its output reports all differ from a DualSense's, so it
+would be a second translation layer rather than another row in the table, and
+nothing measured asks for one. Both DualSense ids are served.
+
+The driver half has not run against a live pad. Everything above about the
+byte layouts is proved against captured bytes by the host test, and the
+0x31 packing rumbled the pad through IOKit with no wine involved; but the
+option has not yet been turned on under a running title, so the first use
+belongs in a +hid trace.
+
+The pad's own CRC on its 0x31 input (seed 0xA1) is not
 verified; SDL and the Linux driver drop a report that fails it. Feature ids
 that exist only in the USB descriptor (0x0a, 0x0c, 0x21, 0x84, 0x85, 0xa0,
 0xe0) fail at the pad, as they would on a wired pad without them. Whether a
@@ -155,7 +173,7 @@ ntoskrnl.exe.
  	unixlib.c \
 --- /dev/null
 +++ b/dlls/winebus.sys/dualsense_usb.c
-@@ -0,0 +1,255 @@
+@@ -0,0 +1,293 @@
 +/*
 + * MGVF mgvf-0005: a DualSense on Bluetooth, presented to Windows as if on USB.
 + *
@@ -240,15 +258,53 @@ ntoskrnl.exe.
 +    0x09, 0x53, 0xb1, 0x02, 0xc0,
 +};
 +
-+/* One row per product id that can be presented. A row whose descriptor is
-+ * NULL is a known pad whose USB descriptor has not been captured: the option
-+ * refuses it rather than presenting a descriptor derived from another pad's.
++/* DualSense (054c:0ce6) USB report descriptor, 289 bytes, read from the real
++ * pad connected by cable on 2026-09-08 through IOKit's
++ * kIOHIDReportDescriptorKey -- the same property winebus itself reads -- by
++ * dsdesc, which sits beside the descriptors in the build directory. It
++ * declares input 0x01 of 64 bytes, output 0x02 of 48, and its feature reports
++ * on usage page 0xff00, among them 0x20 of 64 bytes at usage 0x26 and the
++ * calibration 0x05 of 41 at usage 0x33: the caps libScePad reads as "USB".
 + *
-+ * The plain DualSense (0x0ce6) differs from the Edge in at least the size of
-+ * output 0x02 (47 data bytes against 63; on the Edge the item is
-+ * "85 02 09 23 95 3f 91 02" at offset 104) and in which feature reports it
-+ * has. Capture it from a wired plain pad -- any +hid trace prints it in full
-+ * at device start -- and fill the row in; do not derive it. */
++ * Against the Edge's, three differences and no others, item for item: output
++ * 0x02 carries 47 data bytes rather than 63 (count 0x2f, not 0x3f), feature
++ * 0xf2 is 16 bytes rather than 53, and the nineteen feature reports 0x60..0x7b
++ * -- the Edge's profile reports -- are absent. Everything else, the input
++ * report included, is identical, which is why one set of translations serves
++ * both pads. */
++static const unsigned char dualsense_usb_report_desc[] =
++{
++    0x05, 0x01, 0x09, 0x05, 0xa1, 0x01, 0x85, 0x01, 0x09, 0x30, 0x09, 0x31, 0x09, 0x32, 0x09, 0x35,
++    0x09, 0x33, 0x09, 0x34, 0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08, 0x95, 0x06, 0x81, 0x02, 0x06,
++    0x00, 0xff, 0x09, 0x20, 0x95, 0x01, 0x81, 0x02, 0x05, 0x01, 0x09, 0x39, 0x15, 0x00, 0x25, 0x07,
++    0x35, 0x00, 0x46, 0x3b, 0x01, 0x65, 0x14, 0x75, 0x04, 0x95, 0x01, 0x81, 0x42, 0x65, 0x00, 0x05,
++    0x09, 0x19, 0x01, 0x29, 0x0f, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x0f, 0x81, 0x02, 0x06,
++    0x00, 0xff, 0x09, 0x21, 0x95, 0x0d, 0x81, 0x02, 0x06, 0x00, 0xff, 0x09, 0x22, 0x15, 0x00, 0x26,
++    0xff, 0x00, 0x75, 0x08, 0x95, 0x34, 0x81, 0x02, 0x85, 0x02, 0x09, 0x23, 0x95, 0x2f, 0x91, 0x02,
++    0x85, 0x05, 0x09, 0x33, 0x95, 0x28, 0xb1, 0x02, 0x85, 0x08, 0x09, 0x34, 0x95, 0x2f, 0xb1, 0x02,
++    0x85, 0x09, 0x09, 0x24, 0x95, 0x13, 0xb1, 0x02, 0x85, 0x0a, 0x09, 0x25, 0x95, 0x1a, 0xb1, 0x02,
++    0x85, 0x0b, 0x09, 0x41, 0x95, 0x29, 0xb1, 0x02, 0x85, 0x0c, 0x09, 0x42, 0x95, 0x29, 0xb1, 0x02,
++    0x85, 0x20, 0x09, 0x26, 0x95, 0x3f, 0xb1, 0x02, 0x85, 0x21, 0x09, 0x27, 0x95, 0x04, 0xb1, 0x02,
++    0x85, 0x22, 0x09, 0x40, 0x95, 0x3f, 0xb1, 0x02, 0x85, 0x80, 0x09, 0x28, 0x95, 0x3f, 0xb1, 0x02,
++    0x85, 0x81, 0x09, 0x29, 0x95, 0x3f, 0xb1, 0x02, 0x85, 0x82, 0x09, 0x2a, 0x95, 0x09, 0xb1, 0x02,
++    0x85, 0x83, 0x09, 0x2b, 0x95, 0x3f, 0xb1, 0x02, 0x85, 0x84, 0x09, 0x2c, 0x95, 0x3f, 0xb1, 0x02,
++    0x85, 0x85, 0x09, 0x2d, 0x95, 0x02, 0xb1, 0x02, 0x85, 0xa0, 0x09, 0x2e, 0x95, 0x01, 0xb1, 0x02,
++    0x85, 0xe0, 0x09, 0x2f, 0x95, 0x3f, 0xb1, 0x02, 0x85, 0xf0, 0x09, 0x30, 0x95, 0x3f, 0xb1, 0x02,
++    0x85, 0xf1, 0x09, 0x31, 0x95, 0x3f, 0xb1, 0x02, 0x85, 0xf2, 0x09, 0x32, 0x95, 0x0f, 0xb1, 0x02,
++    0x85, 0xf4, 0x09, 0x35, 0x95, 0x3f, 0xb1, 0x02, 0x85, 0xf5, 0x09, 0x36, 0x95, 0x03, 0xb1, 0x02,
++    0xc0,
++};
++
++/* One row per product id that can be presented; both DualSense ids are here,
++ * each with the descriptor read from that pad on a cable. A pid with no row
++ * gets NULL back, and the option is refused for it rather than answered with
++ * a descriptor derived from another pad's -- which is what the "ProductId"
++ * override is checked against before it is honoured.
++ *
++ * A third pad -- a DualShock 4, say -- would need more than a row: its
++ * descriptor, its input reports and its output reports all differ from a
++ * DualSense's, so it would be a second translation layer, and nothing
++ * measured asks for one. */
 +struct dualsense_usb_descriptor
 +{
 +    unsigned int pid;
@@ -259,7 +315,7 @@ ntoskrnl.exe.
 +static const struct dualsense_usb_descriptor dualsense_usb_descriptors[] =
 +{
 +    {DUALSENSE_EDGE_PID, dualsense_edge_usb_report_desc, sizeof(dualsense_edge_usb_report_desc)},
-+    {DUALSENSE_PID, NULL, 0}, /* SLOT: plain DualSense USB descriptor, not captured yet */
++    {DUALSENSE_PID, dualsense_usb_report_desc, sizeof(dualsense_usb_report_desc)},
 +};
 +
 +const unsigned char *dualsense_usb_report_descriptor(unsigned int pid, unsigned int *length)
@@ -413,7 +469,7 @@ ntoskrnl.exe.
 +}
 --- /dev/null
 +++ b/dlls/winebus.sys/dualsense_usb.h
-@@ -0,0 +1,89 @@
+@@ -0,0 +1,94 @@
 +/*
 + * MGVF mgvf-0005: a DualSense on Bluetooth, presented to Windows as if on USB.
 + *
@@ -463,8 +519,12 @@ ntoskrnl.exe.
 +#define DUALSENSE_BT_REPORT_LEN    78
 +#define DUALSENSE_BT_SHORT_LEN     10
 +
-+/* Over USB: input 0x01 of 64 bytes, output 0x02 of 48 bytes on a DualSense
-+ * and 64 on an Edge, no CRC anywhere. */
++/* Over USB: input 0x01 of 64 bytes on both pads, output 0x02 of 48 bytes on a
++ * DualSense and 64 on an Edge, no CRC anywhere. The MAX below is the larger of
++ * the two, the bound a write is refused for; the translation takes whatever
++ * length the presented descriptor declares, because the Bluetooth report it
++ * packs into is 78 bytes either way and only the number of trailing zeros
++ * changes. */
 +#define DUALSENSE_USB_INPUT_ID     0x01
 +#define DUALSENSE_USB_INPUT_LEN    64
 +#define DUALSENSE_USB_OUTPUT_ID    0x02
@@ -481,8 +541,9 @@ ntoskrnl.exe.
 +#define DUALSENSE_CRC_SEED_OUTPUT          0xa2
 +#define DUALSENSE_CRC_SEED_FEATURE_SET     0x53
 +
-+/* The USB report descriptor to present for a product id, or NULL when none
-+ * has been captured for it; *length receives its size. */
++/* The USB report descriptor to present for a product id, or NULL when the
++ * table has no row for it; *length receives its size, 0 in that case. Both
++ * DualSense ids have one; anything else does not. */
 +const unsigned char *dualsense_usb_report_descriptor(unsigned int pid, unsigned int *length);
 +
 +/* Each of these returns the number of bytes written to out, or 0 when the
@@ -568,10 +629,12 @@ ntoskrnl.exe.
      {
          TRACE("Enabling report fixup for Bluetooth DualSense device %p\n", device);
          ext->report_fixups |= HIDRAW_FIXUP_DUALSENSE_BT;
-@@ -529,6 +548,85 @@
-     return default_value;
- }
+@@ -527,8 +546,87 @@
+     }
  
+     return default_value;
++}
++
 +/* MGVF mgvf-0005: a REG_DWORD under the device's own key, read when the device
 + * arrives rather than at driver start like load_device_options, because the
 + * answer is only ever needed for the one device the key names.
@@ -599,8 +662,8 @@ ntoskrnl.exe.
 +
 +    NtClose(key);
 +    return value;
-+}
-+
+ }
+ 
 +/* MGVF mgvf-0005: decide, as a device arrives, whether to present it as a
 + * DualSense on USB. Only a DualSense on Bluetooth with "UsbEmulation" set
 + * under its key qualifies, and only when the USB report descriptor of the
@@ -778,13 +841,14 @@ ntoskrnl.exe.
              if (device) IoInvalidateDeviceRelations(bus_pdo, BusRelations);
              else
              {
-@@ -1363,6 +1509,174 @@
+@@ -1362,7 +1508,175 @@
+     IoSkipCurrentIrpStackLocation(irp);
      return IoCallDriver(bus_pdo, irp);
  }
- 
++
 +/* MGVF mgvf-0005: the driver's half of the USB emulation. dualsense_usb.c
 + * holds the byte layouts; these own the device and do the I/O. */
-+
+ 
 +static unsigned int dualsense_crc32(unsigned int initial, const unsigned char *data, int len)
 +{
 +    return RtlComputeCrc32(initial, data, len);

@@ -500,8 +500,9 @@ the same report, and a title that sends them over Bluetooth is reported working.
 The same `winebus.sys` also carries `mgvf-0005`, a per-device registry option
 — off by default — that presents a DualSense on Bluetooth as if it were on
 USB, for Sony's libScePad and for Steam's *plug in your controller* dialog,
-which both insist on a wired pad; `runtime/engine-payload-controller/README.md`
-says how to turn it on and what it cannot do yet. An improvement rather than a
+which both insist on a wired pad. Either DualSense, plain or Edge, can be
+presented that way; `runtime/engine-payload-controller/README.md` says how to
+turn it on, and that the driver half has not yet run against a live pad. An improvement rather than a
 fix: no row of the table needs it and the Motor column does not change. It is
 installed and removed with
 `runtime/install-engine-controller.sh <app> install | --status | --restore`,

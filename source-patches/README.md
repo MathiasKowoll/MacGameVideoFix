@@ -173,14 +173,20 @@ to `0x01/64`, the short `0x01/10` spread into the USB layout after a one-shot
 feature read that makes the pad stop sending it, output `0x02` packed into a
 `0x31/78` with sequence byte and CRC-32, feature reads with their CRC tail
 zeroed, feature writes with a CRC appended. An optional `ProductId` presents
-another DualSense's id. The byte layouts live in a new file,
+another DualSense's id. Both DualSense product ids are served: the plain pad's
+289-byte USB descriptor and the Edge's 405-byte one are each read from that
+pad on a cable and built in, so `UsbEmulation` works on either, and so does
+presenting an Edge as `0x0ce6` for a client that knows only the plain pad.
+Output `0x02` is 48 bytes on the plain pad and 64 on the Edge; the `0x31` is
+78 bytes either way and the effects block sits at the same offsets, so one
+translation serves both. The byte layouts live in a new file,
 `dualsense_usb.c`, with no wine includes, and a host test beside the
 descriptors in the build directory checks the packing byte for byte against
 packets Steam itself wrote to the pad. Off by default: without the value the
-shipped `winebus.sys` behaves exactly as before. What it does not cover — the
-plain DualSense's USB descriptor has not been captured, so only an Edge
-presented as an Edge works today — and the risks are in the patch's own
-header; how to turn it on is in `runtime/engine-payload-controller/README.md`.
+shipped `winebus.sys` behaves exactly as before. What it does not cover — a
+DualShock 4, deliberately, and the driver half has not yet run against a live
+pad — and the risks are in the patch's own header; how to turn it on is in
+`runtime/engine-payload-controller/README.md`.
 
 ## If another of their patches is ever needed
 
