@@ -224,7 +224,7 @@ payload directly should check both too.
     built-for.json                     ->  not copied; read it first
 
 Three PE files from the engine's own wine source with `mgvf-0002`, `mgvf-0003`
-and `mgvf-0004` applied, so a Windows client can learn that a controller is on
+`mgvf-0004` and `mgvf-0005` applied, so a Windows client can learn that a controller is on
 Bluetooth — a DualSense then rumbles over Bluetooth, and its PS button and touchpad
 work; trigger effects ride in the same report. **Optional**: an improvement no title needs, never
 installed by `make-engine-copy.sh`, and kept out of `engine-payload/` so that

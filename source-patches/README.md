@@ -16,13 +16,13 @@ and the installer chooses between them by the name of the engine it is pointed
 at. All of them record the patch set above.
 
 `scripts/build-controller-bus.sh` builds a **second, optional set** from the
-same tree, with `mgvf-0002`, `mgvf-0003` and `mgvf-0004` applied on top:
-`winebus.sys`, `setupapi.dll` and `ntoskrnl.exe`, three PE files and no unix
-half. It is stamped apart, in `runtime/engine-controller-built-for.json` beside
-`runtime/install-engine-controller.sh` and mirrored as
+same tree, with `mgvf-0002`, `mgvf-0003`, `mgvf-0004` and `mgvf-0005` applied
+on top: `winebus.sys`, `setupapi.dll` and `ntoskrnl.exe`, three PE files and no
+unix half. It is stamped apart, in `runtime/engine-controller-built-for.json`
+beside `runtime/install-engine-controller.sh` and mirrored as
 `runtime/engine-payload-controller/built-for.json`, and that stamp records only
-those three. The media stamps above record only the media patch set, and that
-stays so: the three are not applied to the winegstreamer pair and the pair is
+those four. The media stamps above record only the media patch set, and that
+stays so: the four are not applied to the winegstreamer pair and the pair is
 not rebuilt when they change.
 
 `build-winegstreamer.sh` resolves each number here first, and only then in the
@@ -58,7 +58,10 @@ for one fault between them. They touch `winebus.sys`, `setupapi.dll` and
 `ntoskrnl.exe`, not winegstreamer, and go into the optional controller-bus set
 rather than the media pair. Each opens with the same header: where it came
 from, the fault, the change — and that nothing in it is specific to this
-project.
+project. **`mgvf-0005` is ours as well**, from the same day and in the same
+set, and is the opposite of the three: where they tell a client the truth
+about the bus, it lets one pad lie about it, per device, off by default, for
+the two consumers that turned out not to want the truth.
 
 ## What each one is for
 
@@ -150,6 +153,34 @@ of that first boot, whatever the bus said now. It now asks the bus for both on
 every enumeration and writes them before the driver question, which is what
 Windows's PnP manager does. **The three only work together**: this one exists
 because the first two alone still read the first boot's record.
+
+### mgvf-0005 — winebus presents a DualSense on Bluetooth as if it were on USB, on request *(ours)*
+The three above tell a client the truth about the bus, and two consumers
+turned out not to want it. Sony's libScePad (1.0.4.1) decides USB against
+Bluetooth from the HidP capabilities alone — feature caps on usage page
+`0xFF00` are the USB descriptor — and then writes output report `0x02` only,
+the USB format, which a pad on Bluetooth does not have: hidclass refuses the
+write and the library drops the pad. Steam decides from hidapi's flag and the
+title's store categories, and for a title with 57 ("PS5 controller support")
+but not 58 ("PS5 support over Bluetooth") shows its *plug in your controller*
+dialog whenever the flag says Bluetooth. Both are content with a pad that
+looks wired, so this patch makes one look wired, per device and only when
+asked: `UsbEmulation` under
+`HKLM\System\CurrentControlSet\Services\winebus\Devices\<vid>/<pid>`. The pad
+is created with bus type USB, its report descriptor is replaced at start by
+the USB one, and every report is translated at the boundary — input `0x31/78`
+to `0x01/64`, the short `0x01/10` spread into the USB layout after a one-shot
+feature read that makes the pad stop sending it, output `0x02` packed into a
+`0x31/78` with sequence byte and CRC-32, feature reads with their CRC tail
+zeroed, feature writes with a CRC appended. An optional `ProductId` presents
+another DualSense's id. The byte layouts live in a new file,
+`dualsense_usb.c`, with no wine includes, and a host test beside the
+descriptors in the build directory checks the packing byte for byte against
+packets Steam itself wrote to the pad. Off by default: without the value the
+shipped `winebus.sys` behaves exactly as before. What it does not cover — the
+plain DualSense's USB descriptor has not been captured, so only an Edge
+presented as an Edge works today — and the risks are in the patch's own
+header; how to turn it on is in `runtime/engine-payload-controller/README.md`.
 
 ## If another of their patches is ever needed
 

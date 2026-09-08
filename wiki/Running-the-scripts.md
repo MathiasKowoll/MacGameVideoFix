@@ -117,7 +117,7 @@ Not run by `make-engine-copy.sh` and not offered by the app's **Set up**. An
 improvement rather than a fix: no title needs it, and it is for a person who
 wants a controller on Bluetooth to work the way it does over USB. Three PE files
 — `winebus.sys`, `setupapi.dll` and `ntoskrnl.exe` — built from the engine's
-own wine source with `mgvf-0002`, `mgvf-0003` and `mgvf-0004` applied, so a
+own wine source with `mgvf-0002`, `mgvf-0003`, `mgvf-0004` and `mgvf-0005` applied, so a
 Windows client can learn the transport: a DualSense then rumbles over Bluetooth,
 and its PS button and touchpad work; trigger effects ride in the same report. What each patch changes
 is in `source-patches/README.md`; what the set is, and what it is not, is in
@@ -182,7 +182,7 @@ scripts/install-controller-build.sh
 ```
 
 The first reuses the tree `build-winegstreamer.sh` configured, so run that
-first. It applies `mgvf-0002`, `mgvf-0003` and `mgvf-0004`, builds only the
+first. It applies `mgvf-0002`, `mgvf-0003`, `mgvf-0004` and `mgvf-0005`, builds only the
 three PE files, strips them with `llvm-strip --strip-all` and proves the strip
 harmless before it stamps anything: the export and import tables of the
 stripped file are compared with the unstripped one, and a difference stops it.

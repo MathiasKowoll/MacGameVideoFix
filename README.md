@@ -496,9 +496,14 @@ These two produce a second engine set, and it is **optional**: `winebus.sys`,
 `mgvf-0003` and `mgvf-0004` applied, so that a Windows client can learn a
 controller is on Bluetooth. A DualSense then rumbles over Bluetooth, and its PS
 button and touchpad work, as they always did over USB; trigger effects ride in
-the same report, and a title that sends them over Bluetooth is reported working. An
-improvement rather than a fix: no row of the table needs it and the Motor column
-does not change. It is installed and removed with
+the same report, and a title that sends them over Bluetooth is reported working.
+The same `winebus.sys` also carries `mgvf-0005`, a per-device registry option
+— off by default — that presents a DualSense on Bluetooth as if it were on
+USB, for Sony's libScePad and for Steam's *plug in your controller* dialog,
+which both insist on a wired pad; `runtime/engine-payload-controller/README.md`
+says how to turn it on and what it cannot do yet. An improvement rather than a
+fix: no row of the table needs it and the Motor column does not change. It is
+installed and removed with
 `runtime/install-engine-controller.sh <app> install | --status | --restore`,
 which keeps CodeWeavers' three files as `.mgvf-stock`, refuses any engine but the
 one both stamp fields name, refuses while a bottle is running, and re-signs the

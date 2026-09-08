@@ -1,0 +1,1022 @@
+From: MacGameVideoFix <https://github.com/MathiasKowoll/MacGameVideoFix>
+Subject: [PATCH] winebus.sys: present a DualSense on Bluetooth as if it were on USB, on request
+
+WHERE THIS CAME FROM
+
+MacGameVideoFix's own series, mgvf-NNNN, written on 2026-09-08 after
+mgvf-0002, 0003 and 0004 had made the truth about the bus reachable -- and it
+turned out that two consumers do not want the truth. Nothing in it is
+specific to this project; it is offered to anyone carrying a patched winebus.
+
+THE FAULT
+
+Sony's libScePad (1.0.4.1, the copy two current titles ship) decides USB
+against Bluetooth from the HidP capabilities alone: feature value caps on
+usage page 0xFF00 mean the USB descriptor, 0xFF80 the Bluetooth one, and it
+wants InputReportByteLength and FeatureReportByteLength of at least 64 with
+OutputReportByteLength no more than 48 for a 0x0ce6 pad or 64 for a 0x0df2.
+Having found the Bluetooth descriptor it still writes output report 0x02
+only, the USB format; the Bluetooth descriptor has no 0x02, hidclass refuses
+the write before winebus sees it, and the library drops the pad. Measured on
+2026-09-08 with a +hid trace under CrossOver 26.3. Steam, for its part,
+decides from hidapi's bus flag -- correct now, thanks to the three patches
+before this one -- and from the title's store categories: 57, "PS5
+controller support", without 58, "PS5 support over Bluetooth", puts up the
+"plug in your controller" dialog whenever the flag says Bluetooth. Both are
+content with a pad that looks wired.
+
+THE CHANGE
+
+An opt-in, per device, off by default. With "UsbEmulation" set under
+HKLM\System\CurrentControlSet\Services\winebus\Devices\<vid>/<pid>, a
+DualSense (054c:0ce6 or 054c:0df2) arriving over Bluetooth is created with
+bus type USB -- so get_device_id, mgvf-0002's compatible ids and hidapi's
+flag all say USB -- and at start its report descriptor is replaced by the USB
+one of the pad, with HidP_GetCollectionDescription re-run on it. From then on
+every report is translated at the boundary, so the pad still gets what it
+expects:
+
+  input    0x31/78 -> 0x01/64  the USB report is bytes 2..64 of the Bluetooth
+                               one; the nine reserved bytes and the CRC are
+                               dropped.
+           0x01/10 -> 0x01/64  the short report a paired pad sends until a
+                               feature report has been read from it, spread
+                               into the USB layout: sticks at 1..4, triggers
+                               at 5..6, buttons at 8..10, the rest zero -- the
+                               inverse of HIDRAW_FIXUP_DUALSENSE_BT's shuffle.
+                               Feature report 0x05 is read once at start so
+                               the pad leaves that mode, as SDL and the Linux
+                               driver do.
+           anything else longer than the descriptor declares for its id is
+                               dropped: deliver_next_report copies it into
+                               hidclass's read buffer without a bound, and
+                               that buffer is now 64 bytes.
+  output   0x02/N  -> 0x31/78  byte 1 the sequence number << 4, byte 2 0x10,
+                               the N-1 data bytes from 3, zeros, and a CRC-32
+                               over the seed byte 0xA2 then bytes 0..73,
+                               little-endian at 74..77 -- through a packet of
+                               our own, with IoStatus.Information set back to
+                               the client's length. The counter lives in the
+                               device extension.
+  feature GET                  forwarded; the last four bytes of the report --
+                               its declared length, not the client's buffer --
+                               are zeroed, where the pad puts its CRC and a
+                               wired pad returns zeros -- except in the
+                               calibration report 0x05, which a wired pad
+                               returns with the CRC in place, so that one goes
+                               through untouched.
+  feature SET                  forwarded from a copy with a CRC-32, seed byte
+                               0x53, in its last four bytes. libScePad's own
+                               Bluetooth path writes feature 0x08 that way,
+                               and a failed write is fatal to its reader
+                               thread.
+
+A new flag, HIDRAW_FIXUP_DUALSENSE_USB, carries the decision from
+bus_create_hid_device onwards; it excludes HIDRAW_FIXUP_DUALSENSE_BT, and
+hidraw_disable_report_fixups leaves it alone, because a client of the
+emulation never writes a Bluetooth report -- its first write is the reason
+the emulation exists, not a reason to stop. The byte layouts and the
+descriptor table are in a new file, dualsense_usb.c, with no kernel or wine
+includes so that it compiles on the host: the CRC comes in as a function
+pointer, RtlComputeCrc32 from the driver and zlib's crc32 from the test.
+
+HOW THE LAYOUTS WERE MEASURED
+
+From +hid traces of the same DualSense Edge, wired and paired. The USB
+descriptor, 405 bytes, is the one hidparse dumped from the wired pad, twice
+and byte-identical. The 0x31 packing was checked byte for byte, CRC included,
+against two output reports Steam itself wrote to the paired pad (CRCs
+231501b5 and 808dbf02) and against a packing sent through IOKit with no wine
+involved, which rumbled the pad. The feature reports that exist in both
+descriptors -- 0x05/41, 0x08/48, 0x09/20, 0x20/64 among them -- have the
+same length in both, which is what lets the CRC tail be addressed by the
+declared length. The tail rule itself comes from the same pad's reads of 0x09
+and 0x20, byte-identical wired and paired except for those four bytes -- a
+seed-0xA3 CRC paired, zeros wired -- and from its 0x05, which came back
+identical on both transports, CRC included. The host test, usb_emu_test.c,
+lives beside the descriptors in the build directory and asserts all of the
+above against zlib, the trace bytes included.
+
+THE OPTION
+
+  HKLM\System\CurrentControlSet\Services\winebus\Devices\<vid>/<pid>
+    UsbEmulation  REG_DWORD  0 (default): as before. Non-zero: present the
+                             pad as if on USB.
+    ProductId     REG_DWORD  0 (default): keep the pad's own. Otherwise the
+                             product id to present, e.g. 0x0ce6 for an Edge,
+                             for a client that knows only the plain pad.
+
+Both are read when the pad arrives, on the bus thread, from the key named
+after the pad's real ids. A ProductId whose USB descriptor is not in the
+table is ignored with a warning, and so is UsbEmulation itself for a pad
+whose own descriptor is not: nothing is ever presented with a descriptor
+derived from another pad's.
+
+NOT COVERED
+
+The plain DualSense's USB descriptor (054c:0ce6) has not been captured, so
+today only an Edge presented as an Edge works; the table in dualsense_usb.c
+has a marked empty row for it. Capture it from a wired plain pad -- any +hid
+trace prints it at start -- rather than editing the Edge's: output 0x02 is 47
+data bytes on the plain pad and 63 on the Edge, and the sets of feature
+reports differ. The pad's own CRC on its 0x31 input (seed 0xA1) is not
+verified; SDL and the Linux driver drop a report that fails it. Feature ids
+that exist only in the USB descriptor (0x0a, 0x0c, 0x21, 0x84, 0x85, 0xa0,
+0xe0) fail at the pad, as they would on a wired pad without them. Whether a
+wired pad zeros the tail of any feature report other than 0x09 and 0x20 has
+not been measured; the rule is applied to every read but 0x05.
+
+RISKS
+
+A client that does know the pad is on Bluetooth -- Steam for a title with
+category 58, SDL -- now sees a wired pad and writes 0x02 instead of 0x31; the
+translation carries the same effects block, so nothing is lost, and the
+option is per device and off by default. The descriptor swap happens under
+the device's critical section at start, before the last-report buffers are
+sized from it, and only if the new descriptor parses; otherwise the start
+fails with the parse status rather than running with a descriptor the
+translations do not match. The one-shot feature read at start is synchronous
+on the PnP thread, like any feature read a client makes. Feature 0xf5 is 4
+bytes in the USB descriptor and 8 in the Bluetooth one, the one size that
+differs among the shared ids: a client writing it gets a CRC in the USB
+tail, which the pad will refuse. RtlComputeCrc32 is one more import from
+ntoskrnl.exe.
+
+---
+--- a/dlls/winebus.sys/Makefile.in
++++ b/dlls/winebus.sys/Makefile.in
+@@ -11,6 +11,7 @@
+ 	bus_sdl.c \
+ 	bus_udev.c \
+ 	bus_xbox360.c \
++	dualsense_usb.c \
+ 	hid.c \
+ 	main.c \
+ 	unixlib.c \
+--- /dev/null
++++ b/dlls/winebus.sys/dualsense_usb.c
+@@ -0,0 +1,255 @@
++/*
++ * MGVF mgvf-0005: a DualSense on Bluetooth, presented to Windows as if on USB.
++ *
++ * WHY. Sony's own libScePad (1.0.4.1, measured on 2026-09-08) decides whether
++ * a DualSense is on USB or Bluetooth from the HidP capabilities alone: feature
++ * value caps on usage page 0xFF00 mean the USB descriptor, 0xFF80 the
++ * Bluetooth one, and it wants input and feature reports of at least 64 bytes.
++ * It then writes output report 0x02 only, the USB format. Over Bluetooth the
++ * pad has no report 0x02 at all, so that library drops the pad. Steam decides
++ * from hidapi's bus flag and, for a title whose store category says "PS5
++ * controller support" but not "PS5 support over Bluetooth", shows its
++ * plug-in-your-controller dialog whenever the flag says Bluetooth. Both are
++ * satisfied by one lie told consistently: the USB descriptor, the USB bus
++ * type, and every report translated at the boundary so the pad still gets
++ * what it expects.
++ *
++ * WHAT IS IN HERE. The translations, as pure functions over byte arrays, and
++ * the descriptor table. No kernel or wine includes, on purpose: usb_emu_test.c
++ * beside the descriptors compiles this file on the host with zlib's crc32 and
++ * checks the packing against packets Steam itself wrote to the pad.
++ *
++ * HOW THE LAYOUTS WERE MEASURED. From +hid traces of the wired and the paired
++ * pad, and from what rumbled it: the 0x31 packing with its CRC was verified
++ * against two of Steam's own 0x31 packets (CRCs 231501b5 and 808dbf02) and
++ * against a packing sent to the pad through IOKit that made it rumble. The
++ * input layouts are the ones stock winebus already shuffles for its own
++ * Bluetooth fixup (HIDRAW_FIXUP_DUALSENSE_BT in main.c), read the other way.
++ *
++ * Copyright 2026 MacGameVideoFix
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#include <string.h>
++
++#include "dualsense_usb.h"
++
++/* DualSense Edge (054c:0df2) USB report descriptor, 405 bytes, as IOKit's
++ * kIOHIDReportDescriptorKey reported it to winebus from the wired pad on
++ * 2026-09-08, dumped by hidparse twice and byte-identical both times. It
++ * declares input 0x01 of 64 bytes, output 0x02 of 64, and its feature reports
++ * on usage page 0xff00 -- which is the page libScePad reads as "USB". */
++static const unsigned char dualsense_edge_usb_report_desc[] =
++{
++    0x05, 0x01, 0x09, 0x05, 0xa1, 0x01, 0x85, 0x01, 0x09, 0x30, 0x09, 0x31, 0x09, 0x32, 0x09, 0x35,
++    0x09, 0x33, 0x09, 0x34, 0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08, 0x95, 0x06, 0x81, 0x02, 0x06,
++    0x00, 0xff, 0x09, 0x20, 0x95, 0x01, 0x81, 0x02, 0x05, 0x01, 0x09, 0x39, 0x15, 0x00, 0x25, 0x07,
++    0x35, 0x00, 0x46, 0x3b, 0x01, 0x65, 0x14, 0x75, 0x04, 0x95, 0x01, 0x81, 0x42, 0x65, 0x00, 0x05,
++    0x09, 0x19, 0x01, 0x29, 0x0f, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x0f, 0x81, 0x02, 0x06,
++    0x00, 0xff, 0x09, 0x21, 0x95, 0x0d, 0x81, 0x02, 0x06, 0x00, 0xff, 0x09, 0x22, 0x15, 0x00, 0x26,
++    0xff, 0x00, 0x75, 0x08, 0x95, 0x34, 0x81, 0x02, 0x85, 0x02, 0x09, 0x23, 0x95, 0x3f, 0x91, 0x02,
++    0x85, 0x05, 0x09, 0x33, 0x95, 0x28, 0xb1, 0x02, 0x85, 0x08, 0x09, 0x34, 0x95, 0x2f, 0xb1, 0x02,
++    0x85, 0x09, 0x09, 0x24, 0x95, 0x13, 0xb1, 0x02, 0x85, 0x0a, 0x09, 0x25, 0x95, 0x1a, 0xb1, 0x02,
++    0x85, 0x0b, 0x09, 0x41, 0x95, 0x29, 0xb1, 0x02, 0x85, 0x0c, 0x09, 0x42, 0x95, 0x29, 0xb1, 0x02,
++    0x85, 0x20, 0x09, 0x26, 0x95, 0x3f, 0xb1, 0x02, 0x85, 0x21, 0x09, 0x27, 0x95, 0x04, 0xb1, 0x02,
++    0x85, 0x22, 0x09, 0x40, 0x95, 0x3f, 0xb1, 0x02, 0x85, 0x80, 0x09, 0x28, 0x95, 0x3f, 0xb1, 0x02,
++    0x85, 0x81, 0x09, 0x29, 0x95, 0x3f, 0xb1, 0x02, 0x85, 0x82, 0x09, 0x2a, 0x95, 0x09, 0xb1, 0x02,
++    0x85, 0x83, 0x09, 0x2b, 0x95, 0x3f, 0xb1, 0x02, 0x85, 0x84, 0x09, 0x2c, 0x95, 0x3f, 0xb1, 0x02,
++    0x85, 0x85, 0x09, 0x2d, 0x95, 0x02, 0xb1, 0x02, 0x85, 0xa0, 0x09, 0x2e, 0x95, 0x01, 0xb1, 0x02,
++    0x85, 0xe0, 0x09, 0x2f, 0x95, 0x3f, 0xb1, 0x02, 0x85, 0xf0, 0x09, 0x30, 0x95, 0x3f, 0xb1, 0x02,
++    0x85, 0xf1, 0x09, 0x31, 0x95, 0x3f, 0xb1, 0x02, 0x85, 0xf2, 0x09, 0x32, 0x95, 0x34, 0xb1, 0x02,
++    0x85, 0xf4, 0x09, 0x35, 0x95, 0x3f, 0xb1, 0x02, 0x85, 0xf5, 0x09, 0x36, 0x95, 0x03, 0xb1, 0x02,
++    0x85, 0x60, 0x09, 0x41, 0x95, 0x3f, 0xb1, 0x02, 0x85, 0x61, 0x09, 0x42, 0xb1, 0x02, 0x85, 0x62,
++    0x09, 0x43, 0xb1, 0x02, 0x85, 0x63, 0x09, 0x44, 0xb1, 0x02, 0x85, 0x64, 0x09, 0x45, 0xb1, 0x02,
++    0x85, 0x65, 0x09, 0x46, 0xb1, 0x02, 0x85, 0x68, 0x09, 0x47, 0xb1, 0x02, 0x85, 0x70, 0x09, 0x48,
++    0xb1, 0x02, 0x85, 0x71, 0x09, 0x49, 0xb1, 0x02, 0x85, 0x72, 0x09, 0x4a, 0xb1, 0x02, 0x85, 0x73,
++    0x09, 0x4b, 0xb1, 0x02, 0x85, 0x74, 0x09, 0x4c, 0xb1, 0x02, 0x85, 0x75, 0x09, 0x4d, 0xb1, 0x02,
++    0x85, 0x76, 0x09, 0x4e, 0xb1, 0x02, 0x85, 0x77, 0x09, 0x4f, 0xb1, 0x02, 0x85, 0x78, 0x09, 0x50,
++    0xb1, 0x02, 0x85, 0x79, 0x09, 0x51, 0xb1, 0x02, 0x85, 0x7a, 0x09, 0x52, 0xb1, 0x02, 0x85, 0x7b,
++    0x09, 0x53, 0xb1, 0x02, 0xc0,
++};
++
++/* One row per product id that can be presented. A row whose descriptor is
++ * NULL is a known pad whose USB descriptor has not been captured: the option
++ * refuses it rather than presenting a descriptor derived from another pad's.
++ *
++ * The plain DualSense (0x0ce6) differs from the Edge in at least the size of
++ * output 0x02 (47 data bytes against 63; on the Edge the item is
++ * "85 02 09 23 95 3f 91 02" at offset 104) and in which feature reports it
++ * has. Capture it from a wired plain pad -- any +hid trace prints it in full
++ * at device start -- and fill the row in; do not derive it. */
++struct dualsense_usb_descriptor
++{
++    unsigned int pid;
++    const unsigned char *data;
++    unsigned int length;
++};
++
++static const struct dualsense_usb_descriptor dualsense_usb_descriptors[] =
++{
++    {DUALSENSE_EDGE_PID, dualsense_edge_usb_report_desc, sizeof(dualsense_edge_usb_report_desc)},
++    {DUALSENSE_PID, NULL, 0}, /* SLOT: plain DualSense USB descriptor, not captured yet */
++};
++
++const unsigned char *dualsense_usb_report_descriptor(unsigned int pid, unsigned int *length)
++{
++    unsigned int i;
++
++    for (i = 0; i < sizeof(dualsense_usb_descriptors) / sizeof(dualsense_usb_descriptors[0]); i++)
++    {
++        if (dualsense_usb_descriptors[i].pid != pid) continue;
++        if (!dualsense_usb_descriptors[i].data) break;
++        *length = dualsense_usb_descriptors[i].length;
++        return dualsense_usb_descriptors[i].data;
++    }
++
++    *length = 0;
++    return NULL;
++}
++
++/* The Bluetooth 0x31 input report is the USB 0x01 report with one byte in
++ * front (after the id: a sequence byte), nine reserved bytes behind and the
++ * CRC after those:
++ *
++ *   USB 0x01/64:  id  X Y Z Rz L2 R2 seq buttons[3] ...   (63 data bytes)
++ *   BT  0x31/78:  id  hdr  X Y Z Rz L2 R2 seq buttons[3] ... [9 bytes] CRC[4]
++ *
++ * so the USB report is the 63 bytes after the header, verbatim. The pad's own
++ * CRC over the input (seed 0xa1) is not checked here; SDL and the Linux
++ * driver do, and a report that fails it would be dropped there. */
++unsigned int dualsense_usb_input_from_bt(unsigned char *out, unsigned int out_size,
++                                         const unsigned char *in, unsigned int in_len)
++{
++    if (in_len < 2 + DUALSENSE_USB_INPUT_LEN - 1 || in[0] != DUALSENSE_BT_REPORT_ID) return 0;
++    if (out_size < DUALSENSE_USB_INPUT_LEN) return 0;
++
++    out[0] = DUALSENSE_USB_INPUT_ID;
++    memcpy(out + 1, in + 2, DUALSENSE_USB_INPUT_LEN - 1);
++    return DUALSENSE_USB_INPUT_LEN;
++}
++
++/* Before any feature report has been read from it, a paired pad sends a
++ * 10-byte report 0x01 -- the layout stock winebus produces from a 0x31 for
++ * its Bluetooth fixup, and the one this reverses:
++ *
++ *   BT  0x01/10:  id  X Y Z Rz buttons[3] L2 R2
++ *   USB 0x01/64:  id  X Y Z Rz L2 R2 seq buttons[3] ... zeros
++ *
++ * The short report carries no sequence byte, so byte 7 is 0, and none of the
++ * touchpad, motion or battery data, so the rest is zero: a client sees the
++ * sticks, triggers and buttons, and nothing else moving, until the pad
++ * switches over. */
++unsigned int dualsense_usb_input_from_short(unsigned char *out, unsigned int out_size,
++                                            const unsigned char *in, unsigned int in_len)
++{
++    if (in_len != DUALSENSE_BT_SHORT_LEN || in[0] != DUALSENSE_USB_INPUT_ID) return 0;
++    if (out_size < DUALSENSE_USB_INPUT_LEN) return 0;
++
++    memset(out, 0, DUALSENSE_USB_INPUT_LEN);
++    out[0] = DUALSENSE_USB_INPUT_ID;
++    out[1] = in[1]; /* X */
++    out[2] = in[2]; /* Y */
++    out[3] = in[3]; /* Z */
++    out[4] = in[4]; /* Rz */
++    out[5] = in[8]; /* L2 */
++    out[6] = in[9]; /* R2 */
++    out[7] = 0;     /* sequence: the short report has none */
++    out[8] = in[5]; /* buttons[0] */
++    out[9] = in[6]; /* buttons[1] */
++    out[10] = in[7]; /* buttons[2] */
++    return DUALSENSE_USB_INPUT_LEN;
++}
++
++static void dualsense_store_crc(unsigned char *tail, unsigned int crc)
++{
++    tail[0] = crc & 0xff;
++    tail[1] = (crc >> 8) & 0xff;
++    tail[2] = (crc >> 16) & 0xff;
++    tail[3] = (crc >> 24) & 0xff;
++}
++
++/* The USB 0x02 output report becomes a Bluetooth 0x31:
++ *
++ *   USB 0x02/N:   id  data[N-1]                                     (N = 48 or 64)
++ *   BT  0x31/78:  id  seq<<4  0x10  data[N-1] zeros...  CRC[4] at 74..77
++ *
++ * Byte 1 carries a 4-bit sequence number in its high nibble; the pad accepts
++ * a constant one (Steam sends 0 every time) as well as a counting one (the
++ * Linux driver counts), so the caller passes whatever it keeps. Byte 2 is
++ * 0x10, the flag that marks the report as carrying the effects block.
++ * The CRC runs over the seed byte 0xa2 and then bytes 0..73. Verified byte
++ * for byte, CRC included, against Steam's own packets and against a packing
++ * that rumbled the pad through IOKit. */
++unsigned int dualsense_bt_output_from_usb(unsigned char *out, unsigned int out_size,
++                                          const unsigned char *in, unsigned int in_len,
++                                          unsigned char seq, dualsense_crc32_fn crc32)
++{
++    static const unsigned char seed = DUALSENSE_CRC_SEED_OUTPUT;
++    unsigned int crc;
++
++    if (in_len < 2 || in_len > DUALSENSE_USB_OUTPUT_MAX || in[0] != DUALSENSE_USB_OUTPUT_ID) return 0;
++    if (out_size < DUALSENSE_BT_REPORT_LEN) return 0;
++
++    memset(out, 0, DUALSENSE_BT_REPORT_LEN);
++    out[0] = DUALSENSE_BT_REPORT_ID;
++    out[1] = (seq & 0x0f) << 4;
++    out[2] = 0x10;
++    memcpy(out + 3, in + 1, in_len - 1);
++
++    crc = crc32(0, &seed, 1);
++    crc = crc32(crc, out, DUALSENSE_BT_REPORT_LEN - DUALSENSE_CRC_TAIL);
++    dualsense_store_crc(out + DUALSENSE_BT_REPORT_LEN - DUALSENSE_CRC_TAIL, crc);
++    return DUALSENSE_BT_REPORT_LEN;
++}
++
++/* A feature report written over Bluetooth ends in a CRC-32 the pad checks,
++ * seed byte 0x53, over everything before it. The reports that exist in both
++ * descriptors have the same length in both, so the tail of the USB-length
++ * report is exactly where the pad looks. libScePad's own Bluetooth path
++ * writes feature 0x08 this way, and a failed write of it is fatal to its
++ * reader thread -- which is why the CRC is appended rather than left to the
++ * caller. */
++unsigned int dualsense_bt_feature_set_crc(unsigned char *report, unsigned int len, dualsense_crc32_fn crc32)
++{
++    static const unsigned char seed = DUALSENSE_CRC_SEED_FEATURE_SET;
++    unsigned int crc;
++
++    if (len <= DUALSENSE_CRC_TAIL) return 0;
++
++    crc = crc32(0, &seed, 1);
++    crc = crc32(crc, report, len - DUALSENSE_CRC_TAIL);
++    dualsense_store_crc(report + len - DUALSENSE_CRC_TAIL, crc);
++    return len;
++}
++
++/* A feature report read over Bluetooth ends in the pad's CRC-32 of it, seed
++ * byte 0xa3, and a wired pad returns zeros in those four bytes: measured on
++ * the pairing-info report 0x09 and the firmware report 0x20, which the same
++ * pad returned byte-identical over both transports except for that tail.
++ * Zeroing it makes the read look wired.
++ *
++ * The calibration report 0x05 is the exception and is left alone: the wired
++ * pad returned it with the CRC in place, the same 41 bytes as over Bluetooth,
++ * so there the CRC is part of what a wired pad's client sees. No other
++ * feature report has been read from the wired pad; those get the rule. */
++unsigned int dualsense_bt_feature_get_strip(unsigned char *report, unsigned int len)
++{
++    if (len <= DUALSENSE_CRC_TAIL) return 0;
++    if (report[0] == DUALSENSE_FEATURE_CALIBRATION) return 0;
++
++    memset(report + len - DUALSENSE_CRC_TAIL, 0, DUALSENSE_CRC_TAIL);
++    return len;
++}
+--- /dev/null
++++ b/dlls/winebus.sys/dualsense_usb.h
+@@ -0,0 +1,89 @@
++/*
++ * MGVF mgvf-0005: a DualSense on Bluetooth, presented to Windows as if on USB.
++ *
++ * This is the pure half of the emulation: the byte-layout translations and
++ * the USB report descriptor table, with no kernel or wine dependency, so that
++ * the same code can be compiled on the host and checked against packets taken
++ * from traces of the real pad. main.c is the other half: it decides when to
++ * call these, owns the device and its sequence counter, and does the I/O.
++ *
++ * Copyright 2026 MacGameVideoFix
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#ifndef __WINEBUS_DUALSENSE_USB_H
++#define __WINEBUS_DUALSENSE_USB_H
++
++#include <stddef.h>
++
++/* CRC-32 in the shape of ntoskrnl's RtlComputeCrc32 and zlib's crc32: the
++ * running value goes in and comes out, so one computation can be chained over
++ * the seed byte and then the report. The caller supplies the function because
++ * this file must not depend on which runtime provides one: the driver passes
++ * RtlComputeCrc32, the host test passes zlib's. */
++typedef unsigned int (*dualsense_crc32_fn)(unsigned int initial, const unsigned char *data, int len);
++
++#define DUALSENSE_VID              0x054c
++#define DUALSENSE_PID              0x0ce6 /* DualSense */
++#define DUALSENSE_EDGE_PID         0x0df2 /* DualSense Edge */
++
++/* Over Bluetooth the pad's full input report and the output report it acts
++ * on are both id 0x31, 78 bytes, the last four a CRC-32. Until something reads
++ * a feature report from it, it sends a 10-byte 0x01 report instead. */
++#define DUALSENSE_BT_REPORT_ID     0x31
++#define DUALSENSE_BT_REPORT_LEN    78
++#define DUALSENSE_BT_SHORT_LEN     10
++
++/* Over USB: input 0x01 of 64 bytes, output 0x02 of 48 bytes on a DualSense
++ * and 64 on an Edge, no CRC anywhere. */
++#define DUALSENSE_USB_INPUT_ID     0x01
++#define DUALSENSE_USB_INPUT_LEN    64
++#define DUALSENSE_USB_OUTPUT_ID    0x02
++#define DUALSENSE_USB_OUTPUT_MAX   64
++
++/* The feature report whose read switches the pad to its full input report;
++ * calibration data, 41 bytes, present in both descriptors. */
++#define DUALSENSE_FEATURE_CALIBRATION      0x05
++#define DUALSENSE_FEATURE_CALIBRATION_LEN  41
++
++/* The CRC-32 the pad checks over Bluetooth runs over one seed byte and then
++ * the report up to the last four bytes, where it is stored little-endian. */
++#define DUALSENSE_CRC_TAIL                 4
++#define DUALSENSE_CRC_SEED_OUTPUT          0xa2
++#define DUALSENSE_CRC_SEED_FEATURE_SET     0x53
++
++/* The USB report descriptor to present for a product id, or NULL when none
++ * has been captured for it; *length receives its size. */
++const unsigned char *dualsense_usb_report_descriptor(unsigned int pid, unsigned int *length);
++
++/* Each of these returns the number of bytes written to out, or 0 when the
++ * input is not the report it handles (wrong id or length) or out is too
++ * small; a 0 leaves the report to be forwarded, or dropped, as it was. */
++unsigned int dualsense_usb_input_from_bt(unsigned char *out, unsigned int out_size,
++                                         const unsigned char *in, unsigned int in_len);
++unsigned int dualsense_usb_input_from_short(unsigned char *out, unsigned int out_size,
++                                            const unsigned char *in, unsigned int in_len);
++unsigned int dualsense_bt_output_from_usb(unsigned char *out, unsigned int out_size,
++                                          const unsigned char *in, unsigned int in_len,
++                                          unsigned char seq, dualsense_crc32_fn crc32);
++
++/* In place. Each returns len when the report was changed and 0 when it was
++ * left as it was: too short to carry a CRC tail at all, or, for the read, the
++ * calibration report, whose tail a wired pad returns as well. */
++unsigned int dualsense_bt_feature_set_crc(unsigned char *report, unsigned int len, dualsense_crc32_fn crc32);
++unsigned int dualsense_bt_feature_get_strip(unsigned char *report, unsigned int len);
++
++#endif /* __WINEBUS_DUALSENSE_USB_H */
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -40,6 +40,7 @@
+ #include "wine/unixlib.h"
+ 
+ #include "unixlib.h"
++#include "dualsense_usb.h"
+ 
+ #include "initguid.h"
+ DEFINE_GUID(GUID_NULL,0,0,0,0,0,0,0,0,0,0,0);
+@@ -74,6 +75,14 @@
+ 
+ #define HIDRAW_FIXUP_DUALSHOCK_BT 0x1
+ #define HIDRAW_FIXUP_DUALSENSE_BT 0x2
++/* MGVF mgvf-0005: a DualSense on Bluetooth presented as if it were on USB.
++ * Set from a per-device registry option when the device arrives, never on
++ * its own, and never together with HIDRAW_FIXUP_DUALSENSE_BT: that one turns
++ * the pad's 0x31 input into a 10-byte 0x01, this one into the 64-byte USB
++ * 0x01, and both at once would be nonsense. hidraw_disable_report_fixups
++ * leaves it alone -- a client's first write is not a reason to stop, it is
++ * the reason the emulation exists. */
++#define HIDRAW_FIXUP_DUALSENSE_USB 0x4
+ 
+ struct device_extension
+ {
+@@ -96,6 +105,7 @@
+     IRP *pending_read;
+ 
+     UINT32 report_fixups;
++    BYTE dualsense_seq; /* MGVF mgvf-0005: high nibble of byte 1 of every 0x31 written */
+     UINT64 unix_device;
+ };
+ 
+@@ -388,7 +398,7 @@
+     memcpy(device->container_id.Data4, &ticks.QuadPart, sizeof(device->container_id.Data4));
+ }
+ 
+-static DEVICE_OBJECT *bus_create_hid_device(struct device_desc *desc, UINT64 unix_device)
++static DEVICE_OBJECT *bus_create_hid_device(struct device_desc *desc, UINT64 unix_device, UINT32 report_fixups)
+ {
+     struct device_extension *ext;
+     DEVICE_OBJECT *device;
+@@ -418,12 +428,21 @@
+     ext->unix_device        = unix_device;
+     list_init(&ext->reports);
+ 
++    if (report_fixups & HIDRAW_FIXUP_DUALSENSE_USB)
++    {
++        /* MGVF mgvf-0005: decided by dualsense_usb_emulation_fixups; the desc
++         * already says USB, so the Bluetooth fixups below cannot also fire. */
++        TRACE("Enabling USB emulation for Bluetooth DualSense device %p\n", device);
++        ext->report_fixups |= HIDRAW_FIXUP_DUALSENSE_USB;
++    }
++
+     if (desc->is_hidraw && (desc->bus_type == BUS_TYPE_BLUETOOTH) && is_dualshock4_gamepad(desc->vid, desc->pid))
+     {
+         TRACE("Enabling report fixup for Bluetooth DualShock4 device %p\n", device);
+         ext->report_fixups |= HIDRAW_FIXUP_DUALSHOCK_BT;
+     }
+-    if (desc->is_hidraw && (desc->bus_type == BUS_TYPE_BLUETOOTH) && is_dualsense_gamepad(desc->vid, desc->pid))
++    if (desc->is_hidraw && (desc->bus_type == BUS_TYPE_BLUETOOTH) && is_dualsense_gamepad(desc->vid, desc->pid)
++        && !(ext->report_fixups & HIDRAW_FIXUP_DUALSENSE_USB))
+     {
+         TRACE("Enabling report fixup for Bluetooth DualSense device %p\n", device);
+         ext->report_fixups |= HIDRAW_FIXUP_DUALSENSE_BT;
+@@ -529,6 +548,85 @@
+     return default_value;
+ }
+ 
++/* MGVF mgvf-0005: a REG_DWORD under the device's own key, read when the device
++ * arrives rather than at driver start like load_device_options, because the
++ * answer is only ever needed for the one device the key names.
++ *
++ * @@ Wine registry key: HKLM\System\CurrentControlSet\Services\WineBus\Devices\<VID/PID>
++ */
++static DWORD get_device_option(WORD vid, WORD pid, const WCHAR *option, DWORD default_value)
++{
++    char buffer[FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data[sizeof(DWORD)])];
++    KEY_VALUE_PARTIAL_INFORMATION *info = (KEY_VALUE_PARTIAL_INFORMATION *)buffer;
++    DWORD value = default_value, size;
++    OBJECT_ATTRIBUTES attr = {0};
++    UNICODE_STRING str;
++    WCHAR path[32];
++    HANDLE key;
++
++    swprintf(path, ARRAY_SIZE(path), L"Devices\\%04x/%04x", vid, pid);
++    RtlInitUnicodeString(&str, path);
++    InitializeObjectAttributes(&attr, &str, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, driver_key, NULL);
++    if (NtOpenKey(&key, KEY_READ, &attr)) return default_value;
++
++    RtlInitUnicodeString(&str, option);
++    if (!NtQueryValueKey(key, &str, KeyValuePartialInformation, info, sizeof(buffer), &size) && info->Type == REG_DWORD)
++        value = *(DWORD *)info->Data;
++
++    NtClose(key);
++    return value;
++}
++
++/* MGVF mgvf-0005: decide, as a device arrives, whether to present it as a
++ * DualSense on USB. Only a DualSense on Bluetooth with "UsbEmulation" set
++ * under its key qualifies, and only when the USB report descriptor of the
++ * product id to present is in dualsense_usb.c's table. "ProductId" may name
++ * another DualSense to present -- an Edge as a plain one, for a client that
++ * knows only the plain one -- and an override whose descriptor is missing is
++ * ignored with a warning rather than answered with a descriptor made up from
++ * another pad's. On success the desc is changed in place, bus type USB (so
++ * that get_device_id, get_compatible_ids and with them hidapi's bus flag all
++ * say USB) and the presented pid, and the fixup flag is returned for
++ * bus_create_hid_device to set. Off by default: a device with no key, or the
++ * value 0, is created exactly as before.
++ *
++ * Why lie at all: Sony's libScePad (1.0.4.1, measured 2026-09-08) reads the
++ * bus off the HidP caps -- feature caps on usage page 0xff00 mean USB -- and
++ * writes only output report 0x02, which a pad on Bluetooth does not have; it
++ * drops the pad. Steam shows its plug-in-your-controller dialog for a title
++ * whose store category says PS5 support but not PS5-over-Bluetooth whenever
++ * hidapi says Bluetooth. Both are content with a pad that looks wired. */
++static UINT32 dualsense_usb_emulation_fixups(struct device_desc *desc)
++{
++    unsigned int length;
++    DWORD present;
++
++    if (!desc->is_hidraw || desc->bus_type != BUS_TYPE_BLUETOOTH) return 0;
++    if (!is_dualsense_gamepad(desc->vid, desc->pid)) return 0;
++    if (!get_device_option(desc->vid, desc->pid, L"UsbEmulation", 0)) return 0;
++
++    present = get_device_option(desc->vid, desc->pid, L"ProductId", 0);
++    if (present && present != desc->pid && !dualsense_usb_report_descriptor(present, &length))
++    {
++        WARN("no USB report descriptor for %04x:%04lx, ignoring the ProductId override for %04x:%04x\n",
++             desc->vid, present, desc->vid, desc->pid);
++        present = 0;
++    }
++    if (!present) present = desc->pid;
++
++    if (!dualsense_usb_report_descriptor(present, &length))
++    {
++        WARN("no USB report descriptor for %04x:%04lx, ignoring UsbEmulation for it\n", desc->vid, present);
++        return 0;
++    }
++
++    TRACE("presenting Bluetooth DualSense %04x:%04x as USB %04x:%04lx, %u-byte report descriptor\n",
++          desc->vid, desc->pid, desc->vid, present, length);
++    desc->bus_type = BUS_TYPE_USB;
++    desc->pid = present;
++    return HIDRAW_FIXUP_DUALSENSE_USB;
++}
++
+ static BOOL is_hidraw_enabled(WORD vid, WORD pid, const USAGE_AND_PAGE *usages, UINT buttons)
+ {
+     char buffer[FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data[1024])];
+@@ -660,10 +758,16 @@
+     struct device_extension *ext = (struct device_extension *)device->DeviceExtension;
+     ULONG size = offsetof(struct hid_report, buffer[report_len]);
+     struct hid_report *report, *last_report;
++    BYTE *last_buf = report_buf;
++    DWORD last_len = report_len;
+     IRP *irp;
+ 
+     TRACE("device %p report_buf %p (%#x), report_len %#lx\n", device, report_buf, *report_buf, report_len);
+ 
++    /* MGVF mgvf-0005: a 10-byte report is expanded to 64 in place below */
++    if ((ext->report_fixups & HIDRAW_FIXUP_DUALSENSE_USB) && report_len < DUALSENSE_USB_INPUT_LEN)
++        size = offsetof(struct hid_report, buffer[DUALSENSE_USB_INPUT_LEN]);
++
+     if (!(report = RtlAllocateHeap(GetProcessHeap(), 0, size))) return;
+     memcpy(report->buffer, report_buf, report_len);
+     report->length = report_len;
+@@ -721,6 +825,30 @@
+         }
+     }
+ 
++    if (ext->report_fixups & HIDRAW_FIXUP_DUALSENSE_USB)
++    {
++        /* MGVF mgvf-0005: the pad is presented with the USB descriptor, whose
++         * only input is 0x01 of 64 bytes, so what it sends over Bluetooth is
++         * translated to that: its 0x31 is the USB report with a byte in front
++         * and a CRC behind, and the 10-byte 0x01 it sends until a feature
++         * report has been read from it is spread out into the USB layout. The
++         * last report and the queued one are then the translated one; the raw
++         * one is not seen again. */
++        BYTE usb[DUALSENSE_USB_INPUT_LEN];
++        DWORD len;
++
++        if ((len = dualsense_usb_input_from_bt(usb, sizeof(usb), report->buffer, report->length)) ||
++            (len = dualsense_usb_input_from_short(usb, sizeof(usb), report->buffer, report->length)))
++        {
++            TRACE("device %p translated input report %#x length %lu to %#x length %lu\n",
++                  device, report->buffer[0], report->length, usb[0], len);
++            memcpy(report->buffer, usb, len);
++            report->length = len;
++        }
++        last_buf = report->buffer;
++        last_len = report->length;
++    }
++
+     RtlEnterCriticalSection(&ext->cs);
+ 
+     if (ext->state != DEVICE_STATE_STARTED)
+@@ -730,17 +858,30 @@
+     }
+ 
+     if (!ext->collection_desc.ReportIDs[0].ReportID) last_report = ext->last_reports[0];
+-    else last_report = ext->last_reports[report_buf[0]];
++    else last_report = ext->last_reports[last_buf[0]];
+     if (!last_report)
+     {
+-        WARN("Ignoring report with unexpected id %#x\n", *report_buf);
++        WARN("Ignoring report with unexpected id %#x\n", *last_buf);
++        RtlLeaveCriticalSection(&ext->cs);
++        return;
++    }
++
++    /* MGVF mgvf-0005: a report longer than the descriptor declares for its id
++     * would overrun the last-report buffer here and hidclass's read buffer in
++     * deliver_next_report, and neither copy checks; with the USB descriptor in
++     * place that is anything of the pad's that was not translated above. */
++    if ((ext->report_fixups & HIDRAW_FIXUP_DUALSENSE_USB) && last_len > last_report->length)
++    {
++        WARN("Dropping untranslated report %#x length %lu, longer than the %lu bytes declared for it\n",
++             *last_buf, last_len, last_report->length);
++        RtlFreeHeap(GetProcessHeap(), 0, report);
+         RtlLeaveCriticalSection(&ext->cs);
+         return;
+     }
+ 
+     list_add_tail(&ext->reports, &report->entry);
+ 
+-    memcpy(last_report->buffer, report_buf, report_len);
++    memcpy(last_report->buffer, last_buf, last_len);
+ 
+     if ((irp = pop_pending_read(ext)))
+     {
+@@ -843,7 +984,7 @@
+     struct device_create_params params = {{0}};
+ 
+     if (winebus_call(mouse_create, &params)) return;
+-    mouse_obj = bus_create_hid_device(&params.desc, params.device);
++    mouse_obj = bus_create_hid_device(&params.desc, params.device, 0);
+     IoInvalidateDeviceRelations(bus_pdo, BusRelations);
+ }
+ 
+@@ -852,7 +993,7 @@
+     struct device_create_params params = {{0}};
+ 
+     if (winebus_call(keyboard_create, &params)) return;
+-    keyboard_obj = bus_create_hid_device(&params.desc, params.device);
++    keyboard_obj = bus_create_hid_device(&params.desc, params.device, 0);
+     IoInvalidateDeviceRelations(bus_pdo, BusRelations);
+ }
+ 
+@@ -982,6 +1123,7 @@
+         {
+             struct device_desc desc = event->device_created.desc;
+             USAGE_AND_PAGE usages;
++            UINT32 fixups;
+             UINT buttons;
+ 
+             usages = get_device_usages(event->device, &buttons);
+@@ -994,10 +1136,14 @@
+                 break;
+             }
+ 
++            /* MGVF mgvf-0005: may change the bus type and the pid in the desc */
++            fixups = dualsense_usb_emulation_fixups(&event->device_created.desc);
++            desc = event->device_created.desc;
++
+             TRACE("creating %shidraw device %04x:%04x with usages %04x:%04x\n", desc.is_hidraw ? "" : "non-",
+                   desc.vid, desc.pid, usages.UsagePage, usages.Usage);
+ 
+-            device = bus_create_hid_device(&event->device_created.desc, event->device);
++            device = bus_create_hid_device(&event->device_created.desc, event->device, fixups);
+             if (device) IoInvalidateDeviceRelations(bus_pdo, BusRelations);
+             else
+             {
+@@ -1363,6 +1509,174 @@
+     return IoCallDriver(bus_pdo, irp);
+ }
+ 
++/* MGVF mgvf-0005: the driver's half of the USB emulation. dualsense_usb.c
++ * holds the byte layouts; these own the device and do the I/O. */
++
++static unsigned int dualsense_crc32(unsigned int initial, const unsigned char *data, int len)
++{
++    return RtlComputeCrc32(initial, data, len);
++}
++
++static ULONG get_feature_report_length(struct device_extension *ext, BYTE id)
++{
++    HIDP_REPORT_IDS *reports = ext->collection_desc.ReportIDs;
++    ULONG i;
++
++    for (i = 0; i < ext->collection_desc.ReportIDsLength; ++i)
++        if (reports[i].ReportID == id) return reports[i].FeatureLength;
++    return 0;
++}
++
++/* Swap the pad's Bluetooth report descriptor for the USB one of the product
++ * id being presented, and re-run hidparse on it, so that every capability a
++ * client asks for -- report lengths, feature usage pages, the existence of
++ * output 0x02 -- is the wired pad's. Called at start, after the real
++ * descriptor was fetched and before the last-report buffers are sized from
++ * it. Nothing is swapped unless the new one parses. */
++static NTSTATUS dualsense_usb_replace_descriptors(DEVICE_OBJECT *device)
++{
++    struct device_extension *ext = (struct device_extension *)device->DeviceExtension;
++    HIDP_DEVICE_DESC collection_desc;
++    const unsigned char *desc;
++    unsigned int length;
++    NTSTATUS status;
++    BYTE *copy;
++
++    if (!(ext->report_fixups & HIDRAW_FIXUP_DUALSENSE_USB)) return STATUS_SUCCESS;
++
++    if (!(desc = dualsense_usb_report_descriptor(ext->desc.pid, &length)))
++    {
++        ERR("device %p: no USB report descriptor for %04x:%04x\n", device, ext->desc.vid, ext->desc.pid);
++        return STATUS_NOT_SUPPORTED;
++    }
++    if (!(copy = RtlAllocateHeap(GetProcessHeap(), 0, length))) return STATUS_NO_MEMORY;
++    memcpy(copy, desc, length);
++
++    status = HidP_GetCollectionDescription(copy, length, PagedPool, &collection_desc);
++    if (status != HIDP_STATUS_SUCCESS)
++    {
++        ERR("device %p: failed to parse the USB report descriptor for %04x:%04x, status %#lx\n",
++            device, ext->desc.vid, ext->desc.pid, status);
++        RtlFreeHeap(GetProcessHeap(), 0, copy);
++        return status;
++    }
++
++    TRACE("device %p: presenting the %u-byte USB report descriptor of %04x:%04x in place of the %u-byte Bluetooth one\n",
++          device, length, ext->desc.vid, ext->desc.pid, ext->report_desc_length);
++    HidP_FreeCollectionDescription(&ext->collection_desc);
++    RtlFreeHeap(GetProcessHeap(), 0, ext->report_desc);
++    ext->report_desc = copy;
++    ext->report_desc_length = length;
++    ext->collection_desc = collection_desc;
++    return STATUS_SUCCESS;
++}
++
++/* Read the calibration feature report once, which is what makes a paired pad
++ * stop sending its 10-byte 0x01 report and start sending 0x31: SDL and the
++ * Linux driver do the same when they open it. A wired pad sends 0x01/64 from
++ * the start, and a client that believes the pad is wired has no reason to
++ * read a feature report first. Synchronous, like any feature read a client
++ * makes. Failure is not fatal: the short reports are expanded as well. */
++static void dualsense_usb_kick(DEVICE_OBJECT *device)
++{
++    BYTE buffer[DUALSENSE_FEATURE_CALIBRATION_LEN] = {DUALSENSE_FEATURE_CALIBRATION};
++    HID_XFER_PACKET packet =
++    {
++        .reportId = DUALSENSE_FEATURE_CALIBRATION,
++        .reportBuffer = buffer,
++        .reportBufferLen = sizeof(buffer),
++    };
++    IO_STATUS_BLOCK io = {{0}};
++
++    unix_device_get_feature_report(device, &packet, &io);
++    if (io.Status)
++        WARN("device %p: reading feature report %#x failed, status %#lx; the pad may keep sending short input reports\n",
++             device, packet.reportId, io.Status);
++    else
++        TRACE("device %p: read feature report %#x (%Iu bytes) so the pad switches to full input reports\n",
++              device, packet.reportId, io.Information);
++}
++
++/* A USB 0x02 output report from the client becomes the Bluetooth 0x31 the
++ * pad wants, sent through a packet of our own; the client's IoStatus then
++ * reports the client's own length, as a wired write would. */
++static void dualsense_usb_set_output_report(DEVICE_OBJECT *device, HID_XFER_PACKET *packet, IO_STATUS_BLOCK *io)
++{
++    struct device_extension *ext = (struct device_extension *)device->DeviceExtension;
++    BYTE buffer[DUALSENSE_BT_REPORT_LEN];
++    HID_XFER_PACKET bt = {.reportId = DUALSENSE_BT_REPORT_ID, .reportBuffer = buffer};
++    ULONG i;
++
++    if (!(bt.reportBufferLen = dualsense_bt_output_from_usb(buffer, sizeof(buffer), packet->reportBuffer,
++                                                            packet->reportBufferLen, ext->dualsense_seq,
++                                                            dualsense_crc32)))
++    {
++        WARN("output report id %u length %lu cannot be translated for Bluetooth\n",
++             packet->reportId, packet->reportBufferLen);
++        io->Status = STATUS_INVALID_PARAMETER;
++        io->Information = 0;
++        return;
++    }
++    ext->dualsense_seq++;
++
++    if (TRACE_ON(hid))
++    {
++        TRACE("translated output report id %u length %lu to id %u length %lu:\n", packet->reportId,
++              packet->reportBufferLen, bt.reportId, bt.reportBufferLen);
++        for (i = 0; i < bt.reportBufferLen;)
++        {
++            char line[256], *buf = line;
++            buf += sprintf(buf, "%08lx ", i);
++            do { buf += sprintf(buf, " %02x", bt.reportBuffer[i]); }
++            while (++i % 16 && i < bt.reportBufferLen);
++            TRACE("%s\n", line);
++        }
++    }
++
++    unix_device_set_output_report(device, &bt, io);
++    if (!io->Status) io->Information = packet->reportBufferLen;
++}
++
++/* A feature report written by the client goes to the pad with the CRC it
++ * checks over Bluetooth in its last four bytes, from a copy: the client's
++ * buffer is not ours to rewrite. */
++static void dualsense_usb_set_feature_report(DEVICE_OBJECT *device, HID_XFER_PACKET *packet, IO_STATUS_BLOCK *io)
++{
++    BYTE buffer[256];
++    HID_XFER_PACKET bt = {.reportId = packet->reportId, .reportBuffer = buffer, .reportBufferLen = packet->reportBufferLen};
++
++    if (packet->reportBufferLen > sizeof(buffer) || packet->reportBufferLen <= DUALSENSE_CRC_TAIL)
++    {
++        WARN("feature report id %u length %lu has no room for a CRC, forwarding it unchanged\n",
++             packet->reportId, packet->reportBufferLen);
++        unix_device_set_feature_report(device, packet, io);
++        return;
++    }
++
++    memcpy(buffer, packet->reportBuffer, packet->reportBufferLen);
++    dualsense_bt_feature_set_crc(buffer, packet->reportBufferLen, dualsense_crc32);
++    TRACE("appended the Bluetooth CRC to feature report id %u length %lu: %02x %02x %02x %02x\n",
++          packet->reportId, packet->reportBufferLen, buffer[packet->reportBufferLen - 4],
++          buffer[packet->reportBufferLen - 3], buffer[packet->reportBufferLen - 2], buffer[packet->reportBufferLen - 1]);
++    unix_device_set_feature_report(device, &bt, io);
++}
++
++/* A feature report read from the pad carries its CRC in the last four bytes
++ * of the report -- the report's declared length, not the client's buffer,
++ * which hidclass passes through as large as the client made it -- and a
++ * wired pad has zeros there, the calibration report excepted; dualsense_usb.c
++ * says which reads that was measured on. */
++static void dualsense_usb_feature_get_fixup(DEVICE_OBJECT *device, HID_XFER_PACKET *packet, IO_STATUS_BLOCK *io)
++{
++    struct device_extension *ext = (struct device_extension *)device->DeviceExtension;
++    ULONG len = get_feature_report_length(ext, packet->reportId);
++
++    if (!len || len > packet->reportBufferLen) len = io->Information;
++    if (len > packet->reportBufferLen) len = packet->reportBufferLen;
++    if (dualsense_bt_feature_get_strip(packet->reportBuffer, len))
++        TRACE("zeroed the Bluetooth CRC tail of feature report id %u (%lu bytes)\n", packet->reportId, len);
++}
++
+ static NTSTATUS pdo_pnp_dispatch(DEVICE_OBJECT *device, IRP *irp)
+ {
+     struct device_extension *ext = device->DeviceExtension;
+@@ -1395,7 +1709,8 @@
+             else if ((status = unix_device_start(device)))
+                 ERR("Failed to start device %p, status %#lx\n", device, status);
+             else if (!(status = get_device_descriptors(ext->unix_device, &ext->report_desc, &ext->report_desc_length,
+-                                                       &ext->collection_desc)))
++                                                       &ext->collection_desc)) &&
++                     !(status = dualsense_usb_replace_descriptors(device)))
+             {
+                 status = STATUS_SUCCESS;
+                 reports = ext->collection_desc.ReportIDs;
+@@ -1412,6 +1727,7 @@
+                     }
+                 }
+                 if (!status) ext->state = DEVICE_STATE_STARTED;
++                if (!status && (ext->report_fixups & HIDRAW_FIXUP_DUALSENSE_USB)) dualsense_usb_kick(device);
+             }
+             RtlLeaveCriticalSection(&ext->cs);
+             break;
+@@ -1506,6 +1822,12 @@
+      * as controllers do not switch modes if it is incorrect.
+      */
+ 
++    /* MGVF mgvf-0005: HIDRAW_FIXUP_DUALSENSE_USB is not cleared here. The
++     * Bluetooth fixups stop once a client talks to the pad -- an output
++     * write or a feature report, either way -- because that client evidently
++     * knows the Bluetooth format; a client of the USB emulation knows only
++     * the USB one, and everything it sends is translated. */
++
+     if ((ext->report_fixups & HIDRAW_FIXUP_DUALSHOCK_BT))
+     {
+         TRACE("Disabling report fixup for Bluetooth DualShock4 device %p\n", device);
+@@ -1654,7 +1976,11 @@
+                     TRACE("%s\n", buffer);
+                 }
+             }
+-            unix_device_set_output_report(device, packet, &irp->IoStatus);
++            /* MGVF mgvf-0005: the USB 0x02 goes out as a Bluetooth 0x31 */
++            if ((ext->report_fixups & HIDRAW_FIXUP_DUALSENSE_USB) && packet->reportId == DUALSENSE_USB_OUTPUT_ID)
++                dualsense_usb_set_output_report(device, packet, &irp->IoStatus);
++            else
++                unix_device_set_output_report(device, packet, &irp->IoStatus);
+             if (!irp->IoStatus.Status) hidraw_disable_report_fixups(device);
+             break;
+         }
+@@ -1662,6 +1988,9 @@
+         {
+             HID_XFER_PACKET *packet = (HID_XFER_PACKET *)irp->UserBuffer;
+             unix_device_get_feature_report(device, packet, &irp->IoStatus);
++            /* MGVF mgvf-0005: the pad's CRC tail is zeroed, as a wired pad's is */
++            if (!irp->IoStatus.Status && (ext->report_fixups & HIDRAW_FIXUP_DUALSENSE_USB))
++                dualsense_usb_feature_get_fixup(device, packet, &irp->IoStatus);
+             if (!irp->IoStatus.Status) hidraw_disable_report_fixups(device);
+             if (!irp->IoStatus.Status && TRACE_ON(hid))
+             {
+@@ -1692,7 +2021,11 @@
+                     TRACE("%s\n", buffer);
+                 }
+             }
+-            unix_device_set_feature_report(device, packet, &irp->IoStatus);
++            /* MGVF mgvf-0005: the pad checks a CRC on feature writes over Bluetooth */
++            if (ext->report_fixups & HIDRAW_FIXUP_DUALSENSE_USB)
++                dualsense_usb_set_feature_report(device, packet, &irp->IoStatus);
++            else
++                unix_device_set_feature_report(device, packet, &irp->IoStatus);
+             if (!irp->IoStatus.Status) hidraw_disable_report_fixups(device);
+             break;
+         }

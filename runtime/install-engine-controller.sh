@@ -30,8 +30,8 @@
 # .mgvf-stock, never lets a backup be our own build, and replaces by rename so a
 # process holding the old file keeps the old file. Unlike the media pair there
 # is no unix half: the three are PE files built from the engine's own wine
-# source with mgvf-0002, mgvf-0003 and mgvf-0004 on top, and --restore puts
-# CodeWeavers' three back.
+# source with mgvf-0002, mgvf-0003, mgvf-0004 and mgvf-0005 on top, and
+# --restore puts CodeWeavers' three back.
 #
 # It signs. The media installer leaves signing to make-engine-copy.sh, which
 # runs it partway through and signs at its last step. This one is turned on and

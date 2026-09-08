@@ -1,8 +1,8 @@
 #!/bin/bash
 #
 # Build the three PE files that let a Windows client learn which bus a controller
-# is on: winebus.sys (mgvf-0002), setupapi.dll (mgvf-0003) and ntoskrnl.exe
-# (mgvf-0004).
+# is on: winebus.sys (mgvf-0002, and mgvf-0005 for the pad that must not be
+# told), setupapi.dll (mgvf-0003) and ntoskrnl.exe (mgvf-0004).
 #
 #     scripts/build-controller-bus.sh
 #
@@ -13,6 +13,10 @@
 # devnode for a BTHENUM compatible id -- and under wine CM_Get_Parent is a stub
 # and winebus reports no bus at all. Steam's own log says "bluetooth 0" for a pad
 # on Bluetooth. The three patches make the truth reachable; this builds them.
+# mgvf-0005 is the opposite, for the two consumers that turned out not to want
+# the truth: an opt-in per-device option that presents a DualSense on
+# Bluetooth as if it were on USB, off by default, so the shipped winebus.sys
+# behaves exactly as before unless a registry value says otherwise.
 #
 # It reuses build-winegstreamer.sh's tree, on purpose: same sources, same
 # configure, same toolchain, same engine stamp. Run that first. The patches touch
@@ -49,8 +53,8 @@ for t in llvm-strip llvm-readobj llvm-objdump; do
   command -v "$t" >/dev/null 2>&1 || { say "no $t on PATH -- it ships with llvm-mingw"; exit 1; }
 done
 
-# ---- 1. our three patches, on top of whatever the winegstreamer build applied -
-for p in mgvf-0002 mgvf-0003 mgvf-0004; do
+# ---- 1. our patches, on top of whatever the winegstreamer build applied ------
+for p in mgvf-0002 mgvf-0003 mgvf-0004 mgvf-0005; do
   f=$(ls "$OWNPATCHES/$p"-*.patch 2>/dev/null | head -1)
   [ -n "$f" ] || { say "no patch numbered $p in $OWNPATCHES"; exit 1; }
   # Already applied is told by the reverse dry run applying cleanly: macOS's
@@ -124,7 +128,7 @@ cat > "$OUT/controller-built-for.json" <<JSON
   "engine_app": "$STAMP_APP",
   "engine_version": "$(defaults read "$ENGINE_APP/Contents/Info.plist" CFBundleVersion 2>/dev/null || echo unknown)",
   "wine_build": "$(strings -a "$ENGINE/lib/wine/x86_64-unix/ntdll.so" | grep -oE 'wine-[0-9]+\.[0-9]+[^ ]*' | head -1)",
-  "patches": "mgvf-0002 mgvf-0003 mgvf-0004"
+  "patches": "mgvf-0002 mgvf-0003 mgvf-0004 mgvf-0005"
 }
 JSON
 say "built for: $(sed -n 's/.*"engine_app": "\(.*\)".*/\1/p' "$OUT/controller-built-for.json") / $(sed -n 's/.*"wine_build": "\(.*\)".*/\1/p' "$OUT/controller-built-for.json")"
