@@ -128,6 +128,19 @@ for f in "$ROOT"/runtime/engine-winegstreamer*.dll "$ROOT"/runtime/engine-winegs
          "$ROOT"/runtime/engine-built-for*.json; do
   [ -f "$f" ] && cp "$f" "$RES/"
 done
+
+# The controller-bus set travels too, beside the media set and apart from it.
+# It is OPTIONAL: an improvement no title needs, installed only when somebody
+# asks for it, and the app's own Set up never does. It travels so a host
+# launcher can offer that switch, and so the check at the end of this file --
+# every file an installer names is beside it -- holds for its installer too.
+# Named engine-controller-* on purpose: the media installer picks its set by
+# reading engine-built-for*.json and engine-winegstreamer*, and this set must
+# never be taken for one of those.
+cp "$ROOT/runtime/install-engine-controller.sh" "$RES/"
+for f in "$ROOT"/runtime/engine-controller-*; do
+  [ -f "$f" ] && cp "$f" "$RES/"
+done
 for f in "$ROOT"/runtime/engine-payload/lib64/gstreamer-1.0/*.dylib \
          "$ROOT"/runtime/engine-payload/lib64/*.dylib; do
   [ -f "$f" ] && cp "$f" "$RES/"

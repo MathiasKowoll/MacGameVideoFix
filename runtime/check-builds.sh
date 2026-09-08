@@ -91,6 +91,13 @@ for dll in "$HERE"/*.dll; do
   # nothing useful about them -- and reported as unknown they read like drift.
   # What is checked instead is that they still hash to what was published.
   case "$name" in
+    engine-*.dll)
+      # An engine set, not a proxy: no carrier, no log, and nothing here to
+      # rebuild it from. It is checked further down against its laid-out
+      # mirror -- and the controller set against its strip and its export
+      # table -- so it is named here rather than left reading as an unknown.
+      printf '  %-32s --   engine set, checked below\n' "$name"
+      continue ;;
     ng3-*.dll)
       want="$(grep -E "\`$name\`" "$HERE/ng3-THIRD-PARTY-LICENCES.md" 2>/dev/null | grep -oE '[0-9a-f]{64}' | tail -1)"
       have="$(shasum -a256 "$dll" | cut -d' ' -f1)"
@@ -100,7 +107,9 @@ for dll in "$HERE"/*.dll; do
         printf '  %-32s ok   third-party, matches its recorded sha256\n' "$name"
       else
         printf '  %-32s DRIFTED  third-party, does not match its recorded sha256\n' "$name"
-        drift=1
+        # Counted. This used to set a variable the exit line never read, so a
+        # third-party file that no longer hashed to its record still exited 0.
+        drifted=$((drifted + 1))
       fi
       continue ;;
   esac
@@ -301,7 +310,12 @@ echo
 bundle="$ROOT/app/MacGameVideoFix.app/Contents/Resources"
 bundle_drift=0
 if [ -d "$bundle" ]; then
-  for f in "$HERE"/*.dll "$HERE"/install-*.sh "$HERE"/stage-codecs.sh "$HERE"/pe.pl; do
+  # *.sys, *.exe and *.so as well: the controller set ships two PE files that
+  # are not .dll, and the media pair's unix half was never in this list at all,
+  # so a stale winegstreamer.so in the app went unreported for as long as the
+  # list said "*.dll".
+  for f in "$HERE"/*.dll "$HERE"/*.sys "$HERE"/*.exe "$HERE"/*.so \
+           "$HERE"/install-*.sh "$HERE"/stage-codecs.sh "$HERE"/pe.pl; do
     [ -f "$f" ] || continue
     b="$bundle/$(basename "$f")"
     [ -f "$b" ] || continue
@@ -321,7 +335,11 @@ if [ -d "$bundle" ]; then
 # GAIDEN 3's four DLLs, its installer, its licence file and manifest.json.
 if [ -d "$ROOT/app/MacGameVideoFix.app/Contents/Resources" ]; then
   tb="$(mktemp -d)"
-  if "$HERE/make-fixes-bundle.sh" "$tb" >/dev/null 2>&1; then
+  # A bundle that does not build is reported, not skipped. This block used to
+  # fall through in silence when make-fixes-bundle.sh failed, and that silence
+  # is how an installer with no MGVF-SCOPE line -- which makes the bundle build
+  # exit 255, and the app build stop after it -- sat in the tree unnoticed.
+  if "$HERE/make-fixes-bundle.sh" "$tb" >"$tb/build.log" 2>&1; then
     missing=$(comm -23 \
       <(tar tzf "$(ls "$tb"/fixes-*.tar.gz | head -1)" | sed 's|.*/||' | grep -v '^$' | sort -u) \
       <(ls "$ROOT/app/MacGameVideoFix.app/Contents/Resources" | sort -u))
@@ -330,8 +348,13 @@ if [ -d "$ROOT/app/MacGameVideoFix.app/Contents/Resources" ]; then
     else
       echo "  payload: the app is a SUBSET of the fixes bundle -- missing:"
       printf '%s\n' "$missing" | sed 's/^/    /'
-      drift=1
+      # Counted. It used to set a variable the exit line never read.
+      bundle_drift=$((bundle_drift + 1))
     fi
+  else
+    echo "  payload: make-fixes-bundle.sh FAILED, so the app cannot be compared with the bundle:"
+    grep -iE 'error' "$tb/build.log" | head -5 | sed 's/^/    /'
+    bundle_drift=$((bundle_drift + 1))
   fi
   rm -rf "$tb"
 fi
@@ -355,6 +378,63 @@ for pair in "engine-winegstreamer.dll:wine/x86_64-windows/winegstreamer.dll" \
   cmp -s "$flat" "$laid" || { echo "  payload drifted: ${pair##*:}"; payload_drift=$((payload_drift + 1)); }
 done
 [ "$payload_drift" = 0 ] && echo "  payload: engine-payload/ matches the flat engine-* files"
+
+# The optional set has a mirror of its own, runtime/engine-payload-controller/,
+# so that overlaying engine-payload/ never installs it. Same rule, same check.
+controller_drift=0
+for pair in "engine-controller-winebus.sys:wine/x86_64-windows/winebus.sys" \
+            "engine-controller-setupapi.dll:wine/x86_64-windows/setupapi.dll" \
+            "engine-controller-ntoskrnl.exe:wine/x86_64-windows/ntoskrnl.exe" \
+            "engine-controller-built-for.json:built-for.json"; do
+  flat="$HERE/${pair%%:*}"
+  laid="$HERE/engine-payload-controller/${pair##*:}"
+  if [ ! -f "$flat" ] || [ ! -f "$laid" ]; then
+    echo "  controller payload missing: ${pair##*:}"; controller_drift=$((controller_drift + 1)); continue
+  fi
+  cmp -s "$flat" "$laid" || { echo "  controller payload drifted: ${pair##*:}"; controller_drift=$((controller_drift + 1)); }
+done
+[ "$controller_drift" = 0 ] && echo "  payload: engine-payload-controller/ matches the flat engine-controller-* files"
+
+# The three PE files are our own builds and ship stripped: no .debug_ section,
+# no symbol table, and an export table and an import table identical to the
+# unstripped file's -- build-controller-bus.sh proves that as it strips. What is
+# checked here is that what ships is still that file: stripped, and with the
+# export and import counts the payload README records, read the way the codec
+# hashes are read out of CODEC-LICENCES.md. Without the tool it says so and
+# counts it, because "no reader" and "no drift" must never look the same.
+CREADME="$HERE/engine-payload-controller/README.md"
+READOBJ="$MINGW_BIN/llvm-readobj"; [ -x "$READOBJ" ] || READOBJ="$(command -v llvm-readobj 2>/dev/null || true)"
+OBJDUMP="$MINGW_BIN/llvm-objdump"; [ -x "$OBJDUMP" ] || OBJDUMP="$(command -v llvm-objdump 2>/dev/null || true)"
+if [ ! -f "$CREADME" ]; then
+  echo "  controller: no engine-payload-controller/README.md to read counts from"; controller_drift=$((controller_drift + 1))
+elif [ -z "$READOBJ" ] || [ -z "$OBJDUMP" ]; then
+  echo "  controller: no llvm-readobj / llvm-objdump, so the strip and the tables cannot be verified"; controller_drift=$((controller_drift + 1))
+else
+  rows=0
+  while IFS='|' read -r _ rel _bytes exports imports _; do
+    rel="$(echo "$rel" | tr -d ' \`')"; exports="$(echo "$exports" | tr -d ' ,')"; imports="$(echo "$imports" | tr -d ' ,')"
+    case "$rel" in wine/x86_64-windows/*) ;; *) continue ;; esac
+    rows=$((rows + 1))
+    f="$HERE/engine-controller-$(basename "$rel")"
+    if [ ! -f "$f" ]; then
+      echo "  controller missing: $rel"; controller_drift=$((controller_drift + 1)); continue
+    fi
+    bad=""
+    "$OBJDUMP" -h "$f" | grep -q '\.debug_' && bad="$bad, carries .debug_ sections"
+    syms="$("$READOBJ" --file-header "$f" | sed -n 's/.*SymbolCount: *//p')"
+    [ "$syms" = 0 ] || bad="$bad, has a symbol table ($syms symbols)"
+    have_exp="$("$READOBJ" --coff-exports "$f" | grep -cE '^[[:space:]]*Name:')"
+    have_imp="$("$READOBJ" --coff-imports "$f" | grep -cE '^[[:space:]]*Symbol:')"
+    [ "$have_exp" = "$exports" ] || bad="$bad, exports $have_exp where the README records $exports"
+    [ "$have_imp" = "$imports" ] || bad="$bad, imported symbols $have_imp where the README records $imports"
+    [ -z "$bad" ] || { echo "  controller drifted: $(basename "$rel")${bad}"; controller_drift=$((controller_drift + 1)); }
+  done < "$CREADME"
+  if [ "$rows" = 0 ]; then
+    echo "  controller: the README records no wine/x86_64-windows/ rows to check against"; controller_drift=$((controller_drift + 1))
+  elif [ "$controller_drift" = 0 ]; then
+    echo "  controller: all $rows stripped, with the export and import counts the README records"
+  fi
+fi
 
 # The codecs are other people's binaries copied out of winevideo's build, so
 # they are checked the way the NINJA GAIDEN 3 DLLs are: against a recorded
@@ -382,5 +462,5 @@ echo
 echo "  $checked rebuilt and compared, $drifted drifted, $missing_source unattributed"
 [ "$drifted" = 0 ] && [ "$bundle_drift" = 0 ] && [ "$missing_source" = 0 ] \
   && [ "$decl_drift" = 0 ] && [ "$name_leak" = 0 ] && [ "$payload_drift" = 0 ] \
-  && [ "$codec_bad" = 0 ] || exit 1
+  && [ "$controller_drift" = 0 ] && [ "$codec_bad" = 0 ] || exit 1
 exit 0

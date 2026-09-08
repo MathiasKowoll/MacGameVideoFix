@@ -15,6 +15,16 @@ carries `built-for.json`; beside `runtime/install-engine-media.sh` there is one
 and the installer chooses between them by the name of the engine it is pointed
 at. All of them record the patch set above.
 
+`scripts/build-controller-bus.sh` builds a **second, optional set** from the
+same tree, with `mgvf-0002`, `mgvf-0003` and `mgvf-0004` applied on top:
+`winebus.sys`, `setupapi.dll` and `ntoskrnl.exe`, three PE files and no unix
+half. It is stamped apart, in `runtime/engine-controller-built-for.json` beside
+`runtime/install-engine-controller.sh` and mirrored as
+`runtime/engine-payload-controller/built-for.json`, and that stamp records only
+those three. The media stamps above record only the media patch set, and that
+stays so: the three are not applied to the winegstreamer pair and the pair is
+not rebuilt when they change.
+
 `build-winegstreamer.sh` resolves each number here first, and only then in the
 fallback directory `MGVF_PATCHES` names, which is where winevideo's patches sit
 when that project is installed. Until these files existed the fallback was the
@@ -42,6 +52,13 @@ read as the next one of theirs, which is how the first question anyone asked
 about it was where to find it in their repository. Ours are `mgvf-NNNN` and
 theirs are `NNNN`, and the two can never be confused again. See
 `mgvf-0001-winegstreamer-2D-capable-media-source-samples.patch`.
+
+**`mgvf-0002`, `mgvf-0003` and `mgvf-0004` are ours too**, written on 2026-09-08
+for one fault between them. They touch `winebus.sys`, `setupapi.dll` and
+`ntoskrnl.exe`, not winegstreamer, and go into the optional controller-bus set
+rather than the media pair. Each opens with the same header: where it came
+from, the fault, the change — and that nothing in it is specific to this
+project.
 
 ## What each one is for
 
@@ -96,6 +113,44 @@ cutscenes. It is not caused by this patch -- measured from inside the process,
 the buffer's current, maximum and contiguous lengths all agree, so there is no
 unwritten tail for the fill above to touch -- and it is unexplained.
 
+### mgvf-0002 — winebus names the bus in a device's compatible ids *(ours)*
+Under wine, winebus reported `WINEBUS\WINE_COMP_HID` and
+`WINEBUS\WINE_COMP_XINPUT` as a device's compatible ids and nothing else,
+whatever the bus. Every Windows client decides USB against Bluetooth the same
+way — hidapi asks the HID device's parent devnode for its compatible ids and
+searches them for `BTHENUM` — so that search could never succeed, and Steam's
+log said *"bluetooth 0"* for a DualSense that was on Bluetooth. Its driver then
+stayed in the USB format, whose output report the pad refuses silently: no
+rumble. `get_compatible_ids` now prepends the id a real Bluetooth HID child
+carries, `BTHENUM\{00001124-0000-1000-8000-00805f9b34fb}`, when the device's
+bus is Bluetooth, and `USB\Class_03` when it is USB; the two old ids follow, so
+nothing that matched on them changes. winebus already knew the bus from IOKit's
+Transport property and used it only for the PnP prefix and the Bluetooth input
+fixups.
+
+### mgvf-0003 — setupapi: `CM_Get_Parent` for HID children *(ours)*
+`CM_Get_Parent` was a stub: FIXME, no parent, `CR_NO_SUCH_DEVNODE`. It is the
+third call of hidapi's four-call bus detection, and the one that stopped it.
+Wine's device tree is flat, but hidclass names a HID child after the bus PDO it
+hangs from, so the parent of `HID\VID_x&PID_y[&...]\<inst>` is whichever of
+`BTHENUM|USB|WINEBUS\VID_x&PID_y\<inst>` exists under `Enum` — winebus registers
+them there with their `CompatibleIDs`, which setupapi already answers.
+`CM_Get_Parent` looks the bus PDO up that way and allocates a devnode for it.
+Only HID children are known; any other devnode keeps the old answer, FIXME and
+all.
+
+### mgvf-0004 — ntoskrnl refreshes a device's ids on every enumeration *(ours)*
+With the first two in place a `+setupapi` trace showed Steam asking for the
+parent, getting it, reading its `CompatibleIds` — and still logging
+*"bluetooth 0"*. The value it read was the old one: `enumerate_new_device` wrote
+`SPDRP_HARDWAREID` and `SPDRP_COMPATIBLEIDS` only inside
+`install_device_driver`, which runs only when the `Enum` key has no driver yet,
+that is, the first time a device is ever seen. Every later boot kept the record
+of that first boot, whatever the bus said now. It now asks the bus for both on
+every enumeration and writes them before the driver question, which is what
+Windows's PnP manager does. **The three only work together**: this one exists
+because the first two alone still read the first boot's record.
+
 ## If another of their patches is ever needed
 
 The remaining 31 are not applied here, and several address titles this project
@@ -104,6 +159,14 @@ also carries. Adding one means: name it in `--patches`, rebuild the pair, refres
 **add a section above saying what it is for and which title needs it**. A patch
 that is applied but not described here is indistinguishable from one applied by
 accident.
+
+The optional set has records of its own to refresh: `runtime/engine-controller-built-for.json`
+and `runtime/engine-payload-controller/built-for.json`, both written by
+`scripts/install-controller-build.sh` from the build's `controller-built-for.json`,
+and the table in `runtime/engine-payload-controller/README.md` that
+`check-builds.sh` reads. A patch added to that set is named in
+`build-controller-bus.sh`'s own list rather than in `--patches`, and the
+sentence above about describing it here applies just the same.
 
 They also do not all apply standalone. 0003 needs 0002, and 0008 needs its
 predecessors; testing one against a pristine tree reports a failure that says

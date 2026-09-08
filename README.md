@@ -312,7 +312,9 @@ first launch. Right click it and choose **Open**, then confirm.
   thing that tells them apart. `scripts/make-engine-copy.sh` invokes that
   installer partway through, so a refusal leaves the copied bundle in
   `~/Applications` with none of the media libraries in it and the signing step
-  never run.
+  never run. The optional controller-bus set,
+  `runtime/install-engine-controller.sh`, has the same rule: built for
+  26.3.0.39832 and refused on anything else.
 - **A second CrossOver, if you want the newer toolkit.** Apple's Game Porting
   Toolkit is not carried by this project. The app takes it from another
   CrossOver already installed on this Mac, and offers the option only when it
@@ -483,6 +485,26 @@ scripts/make-engine-copy.sh --from /Applications/CrossOver.app
 The first builds the `winegstreamer` pair from a CrossOver source tree with that
 set of patches applied; the second makes the copy, puts the pair and the plugins
 into it, signs it and clears its quarantine, in that order.
+
+```bash
+scripts/build-controller-bus.sh
+scripts/install-controller-build.sh
+```
+
+These two produce a second engine set, and it is **optional**: `winebus.sys`,
+`setupapi.dll` and `ntoskrnl.exe` from the same tree with `mgvf-0002`,
+`mgvf-0003` and `mgvf-0004` applied, so that a Windows client can learn a
+controller is on Bluetooth. A DualSense then rumbles over Bluetooth, and its PS
+button and touchpad work, as they always did over USB; trigger effects ride in
+the same report, and a title that sends them over Bluetooth is reported working. An
+improvement rather than a fix: no row of the table needs it and the Motor column
+does not change. It is installed and removed with
+`runtime/install-engine-controller.sh <app> install | --status | --restore`,
+which keeps CodeWeavers' three files as `.mgvf-stock`, refuses any engine but the
+one both stamp fields name, refuses while a bottle is running, and re-signs the
+bundle itself. `make-engine-copy.sh` never installs it. The files ship stripped;
+`runtime/engine-payload-controller/README.md` says what that means and what
+`check-builds.sh` verifies about them.
 
 The patches are in `source-patches/`, which is new in 5 — the build used to
 point at another project's patch directory and could only run on a machine that

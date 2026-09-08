@@ -10,6 +10,13 @@ engine it is building without a mapping table of its own:
 
 `built-for.json` and the two `.md` files are not copied into the engine.
 
+This tree is the media set only. The optional controller-bus set —
+`winebus.sys`, `setupapi.dll` and `ntoskrnl.exe` — is laid out in the sibling
+`runtime/engine-payload-controller/`, so that overlaying this tree never installs
+it and a patcher chooses per set. That tree has a README of its own saying what
+the set changes, why it is optional, and how to check its status and put
+CodeWeavers' files back.
+
 ## Two halves that do different jobs
 
 **The bridge** is the `winegstreamer` pair, built here. It is what lets a

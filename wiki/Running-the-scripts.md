@@ -20,9 +20,10 @@ already made, and undoing it is deleting the copy.
 **These paths are in the source repository.** The app download carries the
 installers it offers, `stage-codecs.sh`, `make-engine-copy.sh`,
 `install-engine-media.sh` with the engine sets and the codec plugins beside it,
+`install-engine-controller.sh` with the optional controller-bus set beside it,
 `pe.pl`, the prebuilt DLLs and the two undo scripts inside its own bundle. It
 does not carry `runtime/build-proxy.sh`, `runtime/install-ng3-fix.sh`,
-`crossover/`, `scripts/build-winegstreamer.sh`,
+`crossover/`, `scripts/build-winegstreamer.sh`, `scripts/build-controller-bus.sh`,
 `scripts/install-winegstreamer.sh`, `source-patches/` or `app/build-app.sh`.
 Clone the repository, or take the source tarball from
 [Releases](../../releases), to run the commands below as written.
@@ -110,6 +111,38 @@ The originals are kept beside the new files as `.mgvf-stock`, and it stops if th
 backup it finds is byte for byte the build it is about to install: a backup like
 that makes `--restore` reinstall the patch and report success.
 
+### The controller-bus set, into an engine — optional
+
+Not run by `make-engine-copy.sh` and not offered by the app's **Set up**. An
+improvement rather than a fix: no title needs it, and it is for a person who
+wants a controller on Bluetooth to work the way it does over USB. Three PE files
+— `winebus.sys`, `setupapi.dll` and `ntoskrnl.exe` — built from the engine's
+own wine source with `mgvf-0002`, `mgvf-0003` and `mgvf-0004` applied, so a
+Windows client can learn the transport: a DualSense then rumbles over Bluetooth,
+and its PS button and touchpad work; trigger effects ride in the same report. What each patch changes
+is in `source-patches/README.md`; what the set is, and what it is not, is in
+`runtime/engine-payload-controller/README.md`.
+
+```bash
+runtime/install-engine-controller.sh ~/Applications/Crossover_MGVF.app            # install
+runtime/install-engine-controller.sh ~/Applications/Crossover_MGVF.app --status   # installed, broken or absent
+runtime/install-engine-controller.sh ~/Applications/Crossover_MGVF.app --restore  # put CodeWeavers' three files back
+```
+
+The rules are the media installer's. One set, stamped in
+`engine-controller-built-for.json` for `CrossOver.app` at `26.3.0.39832`; a copy
+is served through `copied_from` in its `mgvf-origin.json`, and any other name or
+version is refused. The originals are kept beside the new files as
+`.mgvf-stock`, a backup that is byte for byte our own build is refused, and
+`--status` answers `installed` with all three backups present, `broken` with
+some of them, `absent` with none — the three only work together, so some of
+them is worse than none. Two differences. It refuses while a bottle is running:
+`winedevice.exe` holds `winebus.sys` and `ntoskrnl.exe`, and a swap while it
+runs leaves the bottle half on each set until it shuts down, so close Steam
+first, in both directions. And it re-signs the bundle and clears its quarantine
+itself, in that order, because it runs after the copy exists with no signing
+step after it.
+
 ### Building the winegstreamer pair
 
 Only needed to rebuild what the two scripts above install. It wants a wine tree
@@ -140,6 +173,29 @@ pair naming the engine, the wine revision and the patch set.
 pointed at and stops if they differ. It keeps the originals as `.stock`, which is
 a different backup from the `.mgvf-stock` that `install-engine-media.sh` writes;
 the two do not see each other.
+
+### Building the controller-bus set
+
+```bash
+scripts/build-controller-bus.sh
+scripts/install-controller-build.sh
+```
+
+The first reuses the tree `build-winegstreamer.sh` configured, so run that
+first. It applies `mgvf-0002`, `mgvf-0003` and `mgvf-0004`, builds only the
+three PE files, strips them with `llvm-strip --strip-all` and proves the strip
+harmless before it stamps anything: the export and import tables of the
+stripped file are compared with the unstripped one, and a difference stops it.
+The unstripped files stay in the build directory as `<name>.unstripped`. Its
+`controller-built-for.json` names the **origin** engine: when `MGVF_ENGINE` is a
+copy this project made, the name comes from `copied_from` in the copy's
+`mgvf-origin.json`, since that is the name the installer serves a copy under.
+
+The second puts the set into the repository, flat beside the installer and laid
+out in `runtime/engine-payload-controller/`. It refuses an unstripped file and a
+stamp whose engine version differs from the media stamps', so the two sets can
+never disagree about the supported engine, and it runs `check-builds.sh` after
+copying.
 
 ### Unreal titles: the runtime patch
 

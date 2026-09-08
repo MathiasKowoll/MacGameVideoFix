@@ -213,6 +213,27 @@ wrote into a stock install during a test. The app name is the part that tells
 them apart. `install-engine-media.sh` checks both, and any patcher consuming the
 payload directly should check both too.
 
+### The optional controller-bus set
+
+`runtime/engine-payload-controller/` is a second tree of the same shape and a
+**sibling** of the payload folder, not a part of it:
+
+    wine/x86_64-windows/winebus.sys    ->  <CX>/lib/wine/x86_64-windows/winebus.sys
+    wine/x86_64-windows/setupapi.dll   ->  <CX>/lib/wine/x86_64-windows/setupapi.dll
+    wine/x86_64-windows/ntoskrnl.exe   ->  <CX>/lib/wine/x86_64-windows/ntoskrnl.exe
+    built-for.json                     ->  not copied; read it first
+
+Three PE files from the engine's own wine source with `mgvf-0002`, `mgvf-0003`
+and `mgvf-0004` applied, so a Windows client can learn that a controller is on
+Bluetooth — a DualSense then rumbles over Bluetooth, and its PS button and touchpad
+work; trigger effects ride in the same report. **Optional**: an improvement no title needs, never
+installed by `make-engine-copy.sh`, and kept out of `engine-payload/` so that
+overlaying that tree never installs it. The same bytes ship flat as
+`engine-controller-*` beside `install-engine-controller.sh`, which keeps
+CodeWeavers' three files as `.mgvf-stock` and puts them back on `--restore`. They
+ship stripped, and `runtime/engine-payload-controller/README.md` records what
+`check-builds.sh` verifies about them.
+
 **A copy this project made answers to a name nothing was built for**, so the
 name check on its own would refuse it. `mgvf-origin.json`, in the copy's
 `Contents/SharedSupport/CrossOver`, is what resolves that:
@@ -555,6 +576,13 @@ question the bundling proposal answers and this test does not touch.
   is not enough on its own, because a bundle carrying only the set for a patched
   fork is useless to somebody holding stock CrossOver and the manifest gave no
   way to see that a second set was sitting right there.
+- **`engineOptional` is the controller-bus set, and it is not in `engineSets`.**
+  That list is the media pair by definition, and a launcher reading it as "the
+  sets to install" would install this one unasked. It is a list keyed by `id`
+  (`"controller"` today), each entry with its `script`, `files`, `install`
+  pairs, `builtFor`, `patches`, a `why`, and `"optional": true` said in so many
+  words. Offer it as a switch; `install-engine-controller.sh <app> --restore`
+  puts CodeWeavers' files back. Absent when the set is not in the bundle.
 
 **Decoding takes two things, and category 4 is only one of them.** The
 `winegstreamer` pair is the bridge from a Windows process to GStreamer; the
