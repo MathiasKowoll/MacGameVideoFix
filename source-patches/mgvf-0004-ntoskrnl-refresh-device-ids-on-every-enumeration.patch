@@ -1,0 +1,55 @@
+From: MacGameVideoFix <https://github.com/MathiasKowoll/MacGameVideoFix>
+Subject: [PATCH] ntoskrnl.exe: refresh a device's hardware and compatible ids on every enumeration
+
+WHERE THIS CAME FROM
+
+MacGameVideoFix's own series, mgvf-NNNN, written on 2026-09-08, the third of
+three for the same fault. Nothing in it is specific to this project.
+
+THE FAULT
+
+With mgvf-0002 winebus reports a BTHENUM compatible id for a Bluetooth pad, and
+with mgvf-0003 CM_Get_Parent hands hidapi the bus PDO to read it from. Measured
+with a +setupapi trace: Steam asked for the parent, got it, read its
+CompatibleIds -- and still logged "bluetooth 0". The value it read was the old
+one. enumerate_new_device writes SPDRP_HARDWAREID and SPDRP_COMPATIBLEIDS only
+inside install_device_driver, which runs only when the Enum key has no driver
+yet: the first time a device is ever seen. Every later boot keeps the record of
+that first boot, whatever the bus says now.
+
+THE CHANGE
+
+enumerate_new_device asks the bus for its hardware and compatible ids on every
+enumeration and writes them, before the driver question. install_device_driver
+still writes them too on a first install; writing them twice then is harmless.
+That is Windows's behaviour: the PnP manager keeps these properties current.
+
+---
+--- a/dlls/ntoskrnl.exe/pnp.c
++++ b/dlls/ntoskrnl.exe/pnp.c
+@@ -434,6 +434,25 @@
+         ExFreePool( id );
+     }
+ 
++    /* MGVF: the hardware and compatible ids are the bus's answer of today, not
++     * of the day the device was first seen. They were written only by
++     * install_device_driver, i.e. once, so a bus that learned to report more
++     * (winebus naming the Bluetooth transport) was masked by the record of an
++     * earlier boot for as long as the key lived. Windows keeps these current
++     * on every enumeration; so does this now. */
++    if (!get_device_id( device, BusQueryHardwareIDs, &id ) && id)
++    {
++        SetupDiSetDeviceRegistryPropertyW( set, &sp_device, SPDRP_HARDWAREID, (BYTE *)id,
++                sizeof_multiszW( id ) * sizeof(WCHAR) );
++        ExFreePool( id );
++    }
++    if (!get_device_id( device, BusQueryCompatibleIDs, &id ) && id)
++    {
++        SetupDiSetDeviceRegistryPropertyW( set, &sp_device, SPDRP_COMPATIBLEIDS, (BYTE *)id,
++                sizeof_multiszW( id ) * sizeof(WCHAR) );
++        ExFreePool( id );
++    }
++
+     if (need_driver && !install_device_driver( device, set, &sp_device ) && !caps.RawDeviceOK)
+     {
+         ERR("Unable to install a function driver for device %s.\n", debugstr_w(device_instance_id));

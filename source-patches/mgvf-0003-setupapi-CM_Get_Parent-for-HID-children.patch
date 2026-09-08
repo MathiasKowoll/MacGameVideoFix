@@ -1,0 +1,162 @@
+From: MacGameVideoFix <https://github.com/MathiasKowoll/MacGameVideoFix>
+Subject: [PATCH] setupapi: CM_Get_Parent for HID children, from the names hidclass gives them
+
+WHERE THIS CAME FROM
+
+MacGameVideoFix's own series, mgvf-NNNN, written on 2026-09-08 alongside
+mgvf-0002. Nothing in it is specific to this project.
+
+THE FAULT
+
+CM_Get_Parent is a stub: FIXME, *parent = 0, CR_NO_SUCH_DEVNODE. hidapi's bus
+detection on Windows is CM_Get_Device_Interface_PropertyW(InstanceId) ->
+CM_Locate_DevNodeW -> CM_Get_Parent -> CM_Get_DevNode_PropertyW(CompatibleIds)
+-> look for BTHENUM. The first two work in wine, the third does not, and so no
+hidapi client -- Steam included -- can ever learn that a controller is on
+Bluetooth. Measured on a DualSense Edge: "bluetooth 0" in Steam's log with the
+pad paired over Bluetooth, and no output report ever written to it.
+
+THE CHANGE
+
+Wine's device tree is flat; nothing records who enumerated whom. But hidclass
+names a HID child after the bus PDO it hangs from: HID\VID_x&PID_y with the
+bus PDO's own instance id for a single-collection device, and for a
+multi-collection one an instance that keeps the parent's version&serial
+prefix. So the parent of HID\VID_x&PID_y[&...]\<inst> is whichever of
+BTHENUM|USB|WINEBUS\VID_x&PID_y\<inst> exists under Enum -- winebus registers
+them there, with their CompatibleIDs, and setupapi already answers
+DEVPKEY_Device_CompatibleIds from that value (PropertyMap, SPDRP_COMPATIBLEIDS).
+CM_Get_Parent looks the bus PDO up exactly that way and allocates a devnode for
+it. Only HID children are known; any other devnode keeps the old answer, with
+the FIXME it always had.
+
+---
+--- a/dlls/setupapi/stubs.c
++++ b/dlls/setupapi/stubs.c
+@@ -131,17 +131,6 @@
+ }
+ 
+ /***********************************************************************
+- *              CM_Get_Parent (SETUPAPI.@)
+- */
+-DWORD WINAPI CM_Get_Parent(PDEVINST pdnDevInst, DEVINST dnDevInst, ULONG ulFlags)
+-{
+-    FIXME("%p 0x%08lx 0x%08lx stub\n", pdnDevInst, dnDevInst, ulFlags);
+-    if(pdnDevInst)
+-        *pdnDevInst = 0;
+-    return CR_NO_SUCH_DEVNODE;
+-}
+-
+-/***********************************************************************
+  *		SetupInitializeFileLogW(SETUPAPI.@)
+  */
+ HSPFILELOG WINAPI SetupInitializeFileLogW(LPCWSTR LogFileName, DWORD Flags)
+--- a/dlls/setupapi/devinst.c
++++ b/dlls/setupapi/devinst.c
+@@ -919,6 +919,106 @@
+         return NULL;
+     }
+     return get_device(*set, data);
++}
++
++/***********************************************************************
++ *              CM_Get_Parent (SETUPAPI.@)
++ *
++ * MGVF. Wine's device tree is flat: nothing records who enumerated whom. But
++ * hidclass names a HID child after the bus PDO it hangs from -- the same
++ * VID_x&PID_y and, for a single-collection device, the very same instance id;
++ * a multi-collection child keeps the parent's version&serial prefix. So the
++ * parent of HID\VID_x&PID_y[&...]\<inst> is whichever of
++ * BTHENUM|USB|WINEBUS\VID_x&PID_y\<inst> exists under Enum. hidapi walks this
++ * to learn the bus a HID device is on, and then reads the parent's compatible
++ * ids; with the stub answering CR_NO_SUCH_DEVNODE, every controller read as
++ * USB. Only HID children are known here; anything else keeps the old answer.
++ */
++CONFIGRET WINAPI CM_Get_Parent(DEVINST *parent, DEVINST devnode, ULONG flags)
++{
++    static const WCHAR *const buses[] = { L"BTHENUM", L"USB", L"WINEBUS" };
++    WCHAR vidpid[MAX_DEVICE_ID_LEN], candidate[MAX_DEVICE_ID_LEN], prefix[MAX_DEVICE_ID_LEN];
++    const WCHAR *id, *inst, *p;
++    HKEY enum_key, key;
++    unsigned int i;
++    size_t len;
++
++    TRACE("%p, %lu, %#lx.\n", parent, devnode, flags);
++
++    if (!parent)
++        return CR_INVALID_POINTER;
++    *parent = 0;
++    if (devnode >= devinst_table_size || !devinst_table[devnode])
++        return CR_NO_SUCH_DEVINST;
++    id = devinst_table[devnode];
++    if (wcsnicmp(id, L"HID\\", 4) || !(inst = wcsrchr(id, '\\')) || inst == id + 3)
++    {
++        FIXME("parent of %s not known\n", debugstr_w(id));
++        return CR_NO_SUCH_DEVNODE;
++    }
++
++    /* VID_x&PID_y, dropping &Col01, &IG_00 or anything else hidclass or
++     * winexinput appended to the bus PDO's id. */
++    len = inst - (id + 4);
++    if (len >= ARRAY_SIZE(vidpid))
++        return CR_NO_SUCH_DEVNODE;
++    memcpy(vidpid, id + 4, len * sizeof(WCHAR));
++    vidpid[len] = 0;
++    if ((p = wcschr(vidpid, '&')) && (p = wcschr(p + 1, '&')))
++        vidpid[p - vidpid] = 0;
++    inst++;
++
++    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"System\\CurrentControlSet\\Enum", 0, KEY_READ, &enum_key))
++        return CR_REGISTRY_ERROR;
++
++    for (i = 0; i < ARRAY_SIZE(buses); i++)
++    {
++        swprintf(candidate, ARRAY_SIZE(candidate), L"%s\\%s\\%s", buses[i], vidpid, inst);
++        if (!RegOpenKeyExW(enum_key, candidate, 0, KEY_READ, &key))
++        {
++            RegCloseKey(key);
++            RegCloseKey(enum_key);
++            *parent = alloc_devinst_for_device_id(candidate);
++            TRACE("parent of %s is %s (%lu)\n", debugstr_w(id), debugstr_w(candidate), *parent);
++            return CR_SUCCESS;
++        }
++    }
++
++    /* A collection child: version&serial&0&0&index. Match the bus PDO by the
++     * version&serial& prefix among the instances under each bus. */
++    wcscpy(prefix, inst);
++    if ((p = wcschr(prefix, '&')) && (p = wcschr(p + 1, '&')))
++    {
++        DWORD index, name_len;
++        WCHAR name[MAX_DEVICE_ID_LEN];
++
++        prefix[p + 1 - prefix] = 0;
++        for (i = 0; i < ARRAY_SIZE(buses); i++)
++        {
++            swprintf(candidate, ARRAY_SIZE(candidate), L"%s\\%s", buses[i], vidpid);
++            if (RegOpenKeyExW(enum_key, candidate, 0, KEY_ENUMERATE_SUB_KEYS, &key))
++                continue;
++            for (index = 0; ; index++)
++            {
++                name_len = ARRAY_SIZE(name);
++                if (RegEnumKeyExW(key, index, name, &name_len, NULL, NULL, NULL, NULL))
++                    break;
++                if (wcsnicmp(name, prefix, wcslen(prefix)))
++                    continue;
++                RegCloseKey(key);
++                RegCloseKey(enum_key);
++                swprintf(candidate, ARRAY_SIZE(candidate), L"%s\\%s\\%s", buses[i], vidpid, name);
++                *parent = alloc_devinst_for_device_id(candidate);
++                TRACE("parent of %s is %s (%lu)\n", debugstr_w(id), debugstr_w(candidate), *parent);
++                return CR_SUCCESS;
++            }
++            RegCloseKey(key);
++        }
++    }
++
++    RegCloseKey(enum_key);
++    FIXME("no bus PDO found for %s\n", debugstr_w(id));
++    return CR_NO_SUCH_DEVNODE;
+ }
+ 
+ /***********************************************************************

@@ -1,0 +1,86 @@
+From: MacGameVideoFix <https://github.com/MathiasKowoll/MacGameVideoFix>
+Subject: [PATCH] winebus.sys: say which bus a device is on in its compatible ids
+
+WHERE THIS CAME FROM
+
+MacGameVideoFix's own series, mgvf-NNNN, written on 2026-09-08 after a day of
+measuring why a DualSense rumbles over USB and never over Bluetooth in every
+Steam game under CrossOver 26.3 on macOS. Nothing in it is specific to this
+project; it is offered to anyone carrying a patched winebus.
+
+THE FAULT
+
+A DualSense on Bluetooth wants output report 0x31, 78 bytes with a CRC-32; its
+Bluetooth descriptor has no report 0x02 at all (outputs 0x31..0x39, measured),
+so the USB-format report a client sends is refused by hidclass before winebus
+sees it, silently. Every Windows client decides USB against Bluetooth the same
+way -- hidapi asks the HID device's parent devnode for its compatible ids and
+searches them for BTHENUM -- and under wine that search can never succeed:
+winebus reports WINEBUS\WINE_COMP_HID and WINEBUS\WINE_COMP_XINPUT and nothing
+else, whatever the bus. Steam's own log records the result for a pad on
+Bluetooth: "Added HIDAPI device 'DualSense Edge Wireless Controller' ...
+bluetooth 0". Its PS5 driver then stays in simple mode and writes nothing;
+over USB the same driver writes its 0x02 reports and the pad rumbles.
+
+THE CHANGE
+
+get_compatible_ids prepends the id a real Bluetooth HID child carries,
+BTHENUM\{00001124-0000-1000-8000-00805f9b34fb} (the Bluetooth HID service
+class), when the device's bus_type is Bluetooth, and USB\Class_03 when it is
+USB. WINE_COMP_XINPUT and WINE_COMP_HID follow as before, so nothing that
+matched on them changes. winebus already knows the bus: bus_iohid.c reads the
+IOKit Transport property into desc.bus_type, and it was used only for the PnP
+device-id prefix and the Bluetooth input fixups.
+
+Pairs with mgvf-0003, which gives CM_Get_Parent something to return; without
+that, hidapi never reaches these ids.
+
+---
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -262,17 +262,41 @@
+ {
+     static const WCHAR xinput_compat[] = L"WINEBUS\\WINE_COMP_XINPUT";
+     static const WCHAR hid_compat[] = L"WINEBUS\\WINE_COMP_HID";
++    /* MGVF: say which bus the device is on, the way the Windows enumerators
++     * do. hidapi decides USB against Bluetooth by asking the HID device's
++     * parent devnode for its compatible ids and searching them for BTHENUM
++     * (or USB); with only WINE_COMP_* to look at, every controller reads as
++     * USB and a DualSense on Bluetooth is sent USB-format output reports it
++     * ignores. The GUID is the Bluetooth HID service class, which is what a
++     * real BTHENUM child carries. */
++    static const WCHAR bth_compat[] = L"BTHENUM\\{00001124-0000-1000-8000-00805f9b34fb}";
++    static const WCHAR usb_compat[] = L"USB\\Class_03";
+     struct device_extension *ext = (struct device_extension *)device->DeviceExtension;
+-    DWORD size = sizeof(hid_compat);
++    const WCHAR *bus_compat = NULL;
++    DWORD size = sizeof(hid_compat), pos = 0;
+     WCHAR *dst;
+ 
++    if (ext->desc.bus_type == BUS_TYPE_BLUETOOTH) bus_compat = bth_compat;
++    else if (ext->desc.bus_type == BUS_TYPE_USB) bus_compat = usb_compat;
++
++    if (bus_compat) size += (wcslen(bus_compat) + 1) * sizeof(WCHAR);
+     if (ext->desc.is_gamepad) size += sizeof(xinput_compat);
+ 
+     if ((dst = ExAllocatePool(PagedPool, size + sizeof(WCHAR))))
+     {
+-        if (ext->desc.is_gamepad) memcpy(dst, xinput_compat, sizeof(xinput_compat));
+-        memcpy((char *)dst + size - sizeof(hid_compat), hid_compat, sizeof(hid_compat));
+-        dst[size / sizeof(WCHAR)] = 0;
++        if (bus_compat)
++        {
++            wcscpy(dst + pos, bus_compat);
++            pos += wcslen(bus_compat) + 1;
++        }
++        if (ext->desc.is_gamepad)
++        {
++            memcpy(dst + pos, xinput_compat, sizeof(xinput_compat));
++            pos += ARRAY_SIZE(xinput_compat);
++        }
++        memcpy(dst + pos, hid_compat, sizeof(hid_compat));
++        pos += ARRAY_SIZE(hid_compat);
++        dst[pos] = 0;
+     }
+ 
+     return dst;
