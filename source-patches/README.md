@@ -16,21 +16,29 @@ and the installer chooses between them by the name of the engine it is pointed
 at. All of them record the patch set above.
 
 `scripts/build-controller-bus.sh` builds a **second, optional set** from the
-same tree, with `mgvf-0002`, `mgvf-0003`, `mgvf-0004`, `mgvf-0005`,
-`mgvf-0006`, `mgvf-0007` and `mgvf-0008` applied on top: `winebus.sys`,
-`setupapi.dll`, `ntoskrnl.exe` and `winebus.so` — three PE files and, since
-`mgvf-0006`, the unix half of winebus as well. It is stamped apart, in
+same tree, with `mgvf-0002`, `mgvf-0003`, `mgvf-0004`, `mgvf-0005` and
+`mgvf-0007` applied on top: `winebus.sys`, `setupapi.dll` and `ntoskrnl.exe`,
+three PE files. It is stamped apart, in
 `runtime/engine-controller-built-for.json` beside
 `runtime/install-engine-controller.sh` and mirrored as
 `runtime/engine-payload-controller/built-for.json`, and that stamp records only
-those seven. The media stamps above record only the media patch set, and that
-stays so: the seven are not applied to the winegstreamer pair and the pair is
+those five. The media stamps above record only the media patch set, and that
+stays so: the five are not applied to the winegstreamer pair and the pair is
 not rebuilt when they change.
 
-The set grew a unix half because `mgvf-0006` is in `bus_iohid.c`, which is unix
-code. Both halves of winebus then ship together: they are built from one tree
-and read one struct, so an engine on our `winebus.sys` and CodeWeavers'
-`winebus.so` is not a combination anyone should be running.
+**`mgvf-0006` and `mgvf-0008` are here and are not in that set.** Both were
+written, built and run, and both are kept below in full, because a patch that
+was tried and dropped is part of the record of the work. `mgvf-0006` seizes a
+Bluetooth DualSense from macOS, and it does stop the two of them writing to one
+output pipe — but that contention turned out not to be what made the pad drop
+its link, and what a user actually sees from the patch is that macOS and its own
+applications cannot use the pad while a bottle holds it, which is not something
+to impose on a stranger's first install. `mgvf-0008` was an **experiment** and
+it has been run: with the feature write forwarded again the pad did not die
+either, so the question it was built to ask is answered and the instrument
+comes back out. `mgvf-0006` was also the only change to the unix half, so with
+it out the set is three PE files and ships no `winebus.so`: without our patch
+in it, ours would be CodeWeavers' own build.
 
 `build-winegstreamer.sh` resolves each number here first, and only then in the
 fallback directory `MGVF_PATCHES` names, which is where winevideo's patches sit
@@ -69,16 +77,15 @@ project. **`mgvf-0005` is ours as well**, from the same day and in the same
 set, and is the opposite of the three: where they tell a client the truth
 about the bus, it lets one pad lie about it, per device, off by default, for
 the two consumers that turned out not to want the truth. **`mgvf-0006` is ours
-too**, from the same day and the same set, and is the first of ours to touch
-the unix half of a driver rather than the PE half: it stops wine and macOS
-writing to the same pad at once. Unlike `mgvf-0005` it is **on by default**,
-because it repairs a defect rather than offering a behaviour. **`mgvf-0007` is
+too**, from the same day, and is the only one of ours to touch the unix half of
+a driver rather than the PE half: it stops wine and macOS writing to the same
+pad at once. It is **not built** — the section below says why. **`mgvf-0007` is
 ours too**, and is the only one of the set that exists because of another one
 of ours: it is the bill for `mgvf-0005`'s lie, and takes back out of a report
 the audio settings a client asks for only because it has been told the pad is
 wired. **`mgvf-0008` is ours too, and is the only one here that is not a fix**:
-it is an experiment, marked as one wherever it is named, and it is in the set
-because the way to run it is to ship it and read the next trace.
+it is an experiment, marked as one wherever it is named, it was run, and it is
+**not built** either.
 
 ## What each one is for
 
@@ -205,7 +212,16 @@ DualShock 4, deliberately, and the driver half has not yet run against a live
 pad — and the risks are in the patch's own header; how to turn it on is in
 `runtime/engine-payload-controller/README.md`.
 
-### mgvf-0006 — winebus seizes a DualSense on Bluetooth *(ours)*
+### mgvf-0006 — winebus seizes a DualSense on Bluetooth *(ours, NOT in the built set)*
+**Not built, and kept here as the record of it.** What it does it does, and the
+contention below was measured — but the drops it was written for turned out not
+to be caused by that contention, and its one user-visible effect is that macOS
+and its own applications cannot reach the pad while a bottle holds it, which
+reads as a controller that will not come back. That is not a cost to hand to
+somebody installing this for the first time. It is also the only change to the
+unix half, so with it out the set is three PE files again and ships no
+`winebus.so`.
+
 macOS drives a connected DualSense itself: WindowServer's
 `com.apple.GameController.HID:DualSense` driver opens the pad every time it
 appears and writes Bluetooth output reports to it. winebus opened the same pad
@@ -239,8 +255,10 @@ settings that already cross the boundary: `struct device_options` — the list
 bus_options` — gains one `INT` beside its existing `hidraw`, read from the same
 subkey by the same loop. It is therefore read once, at driver start, and a
 change applies when the bottle's `winedevice` next starts. What this patch
-touches is the first unix code in the set, which is why the set now ships a
-fourth file; `runtime/engine-payload-controller/README.md` says where it goes.
+touches is the only unix code any of these patches touch, which is why building
+it would mean shipping a fourth file, `winebus.so`, into
+`lib/wine/x86_64-unix/`; with the patch out, that file is CodeWeavers' own and
+stays theirs.
 
 ### mgvf-0007 — the USB emulation refuses a wired-only audio request *(ours)*
 `mgvf-0005` tells a client the pad is on a cable, and a client that believes it
@@ -277,7 +295,13 @@ the pad has on a cable, the emulation is why a client asks for it in that
 shape, and nothing under wine is on the other end of the pad's audio path — and
 on costing nothing measured.
 
-### mgvf-0008 — the USB emulation answers a feature write without sending it *(ours, and an EXPERIMENT)*
+### mgvf-0008 — the USB emulation answers a feature write without sending it *(ours, an EXPERIMENT, NOT in the built set)*
+**Not built: the experiment was run and it answered.** With the feature write
+forwarded to the pad again, the pad did not die either — so the write is not
+what makes it leave, the question this was built to ask is settled, and an
+instrument comes out once it has been read. The rest of this section is what it
+was for, kept because the measurement it rests on is worth having.
+
 **Read this one as an instrument, not as a repair.** Everything else in the set
 changes something that was measured to be wrong. This changes what the
 emulation does with one class of traffic so that the next trace answers a
@@ -341,9 +365,7 @@ The optional set has records of its own to refresh: `runtime/engine-controller-b
 and `runtime/engine-payload-controller/built-for.json`, both written by
 `scripts/install-controller-build.sh` from the build's `controller-built-for.json`,
 and the table in `runtime/engine-payload-controller/README.md` that
-`check-builds.sh` reads — whose last row is the unix half and whose two number
-columns mean exported symbols and linked libraries there rather than COFF
-exports and imports. A patch added to that set is named in
+`check-builds.sh` reads. A patch added to that set is named in
 `build-controller-bus.sh`'s own list rather than in `--patches`, and the
 sentence above about describing it here applies just the same.
 

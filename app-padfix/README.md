@@ -90,7 +90,11 @@ is the same guard as above doing its job.
 
 `Half installed` means some of the three backups are there and some are not. The
 three only work together, so that is neither state; install again, or restore,
-and the log says what happened.
+and the log says what happened. It also means one other thing, for one kind of
+CrossOver: for a few hours this set installed a fourth file, `winebus.so`, and
+an engine that took that install still has it. That patch is not shipped any
+more, so such an engine reads `Half installed` too — and both buttons put
+CodeWeavers' `winebus.so` back, install before it writes anything else.
 
 ## Running it the first time
 
@@ -112,9 +116,9 @@ MacGamePadFix, and press **Open Anyway**.
 
 They are **Wine**, and Wine is **LGPL-2.1-or-later**. They are built from the
 Wine source of CrossOver 26.3.0.39832, revision `wine-11.0-8726-g2e2f5fca349`,
-with four patches of this project's on top — `mgvf-0002`, `mgvf-0003`,
-`mgvf-0004` and `mgvf-0005` — and all four are published in full, as patch files,
-in `source-patches/` of
+with five patches of this project's on top — `mgvf-0002`, `mgvf-0003`,
+`mgvf-0004`, `mgvf-0005` and `mgvf-0007` — and all five are published in full,
+as patch files, in `source-patches/` of
 
 > <https://github.com/MathiasKowoll/MacGameVideoFix>
 

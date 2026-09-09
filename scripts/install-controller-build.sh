@@ -52,7 +52,7 @@ OBJDUMP="$MINGW_BIN/llvm-objdump"; [ -x "$OBJDUMP" ] || OBJDUMP="$(command -v ll
 [ -n "$READOBJ" ] && [ -n "$OBJDUMP" ] || die "no llvm-readobj / llvm-objdump -- set MINGW_BIN, or install llvm-mingw"
 
 echo "[1/4] what the build produced"
-for f in controller-built-for.json winebus.sys setupapi.dll ntoskrnl.exe winebus.so; do
+for f in controller-built-for.json winebus.sys setupapi.dll ntoskrnl.exe; do
   [ -f "$BUILD/$f" ] || die "no $f in $BUILD -- run scripts/build-controller-bus.sh first"
 done
 app="$(json_field "$BUILD/controller-built-for.json" engine_app)"
@@ -75,15 +75,6 @@ for f in winebus.sys setupapi.dll ntoskrnl.exe; do
   say "$(printf '%-12s %8s bytes, %4s exports, %4s imported symbols, stripped' "$f" "$(stat -f %z "$BUILD/$f")" "$exports" "$imports")"
 done
 
-# The unix half has no COFF tables to read, so the same question is asked of a
-# Mach-O in its own terms: a build tree file that still carries local symbols is
-# the unstripped one. 143 of them where the shipped file has none.
-locals="$(nm -a "$BUILD/winebus.so" | /usr/bin/grep -cE '^[0-9a-f]+ [a-z] ' || true)"
-[ "$locals" = 0 ] || die "winebus.so in $BUILD has $locals local symbols; it is the unstripped file. Rebuild with scripts/build-controller-bus.sh"
-soexp="$(nm -gU "$BUILD/winebus.so" | /usr/bin/grep -c . || true)"
-solibs="$(otool -L "$BUILD/winebus.so" | tail -n +2 | /usr/bin/grep -c . || true)"
-say "$(printf '%-12s %8s bytes, %4s exported symbols, %4s linked libraries, stripped' winebus.so "$(stat -f %z "$BUILD/winebus.so")" "$soexp" "$solibs")"
-
 echo "[2/4] the engine it names against the media sets"
 # Every media stamp records the one supported engine version. The optional set
 # must say the same, or the two sets disagree about what this project supports.
@@ -94,8 +85,8 @@ for j in "$RUNTIME"/engine-built-for*.json; do
        The two sets must agree about the supported engine. Rebuild against it."
 done
 say "engine    : $ver, the same as every engine-built-for*.json"
-say "flat      : runtime/engine-controller-{winebus.sys,setupapi.dll,ntoskrnl.exe,winebus.so,built-for.json}"
-say "mirror    : runtime/engine-payload-controller/wine/x86_64-windows/, wine/x86_64-unix/ and built-for.json"
+say "flat      : runtime/engine-controller-{winebus.sys,setupapi.dll,ntoskrnl.exe,built-for.json}"
+say "mirror    : runtime/engine-payload-controller/wine/x86_64-windows/ and built-for.json"
 
 echo "[3/4] copying"
 if [ "$CHECK" = 1 ]; then
@@ -105,23 +96,16 @@ fi
 cp "$BUILD/winebus.sys"  "$RUNTIME/engine-controller-winebus.sys"
 cp "$BUILD/setupapi.dll" "$RUNTIME/engine-controller-setupapi.dll"
 cp "$BUILD/ntoskrnl.exe" "$RUNTIME/engine-controller-ntoskrnl.exe"
-# The unix half. It goes under a DIFFERENT directory inside an engine than the
-# three PE files do -- lib/wine/x86_64-unix/, not lib/wine/x86_64-windows/ --
-# which is why the mirror below has a second directory and why the flat name
-# keeps the .so extension rather than being disambiguated by hand.
-cp "$BUILD/winebus.so"   "$RUNTIME/engine-controller-winebus.so"
 cp "$BUILD/controller-built-for.json" "$RUNTIME/engine-controller-built-for.json"
 say "runtime/engine-controller-* refreshed"
-mkdir -p "$MIRROR/wine/x86_64-windows" "$MIRROR/wine/x86_64-unix"
+mkdir -p "$MIRROR/wine/x86_64-windows"
 cp "$BUILD/winebus.sys"  "$MIRROR/wine/x86_64-windows/winebus.sys"
 cp "$BUILD/setupapi.dll" "$MIRROR/wine/x86_64-windows/setupapi.dll"
 cp "$BUILD/ntoskrnl.exe" "$MIRROR/wine/x86_64-windows/ntoskrnl.exe"
-cp "$BUILD/winebus.so"   "$MIRROR/wine/x86_64-unix/winebus.so"
 cp "$BUILD/controller-built-for.json" "$MIRROR/built-for.json"
 say "runtime/engine-payload-controller/ refreshed to match"
 say "if the sizes or counts above moved, refresh the table in runtime/engine-payload-controller/README.md:"
-say "check-builds.sh reads the export and import counts out of it, and the"
-say "exported-symbol and linked-library counts for the unix half."
+say "check-builds.sh reads the export and import counts out of it."
 
 echo "[4/4] the tree still agrees with itself"
 # Run after, not before: this is the step that can break it.

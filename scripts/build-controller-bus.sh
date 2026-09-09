@@ -1,10 +1,9 @@
 #!/bin/bash
 #
-# Build the four engine files that let a Windows client learn which bus a
-# controller is on, and let wine keep the pad to itself while it has it:
-# winebus.sys (mgvf-0002, and mgvf-0005, mgvf-0007 and mgvf-0008 for the pad
-# that must not be told), setupapi.dll (mgvf-0003), ntoskrnl.exe (mgvf-0004) --
-# three PE files -- and winebus.so (mgvf-0006), the UNIX half of winebus.
+# Build the three PE files that let a Windows client learn which bus a
+# controller is on: winebus.sys (mgvf-0002, and mgvf-0005 and mgvf-0007 for the
+# pad that must not be told), setupapi.dll (mgvf-0003) and ntoskrnl.exe
+# (mgvf-0004).
 #
 #     scripts/build-controller-bus.sh
 #
@@ -22,31 +21,24 @@
 # is the bill for that lie: a client told the pad is wired asks for the pad's
 # speaker, headphone jack and microphone, which are what a cable is for, so the
 # emulation takes those fields back out of the report on the pad's behalf and
-# leaves every other byte as the client wrote it. mgvf-0008 is the odd one out
-# and is marked as such wherever it is named: an EXPERIMENT rather than a fix.
-# In the emulation path a feature-report WRITE is answered as if it had
-# succeeded and no byte of it goes to the pad, because the feature write is the
-# one piece of traffic present in every session the pad left within seconds and
-# absent from the one it stayed in. It is what a fresh install does, and a
-# registry value puts the write back on the wire without another build. What it
-# does not establish is in its own header, at length.
+# leaves every other byte as the client wrote it.
 #
-# AND WHY THERE IS NOW A FOURTH FILE. mgvf-0006 changes how winebus OPENS the
-# pad, and that is bus_iohid.c, which compiles into the unix half. Measured
-# from macOS's own log on 2026-09-08: macOS drives a connected DualSense itself
-# and writes Bluetooth output reports to it, winebus opened the same pad shared
-# and wrote its own, and macOS's writes then time out -- 163 of them in a day,
-# every one inside a minute a game was running under wine -- after which its
-# driver tears itself down and the Bluetooth link drops. So the pad is seized,
-# and the set grows a unix half: dlls/winebus.sys/winebus.so, which the engine
-# has been carrying as CodeWeavers' own build until now.
+# TWO PATCHES IN source-patches/ ARE NOT IN THIS LIST, on purpose. mgvf-0006
+# seizes the pad from macOS and mgvf-0008 answers a feature write without
+# sending it; both were written, built and run, and neither ships. mgvf-0006 is
+# out because what it was built to stop -- macOS and wine writing to one
+# Bluetooth output pipe -- turned out not to be what made the pad drop its
+# link, and the one thing a user sees from it is that macOS and its own
+# applications cannot use the pad while a bottle holds it. mgvf-0008 was an
+# experiment and it has been run: with the feature write forwarded again the pad
+# did not die either, so the question is answered and the instrument comes out.
+# Both patch files stay in source-patches/ as the record of the work, and
+# source-patches/README.md says the same there.
 #
 # It reuses build-winegstreamer.sh's tree, on purpose: same sources, same
-# configure, same toolchain, same engine stamp. Run that first. winebus's
-# unixlib interface is unchanged -- mgvf-0006 adds one INT to struct
-# device_options, which both halves compile from the same header -- but the two
-# halves of winebus are still built and shipped together, because a struct they
-# both read changed shape.
+# configure, same toolchain, same engine stamp. Run that first. The patches touch
+# only the PE side (winebus's unixlib interface is unchanged), so only the three
+# PE files are produced; there is no unix half to pair them with.
 #
 # STRIPPED, AND PROVED SO. The configured tree compiles PE with -g and links with
 # -Wl,-debug:dwarf, so what make produces carries six .debug_* sections and a
@@ -55,13 +47,6 @@
 # build directory keeps the unstripped one as <name>.unstripped. Stripping is
 # not taken on faith: the export and import tables of the stripped file are
 # compared with the unstripped one and the stamp is not written if they differ.
-#
-# The .so gets the same treatment in the terms a Mach-O has. It has no COFF
-# tables, so what is compared across the strip is the EXPORTED SYMBOL LIST and
-# the LINKED LIBRARIES -- what a loader reads -- and what must be gone
-# afterwards is the local symbol table rather than a .debug_ section: macOS
-# keeps DWARF in the .o files, so an unstripped .so carries 143 local symbols
-# and no debug section at all. CodeWeavers ship theirs with none either.
 #
 # Part of MacGameVideoFix — https://github.com/MathiasKowoll/MacGameVideoFix
 # SPDX-License-Identifier: GPL-3.0-or-later
@@ -96,17 +81,13 @@ done
 # the context it wants is the text mgvf-0007 replaced, and the build then
 # reported a patch it had applied itself as FAILED.
 #
-# mgvf-0008 rewrites mgvf-0007's lines the same way, so the question was asked
-# again with seven in the list: the ordered reversal answers all seven
-# correctly, and needed no change to do it.
-#
 # So the question is asked where it can be answered: in a SCRATCH COPY of the
 # files the set touches, with the stack taken back off it LAST FIRST. Reversing
 # mgvf-0007 there puts the copy back into the state mgvf-0005 was applied to,
 # and mgvf-0005's own reversal then says what it always meant. Nothing is
 # written to the tree by the test; the tree is only ever forward-applied to,
 # and in order.
-PATCHSET="mgvf-0002 mgvf-0003 mgvf-0004 mgvf-0005 mgvf-0006 mgvf-0007 mgvf-0008"
+PATCHSET="mgvf-0002 mgvf-0003 mgvf-0004 mgvf-0005 mgvf-0007"
 patch_file() { ls "$OWNPATCHES/$1"-*.patch 2>/dev/null | head -1; }
 for p in $PATCHSET; do
   [ -n "$(patch_file "$p")" ] || { say "no patch numbered $p in $OWNPATCHES"; exit 1; }
@@ -135,27 +116,19 @@ for p in $PATCHSET; do
   esac
 done
 
-# ---- 2. the three PE files and the unix half ----------------------------------
-#
-# The unix half is dlls/winebus.sys/winebus.so in this tree, not under an
-# x86_64-unix/ directory: the PE halves are built into a per-arch subdirectory
-# and the unix half is not, which is the same shape winegstreamer has and the
-# reason build-winegstreamer.sh reads its .so from the module directory too.
+# ---- 2. just the three PE files -----------------------------------------------
 ( cd "$OUT/wine-build" && make -j8 dlls/winebus.sys/x86_64-windows/winebus.sys \
                                   dlls/setupapi/x86_64-windows/setupapi.dll \
-                                  dlls/ntoskrnl.exe/x86_64-windows/ntoskrnl.exe \
-                                  dlls/winebus.sys/winebus.so >"$OUT/make-controller.log" 2>&1 ) \
+                                  dlls/ntoskrnl.exe/x86_64-windows/ntoskrnl.exe >"$OUT/make-controller.log" 2>&1 ) \
   || { say "make failed, see $OUT/make-controller.log"; exit 1; }
 
 SYS="$OUT/wine-build/dlls/winebus.sys/x86_64-windows/winebus.sys"
 DLL="$OUT/wine-build/dlls/setupapi/x86_64-windows/setupapi.dll"
 KRN="$OUT/wine-build/dlls/ntoskrnl.exe/x86_64-windows/ntoskrnl.exe"
-USO="$OUT/wine-build/dlls/winebus.sys/winebus.so"
-[ -f "$SYS" ] && [ -f "$DLL" ] && [ -f "$KRN" ] && [ -f "$USO" ] || { say "build produced no output"; exit 1; }
+[ -f "$SYS" ] && [ -f "$DLL" ] && [ -f "$KRN" ] || { say "build produced no output"; exit 1; }
 cp "$SYS" "$OUT/winebus.sys.unstripped"
 cp "$DLL" "$OUT/setupapi.dll.unstripped"
 cp "$KRN" "$OUT/ntoskrnl.exe.unstripped"
-cp "$USO" "$OUT/winebus.so.unstripped"
 
 # ---- 3. strip, and prove the strip changed nothing that matters ---------------
 #
@@ -183,51 +156,6 @@ for name in winebus.sys setupapi.dll ntoskrnl.exe; do
   say "$name: $(stat -f %z "$full") -> $(stat -f %z "$lean") bytes, $exports exports, tables identical, no symbols, no debug sections"
 done
 
-# ---- 3b. the unix half: the same argument, in the terms a Mach-O has ---------
-#
-# strip -S -x: -S drops the debugging entries, -x the local symbols. The global
-# symbol table is what a loader reads and it is left alone -- and then checked
-# rather than trusted, exactly as the COFF tables are above: the exported
-# symbols and the linked libraries are listed from both files and compared, and
-# a difference stops the build. What must be GONE afterwards is the local
-# symbol table, not a .debug_ section: macOS leaves the DWARF in the .o files,
-# so the unstripped .so has 143 local symbols and no debug section at all, and
-# CodeWeavers' own winebus.so has neither.
-#
-# The load is checked too, the way build-winegstreamer.sh checks its own .so:
-# an @rpath dependency that is not in the engine beside it, or a surviving
-# /opt/cxoffice path -- CodeWeavers' build prefix, which exists on no Mac --
-# is a file that cannot load its own dependencies. This one links ntdll.so, two
-# system frameworks and libSystem, so there is a single @rpath name to resolve
-# and its own LC_RPATH of @loader_path/ resolves it in the same directory.
-# CodeWeavers' build carries two further rpaths into lib64, for the libinotify
-# it links and this configure does not: inotify is used only by bus_udev.c,
-# which no macOS engine compiles in.
-exports_of() { nm -gU "$1" | sort; }
-libs_of()    { otool -L "$1" | tail -n +2 | sort; }
-full="$OUT/winebus.so.unstripped"; lean="$OUT/winebus.so"
-/usr/bin/strip -S -x -o "$lean" "$full"
-if ! cmp -s <(exports_of "$full") <(exports_of "$lean"); then
-  say "winebus.so: the exported symbols changed when stripped; refusing to stamp"
-  comm -3 <(exports_of "$full") <(exports_of "$lean") | head -20 | sed 's/^/      /'
-  rm -f "$lean"; exit 1
-fi
-if ! cmp -s <(libs_of "$full") <(libs_of "$lean"); then
-  say "winebus.so: the linked libraries changed when stripped; refusing to stamp"
-  comm -3 <(libs_of "$full") <(libs_of "$lean") | head -20 | sed 's/^/      /'
-  rm -f "$lean"; exit 1
-fi
-locals="$(nm -a "$lean" | /usr/bin/grep -cE '^[0-9a-f]+ [a-z] ' || true)"
-[ "$locals" = 0 ] || { say "winebus.so: $locals local symbols survived the strip, not 0; refusing to stamp"; rm -f "$lean"; exit 1; }
-if otool -L "$lean" | /usr/bin/grep -q "/opt/cxoffice"; then
-  say "winebus.so: an absolute cxoffice path survived; it could not load its own dependencies"; rm -f "$lean"; exit 1
-fi
-for d in $(otool -L "$lean" | /usr/bin/grep -oE "@rpath/[^ ]+" | /usr/bin/sed 's|@rpath/||'); do
-  [ "$d" = "winebus.so" ] && continue
-  [ -f "$ENGINE/lib/wine/x86_64-unix/$d" ] || { say "winebus.so: unresolved dependency $d"; rm -f "$lean"; exit 1; }
-done
-say "winebus.so: $(stat -f %z "$full") -> $(stat -f %z "$lean") bytes, $(exports_of "$lean" | wc -l | tr -d ' ') exported symbols, $(libs_of "$lean" | wc -l | tr -d ' ') linked libraries, lists identical, no local symbols"
-
 # ---- 4. the stamp the installer matches on, same fields as built-for.json ----
 #
 # engine_app is the ORIGIN, not the copy. A copy this project made records what
@@ -248,12 +176,11 @@ cat > "$OUT/controller-built-for.json" <<JSON
   "engine_app": "$STAMP_APP",
   "engine_version": "$(defaults read "$ENGINE_APP/Contents/Info.plist" CFBundleVersion 2>/dev/null || echo unknown)",
   "wine_build": "$(strings -a "$ENGINE/lib/wine/x86_64-unix/ntdll.so" | grep -oE 'wine-[0-9]+\.[0-9]+[^ ]*' | head -1)",
-  "patches": "mgvf-0002 mgvf-0003 mgvf-0004 mgvf-0005 mgvf-0006 mgvf-0007 mgvf-0008"
+  "patches": "mgvf-0002 mgvf-0003 mgvf-0004 mgvf-0005 mgvf-0007"
 }
 JSON
 say "built for: $(sed -n 's/.*"engine_app": "\(.*\)".*/\1/p' "$OUT/controller-built-for.json") / $(sed -n 's/.*"wine_build": "\(.*\)".*/\1/p' "$OUT/controller-built-for.json")"
 say "built:  $OUT/winebus.sys  ($(stat -f %z "$OUT/winebus.sys") bytes)"
 say "        $OUT/setupapi.dll ($(stat -f %z "$OUT/setupapi.dll") bytes)"
 say "        $OUT/ntoskrnl.exe ($(stat -f %z "$OUT/ntoskrnl.exe") bytes)"
-say "        $OUT/winebus.so   ($(stat -f %z "$OUT/winebus.so") bytes)  -- the unix half"
 say "put it in the repository with: scripts/install-controller-build.sh"
