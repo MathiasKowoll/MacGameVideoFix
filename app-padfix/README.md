@@ -90,11 +90,7 @@ is the same guard as above doing its job.
 
 `Half installed` means some of the three backups are there and some are not. The
 three only work together, so that is neither state; install again, or restore,
-and the log says what happened. It also means one other thing, for one kind of
-CrossOver: for a few hours this set installed a fourth file, `winebus.so`, and
-an engine that took that install still has it. That patch is not shipped any
-more, so such an engine reads `Half installed` too — and both buttons put
-CodeWeavers' `winebus.so` back, install before it writes anything else.
+and the log says what happened.
 
 ## Running it the first time
 
@@ -116,9 +112,8 @@ MacGamePadFix, and press **Open Anyway**.
 
 They are **Wine**, and Wine is **LGPL-2.1-or-later**. They are built from the
 Wine source of CrossOver 26.3.0.39832, revision `wine-11.0-8726-g2e2f5fca349`,
-with five patches of this project's on top — `mgvf-0002`, `mgvf-0003`,
-`mgvf-0004`, `mgvf-0005` and `mgvf-0007` — and all five are published in full,
-as patch files, in `source-patches/` of
+with eight patches of this project's on top — `mgvf-0002` through `mgvf-0009` —
+and all eight are published in full, as patch files, in `source-patches/` of
 
 > <https://github.com/MathiasKowoll/MacGameVideoFix>
 
@@ -127,21 +122,30 @@ what each patch does, gives the sha256 of every file as shipped, and says where
 the corresponding source is. Read it before redistributing these binaries; the
 licence asks that it travel with them.
 
-`mgvf-0005` is the odd one out and is worth knowing about: it lets a DualSense on
-Bluetooth be *presented* as if it were on USB, per device and off by default, for
-the two clients that refuse to work with a pad they know is wireless. It does
-nothing unless a registry value is set — `runtime/engine-payload-controller/README.md`
-in the repository says how, and says plainly that the driver half has not yet run
-against a live pad.
+Three of the four files are PE and go into `lib/wine/x86_64-windows/`; the
+fourth, `winebus.so`, is the unix half of `winebus` and goes into
+`lib/wine/x86_64-unix/`. They come from one source tree and read one struct, so
+they only work as a set.
+
+Three of the eight are worth knowing about, and all three do nothing unless a
+registry value is set — `runtime/engine-payload-controller/README.md` in the
+repository says how, for each of them. `mgvf-0005` lets a DualSense on Bluetooth
+be *presented* as if it were on USB, per device and off by default, for the two
+clients that refuse to work with a pad they know is wireless; the same file says
+plainly that the driver half has not yet run against a live pad. `mgvf-0008` is
+an **experiment** rather than a fix and is marked as one wherever it is named.
+`mgvf-0009` is a **preference** rather than either: it can rewrite the vibration
+a game asks for into the pad's other rumble mode, and scale it, on the strength
+of one person reporting that the other mode feels stronger.
 
 ## Building it
 
     app-padfix/build-app.sh
 
-One Swift file, `swiftc`, no dependencies. It copies five files out of `runtime/`
-unchanged — the installer and its four payload files — writes the `Info.plist`,
-reuses `app/AppIcon.icns`, and signs ad hoc. It fails before compiling anything
-if one of the five is missing, checks afterwards that every file the installer
+One Swift file, `swiftc`, no dependencies. It copies six files out of `runtime/`
+unchanged — the installer, its four engine files and their stamp — writes the
+`Info.plist`, reuses `app/AppIcon.icns`, and signs ad hoc. It fails before
+compiling anything if one of the six is missing, checks afterwards that every file the installer
 names is in the bundle, and checks that the copies are byte for byte what
 `runtime/` holds.
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Install (or remove) the controller-bus set this project builds, into a
-# CrossOver engine: winebus.sys, setupapi.dll and ntoskrnl.exe.
+# CrossOver engine: winebus.sys, setupapi.dll, ntoskrnl.exe and winebus.so.
 #
 #   install-engine-controller.sh <engine app>            install
 #   install-engine-controller.sh <engine app> --restore  remove
@@ -18,32 +18,32 @@
 # hidapi asks the HID device's parent devnode for its compatible ids and looks
 # for BTHENUM. Under wine CM_Get_Parent was a stub and winebus named no bus at
 # all, so the answer was always "not Bluetooth" -- Steam's log says
-# "bluetooth 0" for a pad that is -- and the pad never rumbled. With the three
-# files here the answer is the true one: rumble, the PS button and the touchpad
+# "bluetooth 0" for a pad that is -- and the pad never rumbled. With the files
+# here the answer is the true one: rumble, the PS button and the touchpad
 # work over Bluetooth, measured on 2026-09-08; trigger effects ride in the same
 # report, and the owner reports them in a title that sends them.
+#
+# The fourth file, winebus.so, is the unix half, and it is here for a different
+# fault: macOS drives a connected DualSense itself and writes Bluetooth output
+# reports to it, wine opened the same pad shared and wrote its own, and macOS's
+# writes then time out until its driver gives up and the Bluetooth link drops.
+# Measured from macOS's own log on 2026-09-08. So wine now SEIZES a DualSense
+# that arrived over Bluetooth, and that costs what it says: while a bottle
+# holds the pad, macOS and its own applications cannot use it. The pad comes
+# back when the bottle shuts down. A registry value turns it off per device --
+# see runtime/engine-payload-controller/README.md.
 #
 # Same shape as install-engine-media.sh, same rules: it writes into the ENGINE,
 # which every bottle and every game on it shares, so it refuses an engine these
 # were not built for -- name AND version, because a patched fork and stock
 # CrossOver report the same version -- keeps the original beside each file as
 # .mgvf-stock, never lets a backup be our own build, and replaces by rename so a
-# process holding the old file keeps the old file. Unlike the media pair there
-# is no unix half: the three are PE files built from the engine's own wine
-# source with mgvf-0002, mgvf-0003, mgvf-0004, mgvf-0005 and mgvf-0007 on top,
-# and --restore puts CodeWeavers' three back.
-#
-# THERE WAS A FOURTH FILE FOR A WHILE. mgvf-0006 seized the pad from macOS and
-# was the only change to the unix half, so between 2026-09-08 and this version
-# the set installed winebus.so into lib/wine/x86_64-unix/ as well. That patch
-# does not ship: it is not what made the pad drop its link, and what a user
-# sees from it is that macOS and its own applications cannot use the pad while
-# a bottle holds it. Without it our winebus.so would be CodeWeavers' own build,
-# so there is nothing of ours to put there. An engine that received that
-# install still carries ours, with theirs beside it as .mgvf-stock: --status
-# calls such an engine broken, --restore puts their file back, and an install
-# puts their file back before it writes the three PE files, because these three
-# must not be paired with a unix half compiled from another source state.
+# process holding the old file keeps the old file. Four files, built from the
+# engine's own wine source with mgvf-0002, mgvf-0003, mgvf-0004, mgvf-0005 and
+# mgvf-0006 on top, and --restore puts CodeWeavers' four back. THREE of them
+# are PE and live in lib/wine/x86_64-windows/; the fourth is the unix half of
+# winebus and lives in lib/wine/x86_64-unix/, a different directory, which is
+# the one thing about this set that cannot be guessed from the other three.
 #
 # It signs. The media installer leaves signing to make-engine-copy.sh, which
 # runs it partway through and signs at its last step. This one is turned on and
@@ -76,33 +76,31 @@ if [ "${MGVF_STATUS_ONLY:-0}" = 1 ]; then ACTION=--status; fi
 SYS="$HERE/engine-controller-winebus.sys"
 DLL="$HERE/engine-controller-setupapi.dll"
 KRN="$HERE/engine-controller-ntoskrnl.exe"
+USO="$HERE/engine-controller-winebus.so"
 BUILTFOR="$HERE/engine-controller-built-for.json"
 
 CX="$APP/Contents/SharedSupport/CrossOver"
 SYS_DEST="$CX/lib/wine/x86_64-windows/winebus.sys"
 DLL_DEST="$CX/lib/wine/x86_64-windows/setupapi.dll"
 KRN_DEST="$CX/lib/wine/x86_64-windows/ntoskrnl.exe"
-# Nothing of ours is installed here any more; this is where the set used to put
-# its unix half, and it is named so that an engine still carrying that install
-# can be recognised and given CodeWeavers' file back. x86_64-UNIX, not
-# -windows: the unix half of winebus is not a PE file and never lived with them.
+# x86_64-UNIX, not -windows. The unix half of winebus is not a PE file and does
+# not live with them.
 USO_DEST="$CX/lib/wine/x86_64-unix/winebus.so"
 
 [ -d "$CX" ] || { echo "error: not a CrossOver app: $APP" >&2; exit 1; }
 
 status() {
   if [ -f "$SYS_DEST.mgvf-stock" ] && [ -f "$DLL_DEST.mgvf-stock" ] \
-     && [ -f "$KRN_DEST.mgvf-stock" ] && [ ! -f "$USO_DEST.mgvf-stock" ]; then
+     && [ -f "$KRN_DEST.mgvf-stock" ] && [ -f "$USO_DEST.mgvf-stock" ]; then
     echo installed
   elif [ -f "$SYS_DEST.mgvf-stock" ] || [ -f "$DLL_DEST.mgvf-stock" ] \
      || [ -f "$KRN_DEST.mgvf-stock" ] || [ -f "$USO_DEST.mgvf-stock" ]; then
-    # Some but not all. The three only work together: mgvf-0004 exists because
-    # mgvf-0002 and mgvf-0003 alone still read the record of the first boot.
-    # A backup of the unix half counts as broken rather than as installed: it
-    # can only have been left by the version of this set that shipped a
-    # winebus.so, so that engine is carrying our unix half beside three PE
-    # files that were not built with it. Install or restore, and it is whole
-    # again -- both put CodeWeavers' winebus.so back.
+    # Some but not all. The first three only work together -- mgvf-0004 exists
+    # because mgvf-0002 and mgvf-0003 alone still read the record of the first
+    # boot -- and the two halves of winebus are built from one source tree and
+    # share a struct, so a mixed pair is not a supported combination either.
+    # An engine still carrying an earlier three-file install reads as broken
+    # here, and it is: install puts the fourth file in and it is whole again.
     echo broken
   else
     echo absent
@@ -136,19 +134,12 @@ case "$ACTION" in
   --restore)
       refuse_if_bottle_up
       n=0
-      for d in "$SYS_DEST" "$DLL_DEST" "$KRN_DEST"; do
+      for d in "$SYS_DEST" "$DLL_DEST" "$KRN_DEST" "$USO_DEST"; do
         if [ -f "$d.mgvf-stock" ]; then mv -f "$d.mgvf-stock" "$d"; n=$((n+1)); fi
       done
-      # The unix half is not installed any more, and it is still restored. An
-      # engine that took the four-file install has our winebus.so in it and
-      # CodeWeavers' beside it, and leaving that behind would be leaving a file
-      # of ours in an engine that reports nothing of ours in it.
-      so=0
-      if [ -f "$USO_DEST.mgvf-stock" ]; then mv -f "$USO_DEST.mgvf-stock" "$USO_DEST"; so=1; fi
-      if [ "$n" -gt 0 ] || [ "$so" = 1 ]; then
+      if [ "$n" -gt 0 ]; then
         reseal
-        echo "restored $n of 3"
-        [ "$so" = 1 ] && echo "and winebus.so, which an earlier version of this set installed"
+        echo "restored $n of 4"
       else
         echo "nothing to restore"
       fi
@@ -157,7 +148,7 @@ case "$ACTION" in
   *) usage ;;
 esac
 
-for f in "$SYS" "$DLL" "$KRN" "$BUILTFOR"; do
+for f in "$SYS" "$DLL" "$KRN" "$USO" "$BUILTFOR"; do
   [ -f "$f" ] || { echo "error: $(basename "$f") is not beside this script" >&2; exit 1; }
 done
 
@@ -199,8 +190,8 @@ if [ -z "$have_engine" ]; then
 fi
 if [ "$want_engine" != "$have_engine" ]; then
   echo "error: these were built for engine $want_engine and this is $have_engine." >&2
-  echo "       Refusing rather than installing a winebus, setupapi and ntoskrnl" >&2
-  echo "       built from a different wine. Rebuild with" >&2
+  echo "       Refusing rather than installing a winebus -- both halves --" >&2
+  echo "       setupapi and ntoskrnl built from a different wine. Rebuild with" >&2
   echo "       scripts/build-controller-bus.sh against this engine, or leave it alone." >&2
   exit 1
 fi
@@ -234,17 +225,9 @@ install_one() {
   cp "$src" "$dest.mgvf-new" && mv -f "$dest.mgvf-new" "$dest"
   echo "  $(basename "$dest")  <- $(basename "$src")"
 }
-# Before anything is written: an engine that took the four-file install still
-# has our winebus.so in it. These three PE files were not built with mgvf-0006,
-# the patch that file existed for, so pairing them with it is the one
-# combination this set must not leave behind. CodeWeavers' own file goes back
-# first, and only then are the three installed.
-if [ -f "$USO_DEST.mgvf-stock" ]; then
-  mv -f "$USO_DEST.mgvf-stock" "$USO_DEST"
-  echo "  winebus.so  <- CodeWeavers' own, put back: the unix half left this set"
-fi
 install_one "$SYS" "$SYS_DEST"
 install_one "$DLL" "$DLL_DEST"
 install_one "$KRN" "$KRN_DEST"
+install_one "$USO" "$USO_DEST"
 reseal
 echo "installed into $(basename "$APP") ($have_engine)"

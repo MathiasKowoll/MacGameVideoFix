@@ -18,14 +18,21 @@ MACOS="$APP/Contents/MacOS"
 RES="$APP/Contents/Resources"
 CACHE="${TMPDIR:-/tmp}/mgpf-swift-cache"
 
-# The five files this app exists to carry, all from runtime/ and none of them
+# The six files this app exists to carry, all from runtime/ and none of them
 # rebuilt here. install-engine-controller.sh resolves its payload as
 # $HERE/<name>, so a flat Resources directory is exactly the layout it wants.
+#
+# The set is FOUR engine files, not three: winebus.sys, setupapi.dll and
+# ntoskrnl.exe are PE, and engine-controller-winebus.so is the unix half of
+# winebus, which the installer writes to lib/wine/x86_64-unix/ rather than
+# beside the others. It arrived with mgvf-0006 and this list did not follow it
+# then; the check below is what said so.
 PAYLOAD=(
   install-engine-controller.sh
   engine-controller-winebus.sys
   engine-controller-setupapi.dll
   engine-controller-ntoskrnl.exe
+  engine-controller-winebus.so
   engine-controller-built-for.json
 )
 
@@ -86,7 +93,7 @@ done
 chmod +x "$RES/install-engine-controller.sh"
 
 # The licence note travels inside the bundle rather than only in the repository.
-# The three binaries are wine under LGPL-2.1-or-later, and the notice has to
+# The four binaries are wine under LGPL-2.1-or-later, and the notice has to
 # reach whoever ends up holding them -- which, for an app meant to be handed
 # around, is somebody who will never see this directory.
 cp "$HERE/CONTROLLER-LICENCES.md" "$RES/"
@@ -120,8 +127,8 @@ echo "==> every file the installer names is present"
 
 # The payload must be byte for byte what runtime/ holds. A copy taken from a
 # build outlives the build it came from -- CODEC-LICENCES.md says so about the
-# codecs, and it is just as true of three PE files whose whole contract is the
-# stamp that travels with them.
+# codecs, and it is just as true of four engine files whose whole contract is
+# the stamp that travels with them.
 for f in "${PAYLOAD[@]}"; do
   cmp -s "$ROOT/runtime/$f" "$RES/$f" || {
     echo "error: $f in the bundle differs from runtime/$f" >&2; exit 1; }

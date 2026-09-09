@@ -491,19 +491,42 @@ scripts/build-controller-bus.sh
 scripts/install-controller-build.sh
 ```
 
-These two produce a second engine set, and it is **optional**: `winebus.sys`,
-`setupapi.dll` and `ntoskrnl.exe` from the same tree, three PE files with five
-patches of ours applied. `mgvf-0002`, `mgvf-0003` and `mgvf-0004` let a Windows
-client learn a controller is on Bluetooth. A DualSense then rumbles over
-Bluetooth, and its PS button and touchpad work, as they always did over USB;
-trigger effects ride in the same report, and a title that sends them over
-Bluetooth is reported working.
+These two produce a second engine set, and it is **optional**: four files from
+the same tree with eight patches of ours applied — `winebus.sys`,
+`setupapi.dll` and `ntoskrnl.exe`, and `winebus.so`, the unix half of winebus.
+`mgvf-0002`, `mgvf-0003` and `mgvf-0004` let a Windows client learn a
+controller is on Bluetooth. A DualSense then rumbles over Bluetooth, and its PS
+button and touchpad work, as they always did over USB; trigger effects ride in
+the same report, and a title that sends them over Bluetooth is reported working.
 The same `winebus.sys` also carries `mgvf-0005`, a per-device registry option
 — off by default — that presents a DualSense on Bluetooth as if it were on
 USB, for Sony's libScePad and for Steam's *plug in your controller* dialog,
 which both insist on a wired pad. Either DualSense, plain or Edge, can be
 presented that way; `runtime/engine-payload-controller/README.md` says how to
 turn it on, and that the driver half has not yet run against a live pad.
+`mgvf-0006` is the fourth, and it is why the set now carries a unix half:
+macOS drives a connected DualSense itself, wine opened the same pad shared and
+wrote to it too, and with two writers on the pad's single Bluetooth output pipe
+macOS's writes timed out until its driver gave up and the Bluetooth link
+dropped — measured from macOS's own log, 163 timeouts in a day and every one of
+them while a game was running under wine. wine now **seizes** such a pad, and
+that costs exactly what it sounds like: **while a bottle holds the pad, macOS
+and its own applications cannot use it**, and it is released when the bottle
+closes. On by default for a DualSense on Bluetooth, and only for that; a
+registry value turns it off per device.
+
+That claim is the right one to make while a game runs: two programs writing
+to one pad over one Bluetooth pipe is the anomaly, and of the two the game
+the pad is in your hands for is the one that should win. What it costs is
+not the exclusivity but its **scope** — it lasts as long as the **bottle**,
+not as long as the game. Steam stays running long after a title exits and
+the pad stays claimed until the bottle shuts down, so it is unavailable to
+macOS through a stretch that is no longer a game. Narrowing the claim to
+*while a client has the device open* is the improvement, and it has not been
+made yet. Beside it there is one impression, and it is not a measurement:
+with the set installed without `mgvf-0006` the vibration felt noticeably
+weaker, and felt right again once the four-file set was back — two engine
+builds compared by hand, with nothing instrumented.
 
 `mgvf-0007` is the bill for `mgvf-0005`'s lie. A client told the pad is wired
 asks for the part of a DualSense a cable is for — its speaker, its headphone
@@ -521,23 +544,46 @@ is measured is the order of events, and what the change rests on is that the
 request asks for hardware the pad has only on a cable and that nothing under
 wine is on the other end of it.
 
-Two patches in `source-patches/` are deliberately **not** in this set.
-`mgvf-0006` seizes a Bluetooth DualSense from macOS so that wine is the only
-writer on its output pipe, which it does — but that contention is not what made
-the pad drop its link, and the one thing a user sees from the patch is that
-macOS and its own applications cannot use the pad while a bottle holds it, so
-it is not worth imposing on a first install. `mgvf-0008` was an **experiment**
-rather than a fix: it answered a feature write in the emulation path without
-sending it, to ask whether that write was what made the pad leave. It has been
-run, and with the write forwarded again the pad did not die either, so the
-question is settled and the instrument comes out. Both patch files stay in
-`source-patches/` as the record of the work, and `source-patches/README.md`
-says what each one found.
+`mgvf-0008` is **an experiment rather than a fix** — the only thing in this project that is, and it is marked as one
+wherever it is named. In that same fatal trace, 51 milliseconds before the
+audio request, the title's Sony library **wrote a feature report** to the pad,
+and macOS's own log for the moment the link ended says the pad initiated the
+parting: *"Received disconnection indication ... reason 431"*. Not a link
+failure and not macOS letting go. That trace holds exactly one feature write,
+and the two-hour session in which the same pad worked perfectly on Bluetooth
+under Steam holds none, and every session the pad left within seconds is one
+that library was driving. So the emulation now **answers a feature write
+as if it had succeeded and sends no byte of it to the pad** — answered and not
+refused, because that library drops the pad itself when a feature write fails,
+which would measure the library rather than the pad. It is what a fresh install
+does, on purpose, because an experiment that has to be switched on is one
+nobody runs; a per-device registry value puts the write back on the wire
+without another build. **That the write is what makes the pad leave is not
+established** — the pad answered a feature read 43 milliseconds after it — and
+if the next trace shows the pad leaving at the same point anyway, this comes
+back out.
+
+`mgvf-0009` is the eighth and last, and it is neither a fix nor an experiment
+but a **preference**. A DualSense knows two ways to be told to vibrate, and a
+game that drives the pad through Unreal's WinDualShock asks for one of them: in
+a two-hour Bluetooth session with nothing lied to, the title wrote the pad's own
+report itself 6493 times, 335 of those with a motor set, reaching 255 — and all
+335 in the same mode, so the game is not asking for a weak effect. Compared
+directly on the pad with a six-pulse ladder, **the other mode at 255 felt
+clearly stronger**, and this mode at half strength felt like the game. That is a
+perception, on one person's hand, with nothing instrumented, and it is the whole
+of the evidence — so the rewrite is **off** unless a per-device registry value
+asks for it, and a second value scales the motor bytes by a percentage for
+anyone who wants more or less than the game asked for. It acts on **both**
+routes, the pad's own report as well as `mgvf-0005`'s translation, because the
+title measured writes that report itself; and either way the packet's CRC is
+computed again, because a pad ignores a report whose CRC does not cover its
+bytes.
 
 The set as a whole is an improvement rather than a fix: no row of the table
 needs it and the Motor column does not change. It is installed and removed with
 `runtime/install-engine-controller.sh <app> install | --status | --restore`,
-which keeps CodeWeavers' three files as `.mgvf-stock`, refuses any engine but the
+which keeps CodeWeavers' four files as `.mgvf-stock`, refuses any engine but the
 one both stamp fields name, refuses while a bottle is running, and re-signs the
 bundle itself. `make-engine-copy.sh` never installs it. The files ship stripped;
 `runtime/engine-payload-controller/README.md` says what that means and what

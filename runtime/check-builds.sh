@@ -311,9 +311,9 @@ bundle="$ROOT/app/MacGameVideoFix.app/Contents/Resources"
 bundle_drift=0
 if [ -d "$bundle" ]; then
   # *.sys, *.exe and *.so as well: the controller set ships two PE files that
-  # are not .dll, and the media pair's unix half was never in this list at all,
-  # so a stale winegstreamer.so in the app went unreported for as long as the
-  # list said "*.dll".
+  # are not .dll and a unix half that is a .so, and the media pair's unix half
+  # was never in this list at all, so a stale winegstreamer.so in the app went
+  # unreported for as long as the list said "*.dll".
   for f in "$HERE"/*.dll "$HERE"/*.sys "$HERE"/*.exe "$HERE"/*.so \
            "$HERE"/install-*.sh "$HERE"/stage-codecs.sh "$HERE"/pe.pl; do
     [ -f "$f" ] || continue
@@ -385,6 +385,7 @@ controller_drift=0
 for pair in "engine-controller-winebus.sys:wine/x86_64-windows/winebus.sys" \
             "engine-controller-setupapi.dll:wine/x86_64-windows/setupapi.dll" \
             "engine-controller-ntoskrnl.exe:wine/x86_64-windows/ntoskrnl.exe" \
+            "engine-controller-winebus.so:wine/x86_64-unix/winebus.so" \
             "engine-controller-built-for.json:built-for.json"; do
   flat="$HERE/${pair%%:*}"
   laid="$HERE/engine-payload-controller/${pair##*:}"
@@ -395,13 +396,21 @@ for pair in "engine-controller-winebus.sys:wine/x86_64-windows/winebus.sys" \
 done
 [ "$controller_drift" = 0 ] && echo "  payload: engine-payload-controller/ matches the flat engine-controller-* files"
 
-# The three PE files are our own builds and ship stripped: no .debug_ section,
-# no symbol table, and an export table and an import table identical to the
-# unstripped file's -- build-controller-bus.sh proves that as it strips. What is
-# checked here is that what ships is still that file: stripped, and with the
-# export and import counts the payload README records, read the way the codec
-# hashes are read out of CODEC-LICENCES.md. Without the tool it says so and
-# counts it, because "no reader" and "no drift" must never look the same.
+# The four files are our own builds and ship stripped: for the three PE ones no
+# .debug_ section, no symbol table, and an export table and an import table
+# identical to the unstripped file's -- build-controller-bus.sh proves that as
+# it strips. What is checked here is that what ships is still that file:
+# stripped, and with the counts the payload README records, read the way the
+# codec hashes are read out of CODEC-LICENCES.md. Without the tool it says so
+# and counts it, because "no reader" and "no drift" must never look the same.
+#
+# The fourth is the unix half, a Mach-O, and it has no COFF tables to compare.
+# The same question is asked in its own terms -- the exported symbols and the
+# linked libraries are what a loader reads, and a file that still carries local
+# symbols is the unstripped one -- with nm and otool, which ship with macOS.
+# It shares the loop and therefore the toolchain gate above it, which is worth
+# knowing when the gate reports: a machine without llvm-readobj checks neither
+# half rather than only the PE one.
 CREADME="$HERE/engine-payload-controller/README.md"
 READOBJ="$MINGW_BIN/llvm-readobj"; [ -x "$READOBJ" ] || READOBJ="$(command -v llvm-readobj 2>/dev/null || true)"
 OBJDUMP="$MINGW_BIN/llvm-objdump"; [ -x "$OBJDUMP" ] || OBJDUMP="$(command -v llvm-objdump 2>/dev/null || true)"
@@ -413,26 +422,41 @@ else
   rows=0
   while IFS='|' read -r _ rel _bytes exports imports _; do
     rel="$(echo "$rel" | tr -d ' \`')"; exports="$(echo "$exports" | tr -d ' ,')"; imports="$(echo "$imports" | tr -d ' ,')"
-    case "$rel" in wine/x86_64-windows/*) ;; *) continue ;; esac
+    case "$rel" in wine/x86_64-windows/*|wine/x86_64-unix/*) ;; *) continue ;; esac
     rows=$((rows + 1))
     f="$HERE/engine-controller-$(basename "$rel")"
     if [ ! -f "$f" ]; then
       echo "  controller missing: $rel"; controller_drift=$((controller_drift + 1)); continue
     fi
     bad=""
-    "$OBJDUMP" -h "$f" | grep -q '\.debug_' && bad="$bad, carries .debug_ sections"
-    syms="$("$READOBJ" --file-header "$f" | sed -n 's/.*SymbolCount: *//p')"
-    [ "$syms" = 0 ] || bad="$bad, has a symbol table ($syms symbols)"
-    have_exp="$("$READOBJ" --coff-exports "$f" | grep -cE '^[[:space:]]*Name:')"
-    have_imp="$("$READOBJ" --coff-imports "$f" | grep -cE '^[[:space:]]*Symbol:')"
-    [ "$have_exp" = "$exports" ] || bad="$bad, exports $have_exp where the README records $exports"
-    [ "$have_imp" = "$imports" ] || bad="$bad, imported symbols $have_imp where the README records $imports"
+    case "$rel" in
+    wine/x86_64-unix/*)
+      # The unix half. The README's third and fourth columns carry exported
+      # symbols and linked libraries for this row, which is what those two
+      # numbers mean for a Mach-O.
+      locals="$(nm -a "$f" | grep -cE '^[0-9a-f]+ [a-z] ' || true)"
+      [ "$locals" = 0 ] || bad="$bad, carries $locals local symbols, so it is not the stripped file"
+      have_exp="$(nm -gU "$f" | grep -c . || true)"
+      have_imp="$(otool -L "$f" | tail -n +2 | grep -c . || true)"
+      [ "$have_exp" = "$exports" ] || bad="$bad, exports $have_exp symbols where the README records $exports"
+      [ "$have_imp" = "$imports" ] || bad="$bad, links $have_imp libraries where the README records $imports"
+      ;;
+    *)
+      "$OBJDUMP" -h "$f" | grep -q '\.debug_' && bad="$bad, carries .debug_ sections"
+      syms="$("$READOBJ" --file-header "$f" | sed -n 's/.*SymbolCount: *//p')"
+      [ "$syms" = 0 ] || bad="$bad, has a symbol table ($syms symbols)"
+      have_exp="$("$READOBJ" --coff-exports "$f" | grep -cE '^[[:space:]]*Name:')"
+      have_imp="$("$READOBJ" --coff-imports "$f" | grep -cE '^[[:space:]]*Symbol:')"
+      [ "$have_exp" = "$exports" ] || bad="$bad, exports $have_exp where the README records $exports"
+      [ "$have_imp" = "$imports" ] || bad="$bad, imported symbols $have_imp where the README records $imports"
+      ;;
+    esac
     [ -z "$bad" ] || { echo "  controller drifted: $(basename "$rel")${bad}"; controller_drift=$((controller_drift + 1)); }
   done < "$CREADME"
   if [ "$rows" = 0 ]; then
-    echo "  controller: the README records no wine/x86_64-windows/ rows to check against"; controller_drift=$((controller_drift + 1))
+    echo "  controller: the README records no wine/ rows to check against"; controller_drift=$((controller_drift + 1))
   elif [ "$controller_drift" = 0 ]; then
-    echo "  controller: all $rows stripped, with the export and import counts the README records"
+    echo "  controller: all $rows stripped, with the counts the README records"
   fi
 fi
 

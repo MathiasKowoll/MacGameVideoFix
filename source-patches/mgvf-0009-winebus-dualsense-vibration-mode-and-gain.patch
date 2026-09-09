@@ -1,0 +1,698 @@
+From: MacGameVideoFix <https://github.com/MathiasKowoll/MacGameVideoFix>
+Subject: [PATCH] winebus.sys: a stronger rumble for a DualSense on Bluetooth, and an intensity setting
+
+WHERE THIS CAME FROM
+
+MacGameVideoFix's own series, mgvf-NNNN, written on 2026-09-09, the eighth of
+ours and the seventh in the controller-bus set. Unlike mgvf-0007 and mgvf-0008
+it is NOT a follow-up to mgvf-0005: it acts on the pad's own Bluetooth output
+report, so it works for a client that was never lied to as well as for one that
+was, and its main case is the first of those. Nothing in it is specific to this
+project.
+
+THIS IS A PREFERENCE, NOT A REPAIR
+
+Everything the set does elsewhere repairs something measured to be wrong. This
+changes what a game asked for into something the person holding the pad likes
+better, which is a different kind of claim, and it is why both values below are
+OFF by default: a build installed with nothing under the pad's key sends every
+packet exactly as the client wrote it, byte for byte and CRC included.
+
+WHAT THE GAME ACTUALLY ASKS FOR
+
+steam-hid-game-145815.log, a two-hour Bluetooth session of an Unreal title that
+drives the pad through Unreal's WinDualShock, on 2026-09-08. The pad is
+presented truthfully -- no emulation, no mgvf-0005 -- and the title writes the
+pad's own report itself:
+
+    /usr/bin/grep -c "write output report id 49 length 78"  ->  6493
+
+6493 output reports, every one of them a 78-byte 0x31. 335 of those carry a
+non-zero motor byte, and they reach the top of the scale: 36 packets at right
+255 with the left motor at rest, 18 with both motors at 255, and the rest spread
+below -- 17 at 89/0, 12 at 153/0, 11 at 38/25, 10 at 38/0, 8 at 76/76.
+
+ALL 335 CARRY THE SAME MODE. First flag byte 0x02, second flag byte 0x00, and
+byte 38 of the common block 0x04. Not most of them: all of them. So the game is
+not asking for a weak effect and there is no gain to be found by looking harder
+at what it sends -- at 255/255 it is asking for everything there is. It is
+asking for full strength on one particular path.
+
+THE TWO PATHS, AND WHERE THEIR NAMES COME FROM
+
+Not from memory. SDL 2.30.12's src/joystick/hidapi/SDL_hidapi_ps5.c, read from
+the copy in this build directory, lays out this exact block field for field --
+ucEnableBits1 at 0, ucRumbleRight at 2, ucRumbleLeft at 3, ucEnableBits3 at 38
+-- and its rumble path chooses between two ways of driving the motors by the
+pad's firmware version:
+
+    firmware < 2.24     ucEnableBits1 |= 0x01   /* Enable rumble emulation */
+                        and BOTH motor bytes are halved, with the comment
+                        "Shift to reduce effective rumble strength to match
+                        Xbox controllers"
+
+    firmware >= 2.24    ucEnableBits3 |= 0x04   /* Enable improved rumble
+                        emulation on 2.24 firmware and newer */
+                        and the motor bytes are sent as they are
+
+    both branches       ucEnableBits1 |= 0x02   /* Disable audio haptics */
+
+The mode in the log is the second of those, bit for bit: 0x02 in the first flag
+byte, 0x04 in byte 38. The first is what this patch can put in its place.
+
+THE EVIDENCE FOR PREFERRING THE OTHER ONE, AND HOW SOFT IT IS
+
+The owner compared the two directly on the pad with a six-pulse ladder --
+dsrumble3.c, which sends this exact packet through IOKit at 255 and at 127 in
+three modes: legacy (flag0 0x01|0x02), the haptic path (flag0 0x02, byte 38
+0x04), and both bits at once -- and reported that LEGACY COMPATIBLE VIBRATION
+AT 255 FEELS CLEARLY STRONGER than the haptic mode at 255, and that the haptic
+mode at 127 is what the game feels like.
+
+THAT PERCEPTION IS THE EVIDENCE FOR THIS PATCH. It is a preference, measured on
+one person's hand, not a physical measurement of anything: no accelerometer, no
+current draw, no repetition, nothing blind. It is stated here as what it is
+because it is the whole of the case, and it is why the rewrite has to be asked
+for.
+
+THE CHANGE
+
+Two REG_DWORD values under the key mgvf-0005's UsbEmulation, mgvf-0006's
+SeizeDevice and mgvf-0008's ForwardFeatureWrites already live under, named
+after the pad's real ids in lower-case hex with a slash:
+
+    HKLM\System\CurrentControlSet\Services\winebus\Devices\<vid>/<pid>
+
+        VibrationMode  REG_DWORD  absent or 0 (default): every packet goes out
+                                  exactly as the client wrote it.
+                                  1: where the client selected the haptic path,
+                                  the legacy compatible motors are selected
+                                  instead.
+
+        VibrationGain  REG_DWORD  a percentage over the two motor bytes. Absent
+                                  or 100: untouched. It saturates at 255, so a
+                                  game that asks for 89 can be made to ask for
+                                  more and one already asking for 255 cannot go
+                                  higher. Clamped to 1000, and 0 reads as
+                                  absent.
+
+Scoped to a hidraw DualSense (054c:0ce6, 054c:0df2) that arrived over
+Bluetooth, which is where the corpus and the ladder both are. A pad on a cable,
+a DualShock 4 and every other device are untouched, and both values are read
+once, as the device arrives, before mgvf-0005 has a chance to replace the pid
+in the desc -- mgvf-0008's reason for reading where it reads, and the same one.
+
+The clamp is 1000 rather than something larger because 1000% is already enough
+to saturate any motor value of 26 or more, and a larger ceiling would only make
+an unintended overflow easier to write by hand. It is a chosen limit, not a
+measured one; the corpus itself has motor values all the way down to 1.
+VibrationGain 0 is read as absence rather than as silence, so that a value
+written as 0 and a key with no value cannot mean two different things -- the
+reading mgvf-0005 gives UsbEmulation. A gain of 1 is how to make the pad nearly
+silent.
+
+WHICH BIT IS CLEARED, WHICH IS SET, AND WHY EACH
+
+    SET flag0 bit 0x01, the legacy compatible motors. It is the bit SDL sets
+    when it wants the motors driven the older way, and the bit the ladder's
+    mode A set for the pulse that was preferred. Set rather than assigned, so
+    the rest of the byte survives.
+
+    CLEAR byte 38 bit 0x04, the haptic path's own motor emulation. It is the
+    bit SDL sets for the other branch and the only bit of that byte the 335
+    measured packets carry -- their byte 38 is exactly 0x04, nothing else.
+    Leaving it set while setting 0x01 would ask the pad for both at once, which
+    is the ladder's mode C: a third thing, and not the one that was preferred.
+
+    LEAVE flag0 bit 0x02 alone. SDL sets it on BOTH branches, so it is not the
+    choice between them; all three of the ladder's modes carried it; and what
+    its own comment says it does -- "Disable audio haptics" -- is not this
+    patch's business.
+
+    LEAVE EVERY OTHER BYTE alone, the second flag byte included, for the reason
+    mgvf-0007 leaves it alone: nothing measured says what its other bits mean.
+
+    DO NOT HALVE THE MOTORS. SDL does, on the legacy branch, to match an Xbox
+    pad. Doing the same here would undo exactly what the ladder found: it sent
+    the SAME value on both paths and the legacy one felt stronger.
+    VibrationGain is the separate and explicit way to change the number.
+
+BOTH ROUTES, BECAUSE THE MEASURED ONE IS NOT THE EMULATED ONE
+
+The title above writes report 0x31 itself, with no emulation involved, so a
+hook that lived only in mgvf-0005's translation would never see a single packet
+this patch was written for. An output report 0x31 arriving for such a pad is
+rewritten on the raw route too, in a COPY -- the client's buffer is not ours to
+change -- and in the emulation path the rewrite happens after the translation
+and after mgvf-0007's masking, so that what is rewritten is the packet as it
+would otherwise have gone out.
+
+Either way THE CRC IS COMPUTED AGAIN, over the bytes actually being sent. That
+is not tidiness: the pad checks it and drops a 0x31 whose four trailing bytes
+do not cover the report, so rewriting a byte without re-signing would take the
+game's rumble away entirely rather than change it.
+
+Nothing is written when nothing is asked for, and the caller can tell: the
+rewrite returns 0 for a report the options have nothing to say about, and the
+driver then forwards the client's own buffer, unread and uncopied.
+
+THE TRACE
+
+One line when a packet is rewritten, carrying both halves of everything it
+touched -- flag0 before and after, byte 38 before and after, both motors before
+and after -- because the next trace has to show plainly what was done and what
+was left. TRACE and not WARN, as mgvf-0007's line is: with the option on this
+fires on every packet that asks for a motor, hundreds of times in a session,
+and it is what the option is for rather than something going wrong.
+
+THE HOST TEST
+
+usb_emu_test.c beside the descriptors in the build directory, case (o), against
+four packets pulled out of that log by extract-steam-packets.py: the haptic-mode
+packets at 255/0, at 38/25 and at 255/255, and the all-zero one the title writes
+when it wants nothing. It checks that the mode rewrite moves the two bits and no
+others and leaves the motors alone; that a gain of 200 takes 38/25 to 76/50 and
+that 255 saturates and writes nothing at all; that a gain of 100000 is clamped;
+that both values absent -- and a gain of 100, which means the same -- leave every
+one of the four byte-identical, the title's own CRC included; and that a packet
+with no motor and no mode is left alone even with both options on. The expected
+bytes are written out in the test from the byte offsets by hand, not by calling
+the code under test.
+
+NOT COVERED
+
+WHY THE TWO PATHS FEEL DIFFERENT is not established. Whether the pad drives
+different actuators, or the same ones differently, or whether this pad's
+firmware simply implements one of them better than the other, is unknown, and
+nothing here reads the pad's firmware version -- so which path Sony intended for
+this pad is unknown too. What is established is that the game asks for one of
+them, at full scale, and that a person preferred the other.
+
+THAT THE VIBRATION IS ACTUALLY STRONGER is a perception and stays one in this
+header wherever it appears. Two engine builds compared by hand is also how the
+owner noticed that the set without mgvf-0006 vibrated more weakly than the set
+with it; that is the same kind of evidence and is recorded the same way.
+
+NO TITLE HAS BEEN PLAYED WITH THE REWRITE ON. What is measured is the ladder,
+by hand, and the corpus the mode was read out of. The first use belongs in a
++hid trace, where the line above will say what was changed.
+
+FIVE OF THE 6493 PACKETS ARE NOT LIKE THE OTHERS and are recorded here without
+an explanation: they are 78 bytes of 31 02 00 and then zeros, with no CRC that
+checks out and no mode bits at all. This patch does not touch them -- they
+select no way to vibrate -- but what wrote them, and what the pad did with
+them, has not been looked into.
+
+---
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -117,6 +117,10 @@
+ 
+     UINT32 report_fixups;
+     BYTE dualsense_seq; /* MGVF mgvf-0005: high nibble of byte 1 of every 0x31 written */
++    /* MGVF mgvf-0009: read from the pad's own key when the device arrives, and
++     * all zeros for every device that is not a DualSense on Bluetooth, which is
++     * what makes the two hooks below cost nothing on anything else. */
++    struct dualsense_vibration dualsense_vibration;
+     UINT64 unix_device;
+ };
+ 
+@@ -409,7 +413,12 @@
+     memcpy(device->container_id.Data4, &ticks.QuadPart, sizeof(device->container_id.Data4));
+ }
+ 
+-static DEVICE_OBJECT *bus_create_hid_device(struct device_desc *desc, UINT64 unix_device, UINT32 report_fixups)
++/* MGVF mgvf-0009: vib is the two vibration options, or NULL for a device
++ * nobody read them for. They are passed in rather than read here because they
++ * belong to the pad's REAL product id, and by the time this runs mgvf-0005 may
++ * have replaced it in the desc with the one being presented. */
++static DEVICE_OBJECT *bus_create_hid_device(struct device_desc *desc, UINT64 unix_device, UINT32 report_fixups,
++                                            const struct dualsense_vibration *vib)
+ {
+     struct device_extension *ext;
+     DEVICE_OBJECT *device;
+@@ -437,6 +446,7 @@
+     ext->desc               = *desc;
+     ext->index              = get_device_index(desc, &before);
+     ext->unix_device        = unix_device;
++    if (vib) ext->dualsense_vibration = *vib;
+     list_init(&ext->reports);
+ 
+     if (report_fixups & HIDRAW_FIXUP_DUALSENSE_USB)
+@@ -656,6 +666,47 @@
+     return fixups;
+ }
+ 
++/* MGVF mgvf-0009: the two vibration options, read as the device arrives.
++ *
++ * READ BEFORE dualsense_usb_emulation_fixups, for the reason mgvf-0008 gives
++ * for reading ForwardFeatureWrites where it does: "ProductId" can replace the
++ * pid in the desc with another DualSense's, and a read after that would look
++ * for this pad's options under the other pad's key.
++ *
++ * Scoped to a hidraw DualSense that arrived over Bluetooth, which is the only
++ * device whose output reports either hook below touches, and left at all zeros
++ * for everything else. Unlike SeizeDevice this is OFF by default: it changes
++ * what a game asked for, which is a preference and not a repair, and the
++ * evidence for it is one person's hand.
++ *
++ * @@ Wine registry key: HKLM\System\CurrentControlSet\Services\WineBus\Devices\<VID/PID>
++ */
++static void dualsense_vibration_options(const struct device_desc *desc, struct dualsense_vibration *vib)
++{
++    memset(vib, 0, sizeof(*vib));
++
++    if (!desc->is_hidraw || desc->bus_type != BUS_TYPE_BLUETOOTH) return;
++    if (!is_dualsense_gamepad(desc->vid, desc->pid)) return;
++
++    vib->mode = get_device_option(desc->vid, desc->pid, L"VibrationMode", DUALSENSE_VIBRATION_MODE_CLIENT);
++    vib->gain = get_device_option(desc->vid, desc->pid, L"VibrationGain", 100);
++    if (vib->gain > DUALSENSE_VIBRATION_GAIN_MAX) vib->gain = DUALSENSE_VIBRATION_GAIN_MAX;
++
++    /* Nothing asked for is stored as nothing at all, so that "the options are
++     * all zero" is the one test the write path has to make. An absent
++     * VibrationGain reads as 100 above and lands here; a gain written as 0
++     * does not, because 0 is a request -- silence -- and not an absence. */
++    if (vib->mode == DUALSENSE_VIBRATION_MODE_CLIENT && vib->gain == 100)
++    {
++        memset(vib, 0, sizeof(*vib));
++        return;
++    }
++
++    TRACE("DualSense %04x:%04x on Bluetooth: output reports will be rewritten -- %s, gain %u%%\n",
++          desc->vid, desc->pid, vib->mode == DUALSENSE_VIBRATION_MODE_LEGACY ?
++          "the haptic path becomes the legacy compatible motors" : "the client's own mode is kept", vib->gain);
++}
++
+ static BOOL is_hidraw_enabled(WORD vid, WORD pid, const USAGE_AND_PAGE *usages, UINT buttons)
+ {
+     char buffer[FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data[1024])];
+@@ -1013,7 +1064,7 @@
+     struct device_create_params params = {{0}};
+ 
+     if (winebus_call(mouse_create, &params)) return;
+-    mouse_obj = bus_create_hid_device(&params.desc, params.device, 0);
++    mouse_obj = bus_create_hid_device(&params.desc, params.device, 0, NULL);
+     IoInvalidateDeviceRelations(bus_pdo, BusRelations);
+ }
+ 
+@@ -1022,7 +1073,7 @@
+     struct device_create_params params = {{0}};
+ 
+     if (winebus_call(keyboard_create, &params)) return;
+-    keyboard_obj = bus_create_hid_device(&params.desc, params.device, 0);
++    keyboard_obj = bus_create_hid_device(&params.desc, params.device, 0, NULL);
+     IoInvalidateDeviceRelations(bus_pdo, BusRelations);
+ }
+ 
+@@ -1151,6 +1202,7 @@
+         case BUS_EVENT_TYPE_DEVICE_CREATED:
+         {
+             struct device_desc desc = event->device_created.desc;
++            struct dualsense_vibration vib; /* MGVF mgvf-0009 */
+             USAGE_AND_PAGE usages;
+             UINT32 fixups;
+             UINT buttons;
+@@ -1165,6 +1217,9 @@
+                 break;
+             }
+ 
++            /* MGVF mgvf-0009: read first, while the desc still names the real pad */
++            dualsense_vibration_options(&event->device_created.desc, &vib);
++
+             /* MGVF mgvf-0005: may change the bus type and the pid in the desc */
+             fixups = dualsense_usb_emulation_fixups(&event->device_created.desc);
+             desc = event->device_created.desc;
+@@ -1172,7 +1227,7 @@
+             TRACE("creating %shidraw device %04x:%04x with usages %04x:%04x\n", desc.is_hidraw ? "" : "non-",
+                   desc.vid, desc.pid, usages.UsagePage, usages.Usage);
+ 
+-            device = bus_create_hid_device(&event->device_created.desc, event->device, fixups);
++            device = bus_create_hid_device(&event->device_created.desc, event->device, fixups, &vib);
+             if (device) IoInvalidateDeviceRelations(bus_pdo, BusRelations);
+             else
+             {
+@@ -1639,6 +1694,56 @@
+               device, packet.reportId, io.Information);
+ }
+ 
++/* MGVF mgvf-0009: rewrite the vibration of a packed 0x31 on its way to the pad,
++ * and say in one line what was done to it.
++ *
++ * Both routes end here, which is the point: the title this was measured on
++ * writes report 0x31 itself with no emulation in the way, so a hook that lived
++ * only in the emulation path would never see the packets it was written for.
++ * dualsense_usb.c does the rewrite and computes the CRC again -- a 0x31 whose
++ * CRC does not cover its bytes is one the pad ignores.
++ *
++ * TRACE and not WARN, as mgvf-0007's line is: with the option on this fires on
++ * every packet that asks for a motor, hundreds of times in a session, and it is
++ * what the option is for rather than something going wrong. The line carries
++ * both halves of everything it touched, because the next trace has to show
++ * plainly what was changed and what was left. */
++static BOOL dualsense_vibration_fixup(DEVICE_OBJECT *device, BYTE reportId, BYTE *report, ULONG len)
++{
++    struct device_extension *ext = (struct device_extension *)device->DeviceExtension;
++    struct dualsense_vibration_change change;
++
++    if (!dualsense_bt_vibration_fixup(report, len, &ext->dualsense_vibration, dualsense_crc32, &change)) return FALSE;
++
++    TRACE("device %p: rewrote the vibration in output report id %u -- mode flag0 %#x -> %#x, flag2 %#x -> %#x"
++          " (%s), motors %u/%u -> %u/%u\n", device, reportId, change.flag0_before, change.flag0_after,
++          change.flag2_before, change.flag2_after,
++          (change.flag2_before != change.flag2_after) ? "the haptic path becomes the legacy compatible motors" :
++          "the mode is the client's own", change.motor_right_before, change.motor_left_before,
++          change.motor_right_after, change.motor_left_after);
++    return TRUE;
++}
++
++/* MGVF mgvf-0009: a client that knows the pad is on Bluetooth and writes the
++ * pad's own 0x31 itself -- which is what the Unreal title in
++ * steam-hid-game-145815.log does for all 6493 of its output reports. Nothing is
++ * emulated here and nothing is translated; the packet is already what the pad
++ * wants, and all that happens is the rewrite, in a copy, because the client's
++ * buffer is not ours to change. A packet the options have nothing to say about
++ * is forwarded as the client wrote it, from the client's own buffer. */
++static void dualsense_bt_set_output_report(DEVICE_OBJECT *device, HID_XFER_PACKET *packet, IO_STATUS_BLOCK *io)
++{
++    BYTE buffer[DUALSENSE_BT_REPORT_LEN];
++    HID_XFER_PACKET bt = {.reportId = packet->reportId, .reportBuffer = buffer,
++                          .reportBufferLen = DUALSENSE_BT_REPORT_LEN};
++
++    memcpy(buffer, packet->reportBuffer, DUALSENSE_BT_REPORT_LEN);
++    if (dualsense_vibration_fixup(device, packet->reportId, buffer, DUALSENSE_BT_REPORT_LEN))
++        unix_device_set_output_report(device, &bt, io);
++    else
++        unix_device_set_output_report(device, packet, io);
++}
++
+ /* A USB 0x02 output report from the client becomes the Bluetooth 0x31 the
+  * pad wants, sent through a packet of our own; the client's IoStatus then
+  * reports the client's own length, as a wired write would.
+@@ -1676,6 +1781,12 @@
+               audio, (audio & 0x10) ? "5 " : "", (audio & 0x20) ? "6 " : "",
+               (audio & 0x40) ? "7 " : "", (audio & 0x80) ? "8 " : "");
+ 
++    /* MGVF mgvf-0009: after the translation and after mgvf-0007's masking, so
++     * that what is rewritten is the packet as it would have gone out, and
++     * before the dump below, so that the dump shows what the pad is actually
++     * sent. dualsense_usb.c signs it again. */
++    dualsense_vibration_fixup(device, packet->reportId, buffer, bt.reportBufferLen);
++
+     if (TRACE_ON(hid))
+     {
+         TRACE("translated output report id %u length %lu to id %u length %lu:\n", packet->reportId,
+@@ -2059,6 +2170,14 @@
+             /* MGVF mgvf-0005: the USB 0x02 goes out as a Bluetooth 0x31 */
+             if ((ext->report_fixups & HIDRAW_FIXUP_DUALSENSE_USB) && packet->reportId == DUALSENSE_USB_OUTPUT_ID)
+                 dualsense_usb_set_output_report(device, packet, &irp->IoStatus);
++            /* MGVF mgvf-0009: or the client wrote the pad's own 0x31 itself.
++             * The options are all zero unless this is a DualSense that arrived
++             * over Bluetooth and its key asks for something, so every other
++             * device takes the branch below exactly as before. */
++            else if ((ext->dualsense_vibration.mode || ext->dualsense_vibration.gain)
++                     && packet->reportId == DUALSENSE_BT_REPORT_ID
++                     && packet->reportBufferLen == DUALSENSE_BT_REPORT_LEN)
++                dualsense_bt_set_output_report(device, packet, &irp->IoStatus);
+             else
+                 unix_device_set_output_report(device, packet, &irp->IoStatus);
+             if (!irp->IoStatus.Status) hidraw_disable_report_fixups(device);
+--- a/dlls/winebus.sys/dualsense_usb.c
++++ b/dlls/winebus.sys/dualsense_usb.c
+@@ -329,8 +329,178 @@
+     crc = crc32(crc, out, DUALSENSE_BT_REPORT_LEN - DUALSENSE_CRC_TAIL);
+     dualsense_store_crc(out + DUALSENSE_BT_REPORT_LEN - DUALSENSE_CRC_TAIL, crc);
+     return DUALSENSE_BT_REPORT_LEN;
++}
++
++/* MGVF mgvf-0009: a stronger rumble, and a way to ask for more of it.
++ *
++ * WHAT WAS MEASURED. steam-hid-game-145815.log, a two-hour Bluetooth session of
++ * an Unreal title that drives the pad through Unreal's WinDualShock, presented
++ * truthfully and with no emulation involved: 6493 output reports of id 0x31,
++ * every one of them 78 bytes and written by the title itself. 335 of those
++ * carry a non-zero motor byte, and they reach the full 255 -- 36 packets at
++ * right 255 with the left motor at rest, 18 at 255 and 255 together. ALL 335
++ * CARRY THE SAME MODE: first flag byte 0x02, second 0x00, common byte 38 0x04.
++ * So the game is not asking for a weak effect. It is asking for full strength
++ * on the haptic path.
++ *
++ * WHAT THE TWO PATHS ARE. SDL 2.30.12's SDL_hidapi_ps5.c, read from the copy in
++ * this build directory, lays the same block out field for field --
++ * ucEnableBits1 at 0, ucRumbleRight at 2, ucRumbleLeft at 3, ucEnableBits3 at
++ * 38 -- and chooses between two ways of driving the motors by the pad's
++ * firmware version: below 2.24 it sets ucEnableBits1 bit 0x01, which its own
++ * comment calls "Enable rumble emulation", and HALVES both motor bytes there,
++ * "to reduce effective rumble strength to match Xbox controllers"; at 2.24 and
++ * above it sets ucEnableBits3 bit 0x04, "Enable improved rumble emulation", and
++ * sends the motor values unhalved. Both branches also set ucEnableBits1 bit
++ * 0x02, "Disable audio haptics". The mode in the log is the second of those,
++ * bit for bit.
++ *
++ * WHY THAT IS WORTH CHANGING, AND HOW WEAK THE EVIDENCE IS. The owner compared
++ * the two paths directly on the pad with a six-pulse ladder -- dsrumble3.c,
++ * which sends this exact packet through IOKit at 255 and at 127 in three
++ * modes: legacy (flag0 0x01|0x02), the haptic path (flag0 0x02, byte 38 0x04),
++ * and both bits at once -- and reported that LEGACY COMPATIBLE VIBRATION AT 255
++ * FEELS CLEARLY STRONGER than the haptic mode at 255, and that the haptic mode
++ * at 127 is what the game feels like. THAT PERCEPTION IS THE EVIDENCE FOR THIS
++ * PATCH. It is a preference, measured on one person's hand, not a physical
++ * measurement of anything: no accelerometer, no current draw, no repetition
++ * blind. It is why the rewrite is OFF unless a registry value asks for it.
++ *
++ * WHICH BIT IS CLEARED, WHICH IS SET, AND WHY EACH.
++ *
++ *   SET flag0 bit 0x01. That is the bit SDL sets when it wants the motors
++ *   driven the legacy way, and the bit the owner's mode A set for the pulse he
++ *   preferred. Set rather than assigned, so the rest of the byte survives.
++ *
++ *   CLEAR byte 38 bit 0x04. That is the bit SDL sets for the other path and the
++ *   only bit of that byte the measured packets carry (their byte 38 is exactly
++ *   0x04). Leaving it set would ask the pad for both at once, which is the
++ *   ladder's mode C -- a third thing, not the one that was preferred.
++ *
++ *   LEAVE flag0 bit 0x02 ALONE. SDL sets it on BOTH paths, so it is not the
++ *   choice between them, and all three of the ladder's modes carried it. What
++ *   it does -- SDL calls it "Disable audio haptics" -- is not this patch's
++ *   business.
++ *
++ *   LEAVE EVERY OTHER BYTE ALONE, the second flag byte included, for the reason
++ *   mgvf-0007 leaves it alone: nothing measured says what its other bits mean.
++ *
++ * THE MOTOR BYTES ARE NOT SCALED BY THE MODE REWRITE. SDL halves them on the
++ * legacy path; this does not, deliberately, because halving them is the thing
++ * that would undo what the ladder found -- the ladder sent the SAME value on
++ * both paths and the legacy one felt stronger. VibrationGain is the separate,
++ * explicit way to change the number.
++ *
++ * WHAT IS NOT ESTABLISHED. Why the two paths feel different -- whether the pad
++ * drives different actuators, or the same ones differently, or whether the
++ * firmware of this particular pad simply implements one better. Nothing here
++ * measures the pad's firmware version either, so which path Sony intended for
++ * it is unknown. And no title has yet been played with the rewrite on: what is
++ * measured is the ladder, by hand, and the corpus the mode came out of. */
++static unsigned char dualsense_scale_motor(unsigned char motor, unsigned int gain)
++{
++    unsigned int scaled;
++
++    if (!motor) return motor;
++    scaled = ((unsigned int)motor * gain) / 100;
++    return scaled > 255 ? 255 : (unsigned char)scaled;
++}
++
++/* The rewrite itself, over the common block of a packed 0x31. Returns non-zero
++ * when it changed a byte.
++ *
++ * The gain is applied only to a packet that actually SELECTED a way to
++ * vibrate -- legacy or haptic, after the mode rewrite above has had its say --
++ * because a motor byte with neither bit set is a byte the pad ignores, and
++ * mgvf-0007's rule holds here too: what is acted on is the request, not the
++ * bytes. It truncates rather than rounds, so 89 at 150% is 133 and not 134,
++ * and it saturates: a game already asking for 255 cannot be made to ask for
++ * more, which is the honest limit of a gain and is why this is not a way to
++ * make a quiet game loud.
++ *
++ * A gain of 0 is the other end of the same dial and is a request like any
++ * other: every motor byte becomes 0 and the pad never buzzes, whatever the
++ * game asks for and whether or not the game has a setting of its own. It is
++ * not the same as no gain at all -- an absent value reads as 100 and this
++ * function is never reached. */
++static unsigned char dualsense_vibration_rewrite(unsigned char *common, const struct dualsense_vibration *vib,
++                                                 struct dualsense_vibration_change *change)
++{
++    unsigned char changed = 0, right, left;
++    unsigned int gain = vib->gain;
++
++    if (change)
++    {
++        memset(change, 0, sizeof(*change));
++        change->flag0_before = change->flag0_after = common[DUALSENSE_COMMON_FLAG0];
++        change->flag2_before = change->flag2_after = common[DUALSENSE_COMMON_FLAG2];
++        change->motor_right_before = change->motor_right_after = common[DUALSENSE_COMMON_MOTOR_RIGHT];
++        change->motor_left_before = change->motor_left_after = common[DUALSENSE_COMMON_MOTOR_LEFT];
++    }
++
++    if (vib->mode == DUALSENSE_VIBRATION_MODE_LEGACY
++        && (common[DUALSENSE_COMMON_FLAG2] & DUALSENSE_FLAG2_HAPTIC_VIBRATION))
++    {
++        common[DUALSENSE_COMMON_FLAG2] &= ~DUALSENSE_FLAG2_HAPTIC_VIBRATION;
++        common[DUALSENSE_COMMON_FLAG0] |= DUALSENSE_FLAG0_LEGACY_VIBRATION;
++        changed = 1;
++    }
++
++    if (gain > DUALSENSE_VIBRATION_GAIN_MAX) gain = DUALSENSE_VIBRATION_GAIN_MAX;
++    if (gain != 100
++        && ((common[DUALSENSE_COMMON_FLAG0] & DUALSENSE_FLAG0_LEGACY_VIBRATION)
++            || (common[DUALSENSE_COMMON_FLAG2] & DUALSENSE_FLAG2_HAPTIC_VIBRATION)))
++    {
++        right = dualsense_scale_motor(common[DUALSENSE_COMMON_MOTOR_RIGHT], gain);
++        left = dualsense_scale_motor(common[DUALSENSE_COMMON_MOTOR_LEFT], gain);
++        if (right != common[DUALSENSE_COMMON_MOTOR_RIGHT] || left != common[DUALSENSE_COMMON_MOTOR_LEFT])
++        {
++            common[DUALSENSE_COMMON_MOTOR_RIGHT] = right;
++            common[DUALSENSE_COMMON_MOTOR_LEFT] = left;
++            changed = 1;
++        }
++    }
++
++    if (change)
++    {
++        change->changed = changed;
++        change->flag0_after = common[DUALSENSE_COMMON_FLAG0];
++        change->flag2_after = common[DUALSENSE_COMMON_FLAG2];
++        change->motor_right_after = common[DUALSENSE_COMMON_MOTOR_RIGHT];
++        change->motor_left_after = common[DUALSENSE_COMMON_MOTOR_LEFT];
++    }
++
++    return changed;
+ }
+ 
++/* MGVF mgvf-0009: the entry point both routes use.
++ *
++ * The CRC is computed again over the rewritten bytes, and that is not a detail:
++ * the pad checks it and drops a 0x31 whose four trailing bytes do not cover the
++ * report. The title measured above writes its own 0x31 with its own CRC, so
++ * rewriting a byte without re-signing would take its rumble away entirely
++ * rather than change it.
++ *
++ * Nothing is written when nothing is asked for, and the caller can tell: a
++ * return of 0 means the client's own buffer is still the right thing to send. */
++unsigned int dualsense_bt_vibration_fixup(unsigned char *report, unsigned int len,
++                                          const struct dualsense_vibration *vib,
++                                          dualsense_crc32_fn crc32,
++                                          struct dualsense_vibration_change *change)
++{
++    static const unsigned char seed = DUALSENSE_CRC_SEED_OUTPUT;
++    unsigned int crc;
++
++    if (len != DUALSENSE_BT_REPORT_LEN || report[0] != DUALSENSE_BT_REPORT_ID) return 0;
++    if (vib->mode == DUALSENSE_VIBRATION_MODE_CLIENT && vib->gain == 100) return 0;
++    if (!dualsense_vibration_rewrite(report + DUALSENSE_BT_COMMON, vib, change)) return 0;
++
++    crc = crc32(0, &seed, 1);
++    crc = crc32(crc, report, DUALSENSE_BT_REPORT_LEN - DUALSENSE_CRC_TAIL);
++    dualsense_store_crc(report + DUALSENSE_BT_REPORT_LEN - DUALSENSE_CRC_TAIL, crc);
++    return len;
++}
++
+ /* A feature report written over Bluetooth ends in a CRC-32 the pad checks,
+  * seed byte 0x53, over everything before it. The reports that exist in both
+  * descriptors have the same length in both, so the tail of the USB-length
+--- a/dlls/winebus.sys/dualsense_usb.h
++++ b/dlls/winebus.sys/dualsense_usb.h
+@@ -94,6 +94,72 @@
+ #define DUALSENSE_FEATURE_WRITE_FORWARD 0
+ #define DUALSENSE_FEATURE_WRITE_SWALLOW 1
+ 
++/* MGVF mgvf-0009: the two ways a client can ask a DualSense to vibrate, and
++ * where they live in the report.
++ *
++ * Everything above numbers the bytes of the USB 0x02 output report, where byte
++ * 0 is the id. This numbers the COMMON BLOCK instead -- the part both
++ * transports carry, byte 1 onward of the USB report and byte 3 onward of the
++ * Bluetooth 0x31 -- because mgvf-0009 acts on a packed 0x31 whether or not a
++ * USB report was ever involved. Common byte i is USB byte i+1 and Bluetooth
++ * byte i+3; DUALSENSE_USB_OUTPUT_FLAG0 above and DUALSENSE_COMMON_FLAG0 here
++ * are the same byte.
++ *
++ *   flag0 (common 0)  bit 0x01  the legacy compatible motors
++ *   flag2 (common 38) bit 0x04  the haptic path's own motor emulation
++ *   motors (common 2 and 3)     right and left, 0..255
++ *
++ * WHERE THOSE TWO BITS COME FROM. Not from memory: from SDL 2.30.12's
++ * SDL_hidapi_ps5.c, whose DS5EffectsState_t is this block field for field --
++ * ucEnableBits1 at 0, ucRumbleRight at 2, ucRumbleLeft at 3, ucEnableBits3 at
++ * 38 -- and whose rumble path picks between the two by the pad's firmware
++ * version: below 2.24 it sets ucEnableBits1 0x01, "Enable rumble emulation",
++ * and at 2.24 and above it sets ucEnableBits3 0x04, "Enable improved rumble
++ * emulation". Both branches also set ucEnableBits1 0x02, "Disable audio
++ * haptics", which is why that bit is left alone here: it is not the choice
++ * between the two paths. dualsense_usb.c says what the pad did with each. */
++#define DUALSENSE_BT_COMMON              3
++#define DUALSENSE_COMMON_FLAG0           0
++#define DUALSENSE_COMMON_MOTOR_RIGHT     2
++#define DUALSENSE_COMMON_MOTOR_LEFT      3
++#define DUALSENSE_COMMON_FLAG2           38
++#define DUALSENSE_FLAG0_LEGACY_VIBRATION 0x01
++#define DUALSENSE_FLAG2_HAPTIC_VIBRATION 0x04
++
++/* MGVF mgvf-0009: what to do with an output report on its way to the pad.
++ *
++ *   mode  DUALSENSE_VIBRATION_MODE_CLIENT leaves every packet exactly as the
++ *         client wrote it and is the default, so a build with nothing under
++ *         the pad's key behaves as it did before this patch.
++ *         DUALSENSE_VIBRATION_MODE_LEGACY rewrites a packet that selected the
++ *         haptic path so that it selects the legacy motors instead.
++ *   gain  a percentage over the two motor bytes, saturating at 255. 0 and 100
++ *         100 means leave them alone, and so does an absent value, which is
++ *         read as 100. 0 is not absence: it silences the motors, which is how
++ *         somebody who does not want the pad to buzz at all turns it off for
++ *         every game at once. Clamped to DUALSENSE_VIBRATION_GAIN_MAX. */
++#define DUALSENSE_VIBRATION_MODE_CLIENT 0
++#define DUALSENSE_VIBRATION_MODE_LEGACY 1
++#define DUALSENSE_VIBRATION_GAIN_MAX    1000
++
++struct dualsense_vibration
++{
++    unsigned int mode;
++    unsigned int gain;
++};
++
++/* MGVF mgvf-0009: what a rewrite did, for the caller to trace. Every field is
++ * filled in whenever a change pointer is passed, changed or not, so that a
++ * trace line can show both halves of a value that did not move. */
++struct dualsense_vibration_change
++{
++    unsigned char changed;
++    unsigned char flag0_before, flag0_after;
++    unsigned char flag2_before, flag2_after;
++    unsigned char motor_right_before, motor_right_after;
++    unsigned char motor_left_before, motor_left_after;
++};
++
+ /* The CRC-32 the pad checks over Bluetooth runs over one seed byte and then
+  * the report up to the last four bytes, where it is stored little-endian. */
+ #define DUALSENSE_CRC_TAIL                 4
+@@ -135,6 +201,22 @@
+  *                  same answer, as they are for mgvf-0005's UsbEmulation. */
+ unsigned int dualsense_usb_feature_write_action(int emulated, unsigned int forward_option);
+ 
++/* MGVF mgvf-0009: rewrite the vibration of a packed Bluetooth 0x31 in place and
++ * compute its CRC again, because a pad that is sent a 0x31 whose CRC does not
++ * cover its bytes ignores the packet. Returns len when it changed something and
++ * 0 when it did not -- a report that is not a 78-byte 0x31, or one the options
++ * have nothing to say about -- so that a caller can forward the client's own
++ * buffer untouched in that case. change may be NULL.
++ *
++ * Both routes call this and neither is a special case: the emulation calls it
++ * after dualsense_bt_output_from_usb has packed and signed the report, and the
++ * driver calls it on a 0x31 a client wrote itself, which is what the title this
++ * patch was measured on does. */
++unsigned int dualsense_bt_vibration_fixup(unsigned char *report, unsigned int len,
++                                          const struct dualsense_vibration *vib,
++                                          dualsense_crc32_fn crc32,
++                                          struct dualsense_vibration_change *change);
++
+ /* In place. Each returns len when the report was changed and 0 when it was
+  * left as it was: too short to carry a CRC tail at all, or, for the read, the
+  * calibration report, whose tail a wired pad returns as well. */

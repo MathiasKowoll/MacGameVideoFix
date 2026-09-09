@@ -2,5 +2,5 @@
   "engine_app": "CrossOver.app",
   "engine_version": "26.3.0.39832",
   "wine_build": "wine-11.0-8726-g2e2f5fca349",
-  "patches": "mgvf-0002 mgvf-0003 mgvf-0004 mgvf-0005 mgvf-0007"
+  "patches": "mgvf-0002 mgvf-0003 mgvf-0004 mgvf-0005 mgvf-0006 mgvf-0007 mgvf-0008 mgvf-0009"
 }

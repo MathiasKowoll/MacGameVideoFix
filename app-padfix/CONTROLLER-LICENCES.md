@@ -1,11 +1,17 @@
-# The three binaries in this app, and their licence
+# The four binaries in this app, and their licence
 
-`winebus.sys`, `setupapi.dll` and `ntoskrnl.exe` — shipped here as
-`engine-controller-winebus.sys`, `engine-controller-setupapi.dll` and
-`engine-controller-ntoskrnl.exe`, 913,408 bytes together — are **Wine**, and
-Wine is **LGPL-2.1-or-later**. They are not ours in the sense that matters to
-the licence: they are somebody else's program with five patches of ours applied,
-and both halves of that sentence carry obligations.
+`winebus.sys`, `setupapi.dll`, `ntoskrnl.exe` and `winebus.so` — shipped here as
+`engine-controller-winebus.sys`, `engine-controller-setupapi.dll`,
+`engine-controller-ntoskrnl.exe` and `engine-controller-winebus.so`, 963,080
+bytes together — are **Wine**, and Wine is **LGPL-2.1-or-later**. They are not
+ours in the sense that matters to the licence: they are somebody else's program
+with eight patches of ours applied, and both halves of that sentence carry
+obligations.
+
+The fourth is the **unix half** of `winebus`: three of these are PE files that
+go into `lib/wine/x86_64-windows/` and `winebus.so` is a Mach-O that goes into
+`lib/wine/x86_64-unix/`. They are built from one source tree and read one
+struct, so they only work as a set.
 
 They are redistributed because a fix that only works for people who can build
 Wine is not a fix. The licence permits it, and requires this notice to travel
@@ -18,7 +24,7 @@ not only in the repository.
 - Source tree: the wine source of **CrossOver 26.3.0.39832**, revision
   **`wine-11.0-8726-g2e2f5fca349`**, which is the build string
   `engine-controller-built-for.json` records beside these files.
-- Patches applied on top, all five of them ours:
+- Patches applied on top, all eight of them ours:
   - **`mgvf-0002`** — `winebus.sys` names the bus a device is on in its
     compatible ids, so `BTHENUM` is there for a client to find.
   - **`mgvf-0003`** — `setupapi.dll` answers `CM_Get_Parent` for HID children,
@@ -29,15 +35,26 @@ not only in the repository.
   - **`mgvf-0005`** — `winebus.sys` can present a DualSense on Bluetooth as if
     it were on USB, per device and off by default, for the two clients that
     insist on a wired pad.
-  - **`mgvf-0007`** — the same emulation takes the wired-only audio settings
-    back out of a report on the pad's behalf, because a client told the pad is
-    on a cable asks for a speaker, a headphone jack and a microphone that a
-    DualSense only has on one.
+  - **`mgvf-0006`** — `winebus.so` opens a DualSense that arrived over Bluetooth
+    exclusively, so macOS's own driver stops writing to the same pad; this is
+    the patch the fourth file exists for.
+  - **`mgvf-0007`** — the emulation of `mgvf-0005` takes the wired-only audio
+    settings back out of a report on the pad's behalf, because a client told the
+    pad is on a cable asks for a speaker, a headphone jack and a microphone that
+    a DualSense only has on one.
+  - **`mgvf-0008`** — an **experiment**, marked as one wherever it is named: in
+    that same emulation a feature-report write is answered as if it had
+    succeeded and no byte of it goes to the pad, so that the next trace answers
+    a question. A registry value puts the write back on the wire.
+  - **`mgvf-0009`** — a **preference**, and off unless asked for: two per-device
+    values that rewrite the vibration a client asks for, one selecting the pad's
+    legacy compatible motors where the client selected its haptic path and one
+    scaling the two motor bytes by a percentage.
 - Built by `scripts/build-controller-bus.sh` in the repository below, which also
   strips the binaries and proves that the strip changed nothing a loader reads.
 
-The five patch files are published, in full, as
-`source-patches/mgvf-0002-*.patch` … `mgvf-0007-*.patch` in
+The eight patch files are published, in full, as
+`source-patches/mgvf-0002-*.patch` … `mgvf-0009-*.patch` in
 
 > **<https://github.com/MathiasKowoll/MacGameVideoFix>**
 
@@ -49,10 +66,11 @@ specific to this project, and anyone carrying a patched Wine is welcome to them.
 The LGPL asks that whoever receives these binaries can get the source they were
 built from. Both halves are public and neither is behind us: Wine's source at
 the revision above is CodeWeavers' published CrossOver source for 26.3.0.39832,
-and the five patches are in the repository named above. Anyone who cannot obtain
-either should ask through that repository's issues and it will be provided.
+and the eight patches are in the repository named above. Anyone who cannot
+obtain either should ask through that repository's issues and it will be
+provided.
 
-Unlike the codec payload in MacGameVideoFix, these three are **not** separate
+Unlike the codec payload in MacGameVideoFix, these four are **not** separate
 replaceable libraries — they are the patched program itself. That is why the
 patches are published rather than only described: replacing our build with your
 own means rebuilding Wine with them, and the material to do that is what this
@@ -66,13 +84,15 @@ for.
 
 | file | bytes | sha256 |
 | --- | --- | --- |
-| `engine-controller-winebus.sys` | 57,344 | `cc1e009abd258645c91a3c2778340fa1b5369712677c09e78d85036e0001324f` |
+| `engine-controller-winebus.sys` | 61,440 | `c00a178059ed3ed5f8d42cb528132a7a60031829cdb0a953279b9b40a898ed53` |
 | `engine-controller-setupapi.dll` | 462,848 | `048cb4b31252376402466974a7751d8ef8a0f4b2fe2a80af6c2637608a15e231` |
 | `engine-controller-ntoskrnl.exe` | 393,216 | `3a408663ec9391c134088cf1263d57e186775f2352b476e09921a16da3d0f10f` |
-| `engine-controller-built-for.json` | 185 | `42fd7076e68075804d0164dabad77b006d8bf0c9adecd4bfcae0e2bc483f9c2b` |
+| `engine-controller-winebus.so` | 45,576 | `d5dbc9c72ff2226c316ce9a15261678ac6c6fb25fce07e128698e31e0eadb5dc` |
+| `engine-controller-built-for.json` | 215 | `6449d84995fccf97cce3ae6e35827b49af1918ca76793a22531512b294154d15` |
 
 The same bytes ship in the repository as `runtime/engine-controller-*` and, laid
-out the way an engine is, as `runtime/engine-payload-controller/wine/x86_64-windows/`.
+out the way an engine is, as `runtime/engine-payload-controller/wine/x86_64-windows/`
+and `.../wine/x86_64-unix/`.
 `runtime/check-builds.sh` compares those two copies, and `app-padfix/build-app.sh`
 compares this one against `runtime/`.
 

@@ -245,12 +245,9 @@ enum SetState: Equatable {
             return "This CrossOver has CodeWeavers' own files. A controller on "
                  + "Bluetooth will be seen as if it were on USB, and will not rumble."
         case .broken:
-            return "Some of the three originals are backed up and some are not "
-                 + "-- or this CrossOver still carries winebus.so from the "
-                 + "version of this set that installed a fourth file. Either "
-                 + "way it is neither state, and the three only work together. "
-                 + "Install again, or restore: both put CodeWeavers' winebus.so "
-                 + "back, and the log will say what happened."
+            return "Some of the three originals are backed up and some are not. "
+                 + "The three only work together, so this is neither state. "
+                 + "Install again, or restore, and the log will say what happened."
         case .refused(let sentence):
             return sentence
         }
