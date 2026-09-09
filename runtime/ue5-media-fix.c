@@ -1150,15 +1150,10 @@ static BOOL poke(BYTE *at, const BYTE *expect, const BYTE *with, const char *wha
  * `call rel32` is FIVE bytes, so the testb that follows it sits at +5. Scanning
  * for `84 C0` and checking seven bytes back finds coincidences and reports the
  * region as empty. */
-#define RVA_ISSW_A     0x06370BAE   /* callq IsSoftware ; testb al,al */
-#define RVA_ISSW_B     0x06374BB4   /* the second site, which is not optional */
-#define RVA_ISSW_FUNC  0x0636F920   /* what both of them call */
-/* The previous build, kept because the shift is measured from it:
- *   A 0x0636CB3E   B 0x06370B44   func 0x0636B8B0 */
-/* Where this build stores the console variable, found from the single
- * reference to its name: the instruction after the registration call is
- * `movq %rax, 0x94c0d25(%rip)`. The old build had it at 0x0AA29110. */
-#define RVA_CVAR_PTR_NEW 0x0AA78428
+/* No addresses are remembered here any more. Three builds in sixteen days moved
+ * them, and each move was silent until somebody looked. What is left is the
+ * variable's own name, which is Electra's API and cannot move without the
+ * console command moving with it. */
 /* From vtable slot 12: lea rax,[rcx+0x50] ; ret */
 #define CVAR_VALUES_OFFSET 0x50
 
@@ -1285,31 +1280,6 @@ static void **find_cvar_slot(BYTE *base)
     return NULL;
 }
 
-/* Both sites must call the same function, or this is not the pair. */
-static BOOL issw_site_ok(BYTE *base, DWORD rva)
-{
-    BYTE *at = base + rva;
-    LONG rel;
-    if (at[0] != 0xE8) return FALSE;
-    memcpy(&rel, at + 1, sizeof(rel));
-    if ((DWORD)((at + 5 + rel) - base) != RVA_ISSW_FUNC) return FALSE;
-    return at[5] == 0x84 && at[6] == 0xC0;      /* testb %al,%al */
-}
-
-/* call rel32 -> mov al,1 ; nop ; nop ; nop.  Same length, same meaning as the
- * three-byte form the old build needed. */
-static const BYTE make_true5[5] = { 0xB0, 0x01, 0x90, 0x90, 0x90 };
-
-static BOOL poke5(BYTE *at, const char *what)
-{
-    DWORD old;
-    if (!VirtualProtect(at, 5, PAGE_EXECUTE_READWRITE, &old)) return FALSE;
-    memcpy(at, make_true5, 5);
-    VirtualProtect(at, 5, old, &old);
-    FlushInstructionCache(GetCurrentProcess(), at, 5);
-    logf_("  %s: patched", what);
-    return TRUE;
-}
 
 static void force_electra_software(void)
 {
@@ -1319,22 +1289,27 @@ static void force_electra_software(void)
     electra_sw_forced = TRUE;
 
     read_switches();
-    logf_("forcing Electra onto its software path");
-    if (!issw_site_ok(base, RVA_ISSW_A) || !issw_site_ok(base, RVA_ISSW_B))
-    {
-        logf_("  the two call sites are not what this build has -- doing nothing. "
-              "To find them again: crash it, read Saved/Crashes for the call "
-              "stack, disassemble there for a bool-returning call followed by "
-              "testb al,al, then find every direct call to that same function.");
-        return;
-    }
+    logf_("putting Electra on its old output path");
 
-    if (opt_issw)
-    {
-        if (poke5(base + RVA_ISSW_A, "IsSoftware (outer gate)")) done++;
-        if (poke5(base + RVA_ISSW_B, "IsSoftware (sw value)")) done++;
-    }
-    else logf_("  IsSoftware: left alone, by switch");
+    /* The two IsSoftware call sites used to be patched here, by address.
+     *
+     * They are gone, and nothing is read off a disassembly any more. The
+     * software path comes from the engine instead: winegstreamer patch 0006,
+     * carried from winevideo, stops advertising MF_SA_D3D_AWARE on macOS, so
+     * Electra never builds a D3D11 device and answers its own IsSoftware()
+     * honestly. That is in the engine this project ships and it does not move
+     * when the game does.
+     *
+     * Those addresses broke three times in sixteen days -- 2026-08-24,
+     * 08-31 and 09-08 -- and each time they took the console variable down
+     * with them, because the check refused before reaching it. The variable is
+     * found by name and never needed the addresses at all; that coupling was
+     * the actual defect, and this is where it ends.
+     *
+     * Measured 2026-09-09 on UE5-CL-408709: with the variable set and no byte
+     * patched anywhere, the video plays. Without the variable the title
+     * crashes in the D3D path, EXCEPTION_ACCESS_VIOLATION reading 0x0 -- so
+     * patch 0006 alone is not enough and the variable below is load-bearing. */
 
     /* The console variable is a pointer read from a fixed address and written
      * through -- a wild write on any build but the one it was read from, and
@@ -1360,17 +1335,14 @@ static void force_electra_software(void)
     {
         void **slot = find_cvar_slot(base);
         void *obj;
-        if (slot && (BYTE *)slot != base + RVA_CVAR_PTR_NEW)
-            logf_("  (the address written down for this build says base+0x%08lX; "
-                  "the search is what is being used)", (unsigned long)RVA_CVAR_PTR_NEW);
         if (!slot)
         {
-            /* Falling back to a remembered address is how a wild write happens.
-             * It is allowed only when the search failed AND this build is the
-             * one the address was read from, which the call sites already
-             * proved above by verifying byte for byte. */
-            logf_("  falling back to the address written down for this build");
-            slot = (void **)(base + RVA_CVAR_PTR_NEW);
+            /* There is no falling back to a remembered address any more. What
+             * made that safe was the call-site check proving this was the build
+             * the address came from, and that check is gone. A remembered
+             * address on a build it was not read from is a wild write. */
+            logf_("  the console variable was not found by name -- doing nothing");
+            return;
         }
         obj = *slot;
         if (!obj)

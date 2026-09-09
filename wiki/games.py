@@ -65,7 +65,7 @@ GAMES = [
      "Fixed", "Dynasty-Warriors-Origins"),
     ("Beast of Reincarnation", "Unreal Engine 5",
      "Startup video plays with sound, no picture",
-     "Console variable, and two IsSoftware call sites patched by address; **needs winevideo**",
+     "Console variable found by name; software path from engine patch 0006; **needs winevideo**",
      "D3DMetal", "12", MEASURED,
      "Fixed", "Beast-of-Reincarnation"),
     ("Persona 5 Strikers", "Koei Tecmo, in-house",

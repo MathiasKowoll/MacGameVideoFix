@@ -7,9 +7,64 @@ Unreal Engine 5. The startup video plays its sound and shows nothing.
 | Video | H.264, 1920x1080 at 60 fps, measured by FourCC and by frame timestamps |
 | Played by | Electra, through a Media Foundation decoder MFT |
 | Symptom | Sound plays, picture never appears. No crash on a stock engine |
-| Fix | NV12 put back on the menu, two `IsSoftware` call sites patched by address, one console variable found by its own name |
+| Fix | NV12 put back on the menu, and one console variable found by its own name. **No addresses any more** |
 | CrossOver | Stable 26.3, on an engine carrying **winevideo**'s `winegstreamer`. A plain 26.3 stalls after two frames |
 | winevideo | **Required**, since the game update of 2026-08-24 |
+
+## The addresses are gone, and that is the end of this cycle
+
+**2026-09-09.** The title shipped a third build in sixteen days --
+`UE5-CL-408709`, 176.8 MB, dated 2026-09-08 -- and the fix broke for the third
+time. It is not going to break that way again, because nothing is read off a
+disassembly any more.
+
+**What was actually wrong was not the addresses.** The console variable was
+already found by name, and a name does not move. But setting it sat *behind*
+the call-site check: when the two `IsSoftware` addresses did not verify, the
+function logged, returned, and never reached the variable. So every game update
+took down the half that did not depend on addresses along with the half that
+did. That coupling was the defect, and removing it is most of this change.
+
+**Both halves now live somewhere that does not move:**
+
+- **The software path** comes from the engine. `winegstreamer` patch 0006,
+  carried from winevideo, stops advertising `MF_SA_D3D_AWARE` on macOS, so
+  Electra builds no D3D11 device and answers its own `IsSoftware()` honestly.
+  It is already in the engine this project ships -- `patches = 0002 0003 0006
+  0008 mgvf-0001`.
+- **The console variable** is set from its own name, as before, now
+  unconditionally.
+
+**Measured, in this order, on `UE5-CL-408709`:**
+
+| what ran | result |
+| --- | --- |
+| Old DLL, addresses declining, no config | **Crash.** `EXCEPTION_ACCESS_VIOLATION` reading `0x0` |
+| Old DLL declining, `Electra.Win.H264UseOldOutputPath=1` in `Engine.ini` | **Plays** |
+| New DLL, no addresses, no `Engine.ini` at all | **Plays.** 157 frames out |
+
+So the variable is load-bearing, patch 0006 alone is not enough, and the
+in-process route delivers it on its own. **No config file is needed.**
+
+**And the fallback had to go with them.** The old code fell back to a
+remembered address when the search failed, which was safe only because the
+call-site check had proved this was the build the address came from. With that
+check gone the fallback is a wild write, and this build proves it: the search
+found the slot at `base+0x0AAA8C88`, where the address written down said
+`0x0AA78428`.
+
+### On writing it into Engine.ini, which was tried and is not needed
+
+`Electra.Win.H264UseOldOutputPath=1` under `[SystemSettings]` in the title's own
+`Engine.ini` works, and was how the second row above was measured. It is not
+used, because the in-process route needs no file -- and because this title
+**deletes any `Engine.ini` it did not write**, on exit. Measured: written at
+08:04, gone by 08:10 when the title rewrote its config directory.
+
+Worth recording for the next title that does need one: making the file
+read-only does **not** protect it. Deleting a file needs write permission on the
+*directory*, not on the file, so a 0444 `Engine.ini` is removed just the same.
+The only thing that works is writing it again before every launch.
 
 ## The game updated again, and everything moved by 0x4070
 
