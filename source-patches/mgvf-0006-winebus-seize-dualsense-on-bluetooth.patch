@@ -1,0 +1,326 @@
+From: MacGameVideoFix <https://github.com/MathiasKowoll/MacGameVideoFix>
+Subject: [PATCH] winebus.sys: seize a DualSense on Bluetooth so macOS stops writing to it
+
+WHERE THIS CAME FROM
+
+MacGameVideoFix's own series, mgvf-NNNN, written on 2026-09-08, the fifth of
+ours and the fourth in the controller-bus set. It is the first of that set to
+touch the UNIX half of winebus rather than the PE half. Nothing in it is
+specific to this project; it is offered to anyone carrying a patched winebus on
+macOS.
+
+THE FAULT
+
+Two processes write to the pad, and the pad has room for one.
+
+macOS drives a connected DualSense itself. WindowServer's
+com.apple.GameController.HID:DualSense driver opens the pad ("Opening
+HIDDevice") every time it appears and writes Bluetooth output reports to it, on
+its own schedule, whether or not anything on the Mac is using the pad. winebus
+opened the same pad SHARED -- IOHIDDeviceOpen(IOHIDDevice, 0) in
+handle_DeviceMatchingCallback -- and wrote its own output reports through
+IOHIDDeviceSetReport, which over Bluetooth is where the rumble, the lightbar
+and the trigger effects go.
+
+A DualSense on Bluetooth has one output pipe and it is not shared gracefully.
+With wine writing to it too, macOS's writes time out.
+
+HOW IT WAS MEASURED
+
+From macOS's own log on 2026-09-08, not from inside wine:
+
+  - 163 timeouts in one day, all of the same shape: "(Async) Unable to send BT
+    output report to DualSense - error -536870186". That number is
+    kIOReturnTimeout, 0xE00002D6.
+  - Every one of them falls inside a minute in which a game was running under
+    wine: 4 to 14 a minute in the afternoon sessions, and 20 to 35 a minute in
+    the last one, where mgvf-0005's USB emulation had the guest writing to the
+    pad far more often. Outside those minutes there are none.
+  - After a burst, the driver tears itself down -- "Cancel", "Freeing
+    HIDDevice" -- and 160 ms later bluetoothd drops the link: "ACL
+    disconnected: <addr>, reason 10719". Six such drops in six minutes across
+    the last two launches, against single, spread-out drops earlier in the day
+    carrying reason 10722, which is the pad's ordinary idle power-off.
+
+So the pad is not powering itself off during play. The link is being killed by
+contention on the output pipe, and wine is the second writer.
+
+THE CHANGE
+
+Open the pad with kIOHIDOptionsTypeSeizeDevice instead of 0. IOKit then hands
+the device to this process alone and macOS's own driver releases it, so there
+is one writer on the pipe again.
+
+The seize is not a preference; it is the mechanism, and it costs what it does
+by design: while winebus holds the pad, macOS and its own applications cannot
+use it. It is given back when the process that seized it goes away, which for
+winebus is the bottle's winedevice.exe -- that is, when the bottle shuts down.
+
+If the seizing open fails, the shared open this code always did is tried
+instead, with a WARN. A device another process has already seized therefore
+works exactly as it does today rather than disappearing, and no pad is ever
+lost to this patch.
+
+The close in handle_RemovalCallback is now given the options its open used. The
+device lookup moves above the close to make that possible. Nothing measured
+says IOKit needs it -- the open goes when the connection does -- but a close
+that does not mirror its open is a question left for somebody else.
+
+THE SCOPE
+
+Seizing indiscriminately would be worse than the fault. winebus enumerates
+whatever IOKit matches, and taking the user's keyboard or mouse away from macOS
+while a bottle is up would be an unusable machine. Two things keep this narrow.
+
+The enumeration already refuses everything that is not a joystick or a gamepad,
+several lines above the open, and returns before opening it: the widest this
+can ever reach is a game controller.
+
+And the default is what was measured and nothing wider: a DualSense
+(054c:0ce6, 054c:0df2) that arrived over BLUETOOTH. The timeouts were counted
+on the Bluetooth output pipe; a pad on a cable has a different one and no
+measurement of it, so a wired pad is still opened shared. A DualShock 4 is not
+included either. The same shape is plausible for any pad macOS drives itself,
+but plausible is not measured, and mgvf-0005 drew the line in the same place
+for the same reason.
+
+THE OPTION
+
+  HKLM\System\CurrentControlSet\Services\winebus\Devices\<vid>/<pid>
+    SeizeDevice  REG_DWORD  absent: the default above -- on for a DualSense on
+                            Bluetooth, off for everything else. 0: open shared,
+                            exactly as before this patch. Non-zero: seize.
+
+ON by default for the pads it covers, unlike mgvf-0005's UsbEmulation, because
+this repairs a defect rather than adding a behaviour: without it the link drops
+mid-game. The value exists for the two people the default is wrong for -- a
+DualSense owner who would rather share the pad with macOS while a bottle is up,
+and the owner of some other pad who has measured the same timeouts and wants to
+try it.
+
+HOW THE OPTION REACHES THE UNIX SIDE
+
+bus_iohid.c is the unix half and does not read the registry; it decides how to
+open the device, so the answer has to be there. Rather than a second registry
+reader in the unix half, or a new field in the unixlib interface, the value
+rides the per-device settings that already cross the boundary: main.c's
+load_device_options enumerates the Devices key at driver start into
+options.devices, and struct bus_options -- that list included -- is handed to
+each bus at init, which bus_iohid.c already keeps in its own "options". So
+struct device_options gains one INT beside its existing "hidraw", read from the
+same subkey by the same loop, -1 when the key says nothing so that the default
+can differ per device. bus_iohid.c walks the list the way main.c's
+is_hidraw_enabled does, with the same VID-only wildcard.
+
+It is read once, at driver start, exactly like Hidraw: changing it takes effect
+when the bottle's winedevice next starts.
+
+NOT COVERED
+
+A wired DualSense, a DualShock 4, and every other pad, by default -- see THE
+SCOPE. The registry value reaches all of them for anyone who wants to measure.
+
+Whether the seize repairs the drops has NOT been measured yet: what is measured
+is the contention and its consequence, and that wine is the second writer. The
+first run with this patch belongs in the same log the timeouts were counted in,
+looking for the absence of "Unable to send BT output report".
+
+What macOS does with a pad it has been asked to release mid-session is IOKit's
+business and is not asserted here. What is asserted is only that the seizing
+open, when it fails, falls back to the open this code always did.
+
+---
+--- a/dlls/winebus.sys/bus_iohid.c
++++ b/dlls/winebus.sys/bus_iohid.c
+@@ -113,6 +113,9 @@
+     struct unix_device unix_device;
+     IOHIDDeviceRef device;
+     uint8_t *buffer;
++    /* MGVF mgvf-0006: the options the device was opened with, so that the
++     * close is the mirror of the open. */
++    IOOptionBits open_options;
+ };
+ 
+ static inline struct iohid_device *impl_from_unix_device(struct unix_device *iface)
+@@ -266,7 +269,77 @@
+     iohid_device_get_feature_report,
+     iohid_device_set_feature_report,
+ };
++
++/* MGVF mgvf-0006: whether to take the pad away from macOS while a bottle holds it.
++ *
++ * THE FAULT. macOS drives a connected DualSense itself: WindowServer's
++ * com.apple.GameController.HID:DualSense driver opens the pad every time it
++ * appears and writes Bluetooth output reports to it. winebus opened the same
++ * pad shared, below, and wrote its own output reports through
++ * IOHIDDeviceSetReport. Two writers on the pad's single Bluetooth output pipe
++ * is one too many. Measured from macOS's own log on 2026-09-08: macOS's writes
++ * time out -- "(Async) Unable to send BT output report to DualSense - error
++ * -536870186", which is kIOReturnTimeout -- 163 of them in a day, 4 to 35 a
++ * minute and only in the minutes a game was running under wine, the highest
++ * rate in the session where the guest wrote most often. After a burst its
++ * driver tears itself down ("Cancel", "Freeing HIDDevice") and 160 ms later
++ * bluetoothd drops the link: "ACL disconnected ... reason 10719", six times in
++ * six minutes across two launches, where the drops earlier in the day carried
++ * 10722, the pad's ordinary idle power-off. The pad is not turning itself off
++ * during play; the link is being killed by contention on the output pipe, and
++ * wine is the second writer.
++ *
++ * THE CHANGE. Open with kIOHIDOptionsTypeSeizeDevice, which hands the device
++ * to this process alone and makes macOS's driver release it, so there is only
++ * one writer again. The cost is the mechanism, not a side effect: while a
++ * bottle holds the pad, macOS and its own applications cannot use it. It is
++ * given back when the process that seized it goes away, which for winebus is
++ * the bottle's winedevice.exe.
++ *
++ * THE SCOPE. Seizing indiscriminately would take the user's own input devices
++ * away from macOS, so the default is what the measurement covers and nothing
++ * wider: a DualSense (054c:0ce6, 054c:0df2) that arrived over Bluetooth, which
++ * is where the timeouts were counted. A DualShock 4 is not included -- the same
++ * shape is plausible for any pad macOS drives, but plausible is not measured,
++ * and mgvf-0005 drew the line in the same place. Nothing else is seized unless
++ * a registry value says so:
++ *
++ *   HKLM\System\CurrentControlSet\Services\winebus\Devices\<vid>/<pid>
++ *     SeizeDevice  REG_DWORD  absent: the default above. 0: open shared, as
++ *                             before. Non-zero: seize.
++ *
++ * Unlike mgvf-0005's UsbEmulation this one is ON by default for the pads it
++ * covers, because it repairs a defect rather than adding a behaviour: without
++ * it the link drops mid-game. The value is there for the two people the
++ * default is wrong for -- a DualSense owner who would rather share the pad
++ * with macOS, and the owner of some other pad who has measured the same
++ * timeouts and wants to try it.
++ *
++ * The value cannot reach a keyboard or a mouse: the enumeration below refuses
++ * everything that is not a joystick or a gamepad before it ever opens
++ * anything, so the widest this can be turned on for is a game controller.
++ */
++static BOOL want_seize(const struct device_desc *desc)
++{
++    const struct device_options *device;
++    BOOL seize;
+ 
++    seize = desc->bus_type == BUS_TYPE_BLUETOOTH && is_dualsense_gamepad(desc->vid, desc->pid);
++
++    /* The per-device options the PE side read at driver start, handed to this
++     * bus in bus_options at init. An entry with no SeizeDevice value leaves
++     * the default alone; an entry with one decides it either way. */
++    if (options) LIST_FOR_EACH_ENTRY(device, &options->devices, struct device_options, entry)
++    {
++        if (device->vid != desc->vid) continue;
++        if (device->pid != -1 && device->pid != desc->pid) continue;
++        if (device->seize == -1) continue;
++        return !!device->seize;
++    }
++
++    return seize;
++}
++
+ static void handle_DeviceMatchingCallback(void *context, IOReturn result, void *sender, IOHIDDeviceRef IOHIDDevice)
+ {
+     struct device_desc desc =
+@@ -275,6 +348,7 @@
+         .serialnumber = {'0','0','0','0',0},
+     };
+     struct iohid_device *impl;
++    IOOptionBits open_options;
+     USAGE_AND_PAGE usages;
+     CFStringRef str;
+ 
+@@ -306,8 +380,22 @@
+         return;
+     }
+ 
+-    if (IOHIDDeviceOpen(IOHIDDevice, 0) != kIOReturnSuccess)
++    /* MGVF mgvf-0006: seize where it is wanted, and fall back to the shared
++     * open this always did when the seize is refused -- another process may
++     * already hold the device exclusively, and a pad shared with macOS behaves
++     * exactly as it did before this patch. */
++    open_options = want_seize(&desc) ? kIOHIDOptionsTypeSeizeDevice : 0;
++    if (open_options && IOHIDDeviceOpen(IOHIDDevice, open_options) != kIOReturnSuccess)
+     {
++        WARN("Failed to seize HID device %p (vid %04x, pid %04x); opening it shared, as before\n",
++             IOHIDDevice, desc.vid, desc.pid);
++        open_options = 0;
++    }
++    else if (open_options)
++        TRACE("Seized HID device %p (vid %04x, pid %04x): macOS cannot use it while this process holds it\n",
++              IOHIDDevice, desc.vid, desc.pid);
++    if (!open_options && IOHIDDeviceOpen(IOHIDDevice, 0) != kIOReturnSuccess)
++    {
+         ERR("Failed to open HID device %p (vid %04x, pid %04x)\n", IOHIDDevice, desc.vid, desc.pid);
+         return;
+     }
+@@ -333,6 +421,7 @@
+     list_add_tail(&device_list, &impl->unix_device.entry);
+     impl->device = IOHIDDevice;
+     impl->buffer = NULL;
++    impl->open_options = open_options;
+ 
+     bus_event_queue_device_created(&event_queue, &impl->unix_device, &desc);
+ }
+@@ -346,9 +435,14 @@
+     /* Note: Yes, we leak the buffer. But according to research there is no
+              safe way to deallocate that buffer. */
+     IOHIDDeviceUnscheduleFromRunLoop(IOHIDDevice, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+-    IOHIDDeviceClose(IOHIDDevice, 0);
+ 
++    /* MGVF mgvf-0006: looked up before the close, so the close can be given the
++     * options the open used. Nothing measured says IOKit needs them -- the open
++     * is released when the connection goes -- but a close that does not mirror
++     * its open is a question nobody should have to answer later. */
+     impl = find_device_from_iohid(IOHIDDevice);
++    IOHIDDeviceClose(IOHIDDevice, impl ? impl->open_options : 0);
++
+     if (impl) bus_event_queue_device_removed(&event_queue, &impl->unix_device);
+     else WARN("failed to find device for iohid device %p\n", IOHIDDevice);
+ }
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -1291,6 +1291,7 @@
+     device->vid = vid;
+     device->pid = pid;
+     device->hidraw = -1;
++    device->seize = -1;
+ 
+     LIST_FOR_EACH_ENTRY(next, &options.devices, struct device_options, entry)
+         if (next->vid > vid || (next->vid == vid && next->pid > pid)) break;
+@@ -1322,6 +1323,8 @@
+     while (!status && name)
+     {
+         static const UNICODE_STRING hidraw = RTL_CONSTANT_STRING(L"Hidraw");
++        /* MGVF mgvf-0006 */
++        static const UNICODE_STRING seize = RTL_CONSTANT_STRING(L"SeizeDevice");
+         static const UNICODE_STRING backslash = RTL_CONSTANT_STRING(L"\\");
+         struct device_options *device;
+         UNICODE_STRING name_str;
+@@ -1358,6 +1361,16 @@
+             device->hidraw = *(DWORD *)info->Data;
+         if (device->hidraw != -1) TRACE("- %04x/%04x: %sabling hidraw\n", device->vid, device->pid, device->hidraw ? "en" : "dis");
+ 
++        /* MGVF mgvf-0006: read here, beside Hidraw, because the answer is
++         * wanted on the UNIX side -- bus_iohid.c decides how to open the
++         * device -- and this list is the only per-device setting that already
++         * crosses that boundary, in the bus_options handed to each bus at
++         * init. Read once at driver start, like Hidraw: changing it takes
++         * effect when the bottle's winedevice next starts. */
++        if (!NtQueryValueKey(subkey, &seize, KeyValuePartialInformation, info, sizeof(buffer), &size) && info->Type == REG_DWORD)
++            device->seize = *(DWORD *)info->Data;
++        if (device->seize != -1) TRACE("- %04x/%04x: %sseizing the device from the host\n", device->vid, device->pid, device->seize ? "" : "not ");
++
+         NtClose(subkey);
+     }
+ 
+--- a/dlls/winebus.sys/unixlib.h
++++ b/dlls/winebus.sys/unixlib.h
+@@ -53,6 +53,9 @@
+     UINT vid;
+     UINT pid;
+     INT hidraw;
++    /* MGVF mgvf-0006: -1 when the device's key says nothing, so that the
++     * default can differ per device rather than being a single global one. */
++    INT seize;
+ };
+ 
+ struct bus_options

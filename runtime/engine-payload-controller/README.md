@@ -7,6 +7,12 @@ table of its own:
     wine/x86_64-windows/winebus.sys    ->  <CX>/lib/wine/x86_64-windows/winebus.sys
     wine/x86_64-windows/setupapi.dll   ->  <CX>/lib/wine/x86_64-windows/setupapi.dll
     wine/x86_64-windows/ntoskrnl.exe   ->  <CX>/lib/wine/x86_64-windows/ntoskrnl.exe
+    wine/x86_64-unix/winebus.so        ->  <CX>/lib/wine/x86_64-unix/winebus.so
+
+Note the fourth line. `winebus.so` is the **unix half** of `winebus` and does
+not live with the PE files: `x86_64-unix`, not `x86_64-windows`. It is the one
+thing about this layout that cannot be guessed from the other three, and a
+patcher that assumes the directory from them writes a Mach-O over a PE file.
 
 `built-for.json` and this file are not copied into the engine.
 
@@ -15,22 +21,34 @@ overlaying `engine-payload/` installs the media set and nothing else, and
 overlaying this tree installs this set and nothing else. A patcher chooses per
 set. The same bytes ship flat beside `runtime/install-engine-controller.sh` as
 `engine-controller-winebus.sys`, `engine-controller-setupapi.dll`,
-`engine-controller-ntoskrnl.exe` and `engine-controller-built-for.json`, and
+`engine-controller-ntoskrnl.exe`, `engine-controller-winebus.so` and
+`engine-controller-built-for.json`, and
 `check-builds.sh` compares the two copies. The `engine-controller-` prefix is
 deliberate: the media installer picks its set by reading `engine-built-for*.json`
 and `engine-winegstreamer*`, and these must never be taken for one of those.
 
 ## What this is
 
-Three PE files built from the engine's own wine source — the revision
-`built-for.json` records — with four patches of ours on top: `mgvf-0002`,
-`mgvf-0003`, `mgvf-0004` and `mgvf-0005`. `source-patches/README.md` says what
-each one does. There is no unix half and no decoder: nothing in these files links
-against the engine, so one build serves every engine of the name and version
-the stamp records, and a copy this project made is served through `copied_from`
-in its `mgvf-origin.json`, the way the media set is. Read `built-for.json`
-before installing and **check both fields**: a patched fork and a stock
-CrossOver report the same version, and the app name is what tells them apart.
+**Four files, five patches.** Three PE files and the unix half of `winebus`,
+built from the engine's own wine source — the revision `built-for.json` records
+— with `mgvf-0002`, `mgvf-0003`, `mgvf-0004`, `mgvf-0005` and `mgvf-0006` on
+top. `source-patches/README.md` says what each one does.
+
+The fourth file is new in `mgvf-0006` and it is why the set is no longer PE
+only: that patch changes how winebus **opens** the pad, which is `bus_iohid.c`,
+which compiles into `winebus.so`. Both halves of winebus ship together — they
+are built from one tree and read one struct — so an engine on three of these
+files and CodeWeavers' `winebus.so` is not a supported combination, and
+`--status` calls it `broken`.
+
+No decoder, and nothing here links against the engine's own libraries: one
+build serves every engine of the name and version the stamp records, and a copy
+this project made is served through `copied_from` in its `mgvf-origin.json`, the
+way the media set is. Read `built-for.json` before installing and **check both
+fields**: a patched fork and a stock CrossOver report the same version, and the
+app name is what tells them apart. That check matters more for the unix half
+than for the other three: it links `ntdll.so` and speaks wine's internal
+interfaces, which are not stable between wine revisions.
 
 **What they change.** A Windows client decides whether a controller is on USB
 or Bluetooth by asking the HID device's parent devnode for its compatible ids
@@ -108,6 +126,63 @@ is not yet measured on a live pad: the packing is proven byte for byte against
 packets that rumbled the pad, but the option has not yet been turned on under
 a running title, so the first use belongs in a `+hid` trace.
 
+## Taking the pad away from macOS
+
+**On by default, and it costs something.** This is the one thing in this set
+that changes what macOS can do while a bottle is up, so it is written out
+plainly.
+
+macOS drives a connected DualSense itself. WindowServer's
+`com.apple.GameController.HID:DualSense` driver opens the pad every time it
+appears and writes Bluetooth output reports to it. wine's winebus used to open
+the same pad *shared* and write its own. A DualSense on Bluetooth has one
+output pipe, and with two writers on it macOS's writes time out. Measured from
+macOS's own log on 2026-09-08: 163 timeouts in a day — *"(Async) Unable to send
+BT output report to DualSense - error -536870186"*, which is
+`kIOReturnTimeout` — every one of them inside a minute in which a game was
+running under wine, 4 to 35 a minute. After a burst the driver tears itself
+down and 160 ms later bluetoothd drops the link, *"reason 10719"*: six drops in
+six minutes across two launches, where the drops earlier that day carried
+`10722`, the pad's ordinary idle power-off. **The pad was not turning itself off
+during play. The link was being killed by contention, and wine was the second
+writer.**
+
+With `mgvf-0006` winebus opens such a pad with `kIOHIDOptionsTypeSeizeDevice`:
+IOKit hands it to wine alone and macOS's driver releases it, so there is one
+writer again.
+
+**What that costs.** While a bottle holds the pad, **macOS and its own
+applications cannot use it** — not the desktop, not a Mac-native game, not
+another CrossOver bottle. The pad comes back when the bottle shuts down, which
+is when the process that seized it goes away. That is the mechanism and not a
+side effect: the fault is two writers, and the fix is one.
+
+**What it applies to.** Only a **DualSense** (`054c:0ce6`, `054c:0df2`) that
+arrived over **Bluetooth**, which is where the timeouts were counted. A pad on
+a cable, a DualShock 4 and every other device are opened shared, exactly as
+before. Keyboards and mice cannot be reached by this at all: winebus refuses
+everything that is not a joystick or a gamepad before it opens anything. And if
+the seizing open fails — another process holds the device exclusively already —
+winebus falls back to the shared open and the pad still works.
+
+    HKLM\System\CurrentControlSet\Services\winebus\Devices\<vid>/<pid>
+        SeizeDevice    REG_DWORD   absent: as above. 0: share the pad with
+                                   macOS, as before this patch. 1: seize it.
+
+The key is the one `UsbEmulation` and winebus's own `Hidraw` live under, named
+after the pad's real ids in lower-case hex with a slash — `054c/0ce6`,
+`054c/0df2`. **Unlike `UsbEmulation` this one is on by default** for the pads
+above, because it repairs a defect rather than adding a behaviour: without it
+the link drops mid-game. Set it to `0` if you would rather share the pad; set
+it to `1` on some other pad if you have measured the same timeouts and want to
+try it. It is read once, when the bottle's wine starts — not per connect, as
+`UsbEmulation` is — so a change applies on the next start of the bottle.
+
+**Not yet measured:** that the seize *stops* the drops. What is measured is the
+contention, its consequence, and that wine is the second writer. The first run
+with this file belongs in the same log the timeouts were counted in, looking
+for the absence of *"Unable to send BT output report"*.
+
 ## Optional
 
 An improvement, not a fix. No title in the README's table needs it, every one
@@ -121,15 +196,17 @@ offer as a switch and never to install unasked.
 
     runtime/install-engine-controller.sh <engine app>            # install
     runtime/install-engine-controller.sh <engine app> --status   # installed, broken or absent
-    runtime/install-engine-controller.sh <engine app> --restore  # put CodeWeavers' three files back
+    runtime/install-engine-controller.sh <engine app> --restore  # put CodeWeavers' four files back
 
 The contract is `install-engine-media.sh`'s: the engine's name is checked
 against the stamp, then `copied_from` in its `mgvf-origin.json`, then its
 version, and anything else is refused; the originals are kept beside the new
 files as `.mgvf-stock`; a backup that is byte for byte our own build is refused
-rather than carried; `--status` answers `installed` when all three backups are
-there, `broken` when some are, `absent` when none is. Two differences. It
-refuses while a bottle is running — `winedevice.exe` holds `winebus.sys` and
+rather than carried; `--status` answers `installed` when all four backups are
+there, `broken` when some are, `absent` when none is — so an engine still
+carrying the earlier three-file install reads as `broken`, correctly, and
+installing puts the fourth file in. Two differences. It refuses while a bottle
+is running — `winedevice.exe` holds `winebus.sys`, `winebus.so` and
 `ntoskrnl.exe`, and a swap while it runs leaves the bottle half on each set
 until it shuts down — in both directions, so close Steam first. And it re-signs
 the bundle and clears its quarantine attribute itself, in that order, because it
@@ -142,6 +219,10 @@ runs after the engine copy exists with no signing step after it.
 | `wine/x86_64-windows/winebus.sys` | 57,344 | 0 | 70 |
 | `wine/x86_64-windows/setupapi.dll` | 462,848 | 617 | 210 |
 | `wine/x86_64-windows/ntoskrnl.exe` | 393,216 | 1,667 | 678 |
+| `wine/x86_64-unix/winebus.so` | 45,576 | 2 | 5 |
+
+The last row is the Mach-O and its two numbers mean something else, which is
+said under the table rather than in a fifth column nothing else would fill.
 
 The configured tree compiles PE with `-g` and links with `-Wl,-debug:dwarf`,
 so what `make` produces carries a COFF symbol table and six `.debug_*`
@@ -155,14 +236,31 @@ files are the same shape — no symbol table, no debug sections — at 43,584,
 477,776 and 389,200 bytes. The build directory keeps the unstripped file beside
 the shipped one as `<name>.unstripped`.
 
+**The unix half is stripped on the same argument, in the terms a Mach-O has.**
+It has no COFF tables and no `.debug_` section to look for — macOS leaves the
+DWARF in the `.o` files — so what a loader reads there is the **exported symbol
+list** and the **linked libraries**, and what an unstripped file still carries
+is a **local symbol table**. `/usr/bin/strip -S -x` takes 60,472 bytes to
+45,576; the exported symbols (`nm -gU`) and the linked libraries (`otool -L`)
+are listed before and after and compared identical, and the 143 local symbols
+must be 0 afterwards, or the stamp is not written. CodeWeavers' own
+`winebus.so` is the same shape, with no local symbols, at 85,664 bytes. Two
+further checks the PE files do not need, borrowed from
+`build-winegstreamer.sh`: no `/opt/cxoffice` path — CodeWeavers' build prefix,
+which exists on no Mac — may survive in it, and every `@rpath` dependency must
+exist in the engine beside it, or the file cannot load its own dependencies.
+
 `check-builds.sh` reads the **exports** and **imported symbols** columns of this
 table and verifies each shipped file against them, and that it is still
 stripped — the same way the codec hashes are read out of `CODEC-LICENCES.md`.
-"Imported symbols" is the count of `Symbol:` lines in `llvm-readobj
---coff-imports`, import and delay-import blocks together, DLL names not
-counted. The **bytes** column is as built on 2026-09-08 and is for the reader;
-a rebuild that moves any of these numbers should refresh this table, and
-`scripts/install-controller-build.sh` prints the row it measured.
+For the three PE rows, "imported symbols" is the count of `Symbol:` lines in
+`llvm-readobj --coff-imports`, import and delay-import blocks together, DLL
+names not counted. For the `x86_64-unix` row the two columns are the count of
+**exported symbols** (`nm -gU`: the two `__wine_unix_call*` tables, and nothing
+else is meant to be there) and of **linked libraries** (`otool -L`, the file's
+own install name excluded). The **bytes** column is as built on 2026-09-08 and
+is for the reader; a rebuild that moves any of these numbers should refresh this
+table, and `scripts/install-controller-build.sh` prints the row it measured.
 
 ## Not the same bytes as CodeWeavers'
 
@@ -187,3 +285,14 @@ theirs takes them from `ucrtbase.dll` and `ntdll.dll`, and imports
 import the patch added. All three are measured working with those
 differences. Recorded as an observation: how CodeWeavers'
 build resolves those imports has not been looked into.
+
+The unix half differs from theirs too, and in one way worth writing down. Both
+export the same two symbols. Ours links five libraries where theirs links six:
+theirs takes `@rpath/libinotify.0.dylib`, and carries two extra `LC_RPATH`
+entries into `lib64` to find it, and ours does not, because this project's
+`configure` line passes `--without-inotify`. inotify is used only by
+`bus_udev.c`, which no macOS engine compiles in — `HAVE_UDEV` is not defined
+here and the file builds to nothing — so what is lost with the link is nothing
+that ran. `ntdll.so`, `IOKit`, `CoreFoundation` and `libSystem` are the same in
+both, and ours resolves `ntdll.so` through its own `@loader_path/`, the
+directory it is installed into.

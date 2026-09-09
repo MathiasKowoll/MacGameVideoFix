@@ -491,9 +491,10 @@ scripts/build-controller-bus.sh
 scripts/install-controller-build.sh
 ```
 
-These two produce a second engine set, and it is **optional**: `winebus.sys`,
-`setupapi.dll` and `ntoskrnl.exe` from the same tree with `mgvf-0002`,
-`mgvf-0003` and `mgvf-0004` applied, so that a Windows client can learn a
+These two produce a second engine set, and it is **optional**: four files from
+the same tree with four patches of ours applied — `winebus.sys`,
+`setupapi.dll` and `ntoskrnl.exe`, and `winebus.so`, the unix half of winebus.
+`mgvf-0002`, `mgvf-0003` and `mgvf-0004` let a Windows client learn a
 controller is on Bluetooth. A DualSense then rumbles over Bluetooth, and its PS
 button and touchpad work, as they always did over USB; trigger effects ride in
 the same report, and a title that sends them over Bluetooth is reported working.
@@ -502,11 +503,21 @@ The same `winebus.sys` also carries `mgvf-0005`, a per-device registry option
 USB, for Sony's libScePad and for Steam's *plug in your controller* dialog,
 which both insist on a wired pad. Either DualSense, plain or Edge, can be
 presented that way; `runtime/engine-payload-controller/README.md` says how to
-turn it on, and that the driver half has not yet run against a live pad. An improvement rather than a
+turn it on, and that the driver half has not yet run against a live pad.
+`mgvf-0006` is the fourth, and it is why the set now carries a unix half:
+macOS drives a connected DualSense itself, wine opened the same pad shared and
+wrote to it too, and with two writers on the pad's single Bluetooth output pipe
+macOS's writes timed out until its driver gave up and the Bluetooth link
+dropped — measured from macOS's own log, 163 timeouts in a day and every one of
+them while a game was running under wine. wine now **seizes** such a pad, and
+that costs exactly what it sounds like: **while a bottle holds the pad, macOS
+and its own applications cannot use it**, and it is released when the bottle
+closes. On by default for a DualSense on Bluetooth, and only for that; a
+registry value turns it off per device. An improvement rather than a
 fix: no row of the table needs it and the Motor column does not change. It is
 installed and removed with
 `runtime/install-engine-controller.sh <app> install | --status | --restore`,
-which keeps CodeWeavers' three files as `.mgvf-stock`, refuses any engine but the
+which keeps CodeWeavers' four files as `.mgvf-stock`, refuses any engine but the
 one both stamp fields name, refuses while a bottle is running, and re-signs the
 bundle itself. `make-engine-copy.sh` never installs it. The files ship stripped;
 `runtime/engine-payload-controller/README.md` says what that means and what

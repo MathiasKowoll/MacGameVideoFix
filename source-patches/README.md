@@ -16,14 +16,20 @@ and the installer chooses between them by the name of the engine it is pointed
 at. All of them record the patch set above.
 
 `scripts/build-controller-bus.sh` builds a **second, optional set** from the
-same tree, with `mgvf-0002`, `mgvf-0003`, `mgvf-0004` and `mgvf-0005` applied
-on top: `winebus.sys`, `setupapi.dll` and `ntoskrnl.exe`, three PE files and no
-unix half. It is stamped apart, in `runtime/engine-controller-built-for.json`
+same tree, with `mgvf-0002`, `mgvf-0003`, `mgvf-0004`, `mgvf-0005` and
+`mgvf-0006` applied on top: `winebus.sys`, `setupapi.dll`, `ntoskrnl.exe` and
+`winebus.so` — three PE files and, since `mgvf-0006`, the unix half of winebus
+as well. It is stamped apart, in `runtime/engine-controller-built-for.json`
 beside `runtime/install-engine-controller.sh` and mirrored as
 `runtime/engine-payload-controller/built-for.json`, and that stamp records only
-those four. The media stamps above record only the media patch set, and that
-stays so: the four are not applied to the winegstreamer pair and the pair is
+those five. The media stamps above record only the media patch set, and that
+stays so: the five are not applied to the winegstreamer pair and the pair is
 not rebuilt when they change.
+
+The set grew a unix half because `mgvf-0006` is in `bus_iohid.c`, which is unix
+code. Both halves of winebus then ship together: they are built from one tree
+and read one struct, so an engine on our `winebus.sys` and CodeWeavers'
+`winebus.so` is not a combination anyone should be running.
 
 `build-winegstreamer.sh` resolves each number here first, and only then in the
 fallback directory `MGVF_PATCHES` names, which is where winevideo's patches sit
@@ -61,7 +67,11 @@ from, the fault, the change — and that nothing in it is specific to this
 project. **`mgvf-0005` is ours as well**, from the same day and in the same
 set, and is the opposite of the three: where they tell a client the truth
 about the bus, it lets one pad lie about it, per device, off by default, for
-the two consumers that turned out not to want the truth.
+the two consumers that turned out not to want the truth. **`mgvf-0006` is ours
+too**, from the same day and the same set, and is the first of ours to touch
+the unix half of a driver rather than the PE half: it stops wine and macOS
+writing to the same pad at once. Unlike `mgvf-0005` it is **on by default**,
+because it repairs a defect rather than offering a behaviour.
 
 ## What each one is for
 
@@ -188,6 +198,43 @@ DualShock 4, deliberately, and the driver half has not yet run against a live
 pad — and the risks are in the patch's own header; how to turn it on is in
 `runtime/engine-payload-controller/README.md`.
 
+### mgvf-0006 — winebus seizes a DualSense on Bluetooth *(ours)*
+macOS drives a connected DualSense itself: WindowServer's
+`com.apple.GameController.HID:DualSense` driver opens the pad every time it
+appears and writes Bluetooth output reports to it. winebus opened the same pad
+**shared** — `IOHIDDeviceOpen(IOHIDDevice, 0)` in `bus_iohid.c` — and wrote its
+own. A pad on Bluetooth has one output pipe, and with two writers on it macOS's
+writes time out. Measured from macOS's own log on 2026-09-08: 163
+`kIOReturnTimeout` failures in a day, every one inside a minute in which a game
+was running under wine, 4 to 35 a minute; after a burst its driver tears itself
+down and 160 ms later bluetoothd drops the link with `reason 10719`, six times
+in six minutes across two launches, against the spread-out `10722` drops — the
+pad's idle power-off — earlier the same day. The pad was not turning itself off
+during play.
+
+The open now asks for `kIOHIDOptionsTypeSeizeDevice`, so IOKit hands the device
+to wine alone and macOS's driver releases it. **The cost is the mechanism:**
+while a bottle holds the pad, macOS and its own applications cannot use it, and
+it comes back when the bottle shuts down. A seizing open that fails falls back
+to the shared one, so nothing that works today stops working.
+
+Scoped to what was measured and no wider — a DualSense (`054c:0ce6`,
+`054c:0df2`) that arrived over Bluetooth — with `SeizeDevice` under
+`HKLM\System\CurrentControlSet\Services\winebus\Devices\<vid>/<pid>` to
+decide it either way for any device. **On by default** for those pads, unlike
+`mgvf-0005`'s `UsbEmulation`, because without it the link drops mid-game.
+winebus refuses everything that is not a joystick or a gamepad before it opens
+anything, so no value under that key can seize a keyboard or a mouse.
+
+The unix half does not read the registry, so the value rides the per-device
+settings that already cross the boundary: `struct device_options` — the list
+`main.c` fills at driver start and hands to each bus inside `struct
+bus_options` — gains one `INT` beside its existing `hidraw`, read from the same
+subkey by the same loop. It is therefore read once, at driver start, and a
+change applies when the bottle's `winedevice` next starts. What this patch
+touches is the first unix code in the set, which is why the set now ships a
+fourth file; `runtime/engine-payload-controller/README.md` says where it goes.
+
 ## If another of their patches is ever needed
 
 The remaining 31 are not applied here, and several address titles this project
@@ -201,7 +248,9 @@ The optional set has records of its own to refresh: `runtime/engine-controller-b
 and `runtime/engine-payload-controller/built-for.json`, both written by
 `scripts/install-controller-build.sh` from the build's `controller-built-for.json`,
 and the table in `runtime/engine-payload-controller/README.md` that
-`check-builds.sh` reads. A patch added to that set is named in
+`check-builds.sh` reads — whose last row is the unix half and whose two number
+columns mean exported symbols and linked libraries there rather than COFF
+exports and imports. A patch added to that set is named in
 `build-controller-bus.sh`'s own list rather than in `--patches`, and the
 sentence above about describing it here applies just the same.
 

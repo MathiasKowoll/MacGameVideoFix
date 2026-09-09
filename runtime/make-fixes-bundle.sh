@@ -392,7 +392,8 @@ my $optional_block = "";
   if (-f "$repo/runtime/install-engine-controller.sh" && -f $cbf
       && -f "$repo/runtime/engine-controller-winebus.sys"
       && -f "$repo/runtime/engine-controller-setupapi.dll"
-      && -f "$repo/runtime/engine-controller-ntoskrnl.exe") {
+      && -f "$repo/runtime/engine-controller-ntoskrnl.exe"
+      && -f "$repo/runtime/engine-controller-winebus.so") {
     open my $cf, '<', $cbf or die;
     my $j = do { local $/; <$cf> };
     my ($ev) = $j =~ /"engine_version":\s*"([^"]*)"/;
@@ -401,12 +402,18 @@ my $optional_block = "";
     my ($pt) = $j =~ /"patches":\s*"([^"]*)"/;
     $optional_block = sprintf(
       qq(\n  "engineOptional": [{"id":"controller","script":"install-engine-controller.sh","scope":"engine","optional":true,)
-      . qq("files":["engine-controller-winebus.sys","engine-controller-setupapi.dll","engine-controller-ntoskrnl.exe","engine-controller-built-for.json"],)
+      . qq("files":["engine-controller-winebus.sys","engine-controller-setupapi.dll","engine-controller-ntoskrnl.exe","engine-controller-winebus.so","engine-controller-built-for.json"],)
+      # The fourth destination is a DIFFERENT directory. Three PE files go to
+      # lib/wine/x86_64-windows/ and the unix half of winebus to
+      # lib/wine/x86_64-unix/; a launcher that copies by this list rather than
+      # by the file name gets it right, and one that assumes the directory from
+      # the other three overwrites a PE file with a Mach-O.
       . qq("install":[{"file":"engine-controller-winebus.sys","dest":"lib/wine/x86_64-windows/winebus.sys"},)
       . qq({"file":"engine-controller-setupapi.dll","dest":"lib/wine/x86_64-windows/setupapi.dll"},)
-      . qq({"file":"engine-controller-ntoskrnl.exe","dest":"lib/wine/x86_64-windows/ntoskrnl.exe"}],)
+      . qq({"file":"engine-controller-ntoskrnl.exe","dest":"lib/wine/x86_64-windows/ntoskrnl.exe"},)
+      . qq({"file":"engine-controller-winebus.so","dest":"lib/wine/x86_64-unix/winebus.so"}],)
       . qq("builtFor":{"app":"%s","version":"%s","wine":"%s"},"patches":"%s",)
-      . qq("why":"Lets a Windows client learn that a controller is on Bluetooth: winebus names the bus in its compatible ids, setupapi answers CM_Get_Parent for HID children, and ntoskrnl refreshes a device's ids on every enumeration. A DualSense on Bluetooth then rumbles, and its PS button and touchpad work, as over USB; trigger effects ride in the same report. An improvement, not a fix: no title needs it, every one runs without it, the originals are kept as .mgvf-stock and --restore puts them back. Offered as a switch, on by default in RaccoonBot for an engine it was built for; off puts the originals back. The engine name is checked against the app, then against copied_from in the engine's mgvf-origin.json, then the version; the installer refuses anything else and refuses while a bottle is running."}],),
+      . qq("why":"Lets a Windows client learn that a controller is on Bluetooth: winebus names the bus in its compatible ids, setupapi answers CM_Get_Parent for HID children, and ntoskrnl refreshes a device's ids on every enumeration. A DualSense on Bluetooth then rumbles, and its PS button and touchpad work, as over USB; trigger effects ride in the same report. The fourth file, the unix half of winebus, also makes wine SEIZE a DualSense that arrived over Bluetooth, because macOS drives the pad itself and two writers on its single Bluetooth output pipe made macOS's writes time out until the link dropped mid-game. That costs what it says: while a bottle holds the pad, macOS and its own applications cannot use it, and it comes back when the bottle shuts down. An improvement, not a fix: no title needs it, every one runs without it, the originals are kept as .mgvf-stock and --restore puts them back. Offered as a switch, on by default in RaccoonBot for an engine it was built for; off puts the originals back. The engine name is checked against the app, then against copied_from in the engine's mgvf-origin.json, then the version; the installer refuses anything else and refuses while a bottle is running."}],),
       $ea // "", $ev // "", $wb // "", $pt // "");
   }
 }
