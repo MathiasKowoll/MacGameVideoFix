@@ -29,10 +29,12 @@ and `engine-winegstreamer*`, and these must never be taken for one of those.
 
 ## What this is
 
-**Four files, five patches.** Three PE files and the unix half of `winebus`,
+**Four files, seven patches.** Three PE files and the unix half of `winebus`,
 built from the engine's own wine source — the revision `built-for.json` records
-— with `mgvf-0002`, `mgvf-0003`, `mgvf-0004`, `mgvf-0005` and `mgvf-0006` on
-top. `source-patches/README.md` says what each one does.
+— with `mgvf-0002`, `mgvf-0003`, `mgvf-0004`, `mgvf-0005`, `mgvf-0006`,
+`mgvf-0007` and `mgvf-0008` on top. `source-patches/README.md` says what each
+one does. The last of them is an **experiment** rather than a fix and is
+written out as one below.
 
 The fourth file is new in `mgvf-0006` and it is why the set is no longer PE
 only: that patch changes how winebus **opens** the pad, which is `bus_iohid.c`,
@@ -113,6 +115,64 @@ is derived from the other pad's descriptor: they differ, and the difference
 matters — output `0x02` is 48 bytes on the plain pad and 64 on the Edge. The
 `0x31` that goes to the pad is 78 bytes either way, with the effects block at
 the same offsets, so the same translation carries both lengths.
+
+**What the lie costs the pad, and what the emulation now refuses.** Telling a
+client the pad is wired invites it to ask for the part of the pad a cable is
+for. A DualSense's speaker, headphone jack and microphone hang off its USB
+audio interfaces, and a client that believes the pad is on a cable will ask to
+configure them: in the first trace of this emulation under a real title, on
+2026-09-08, the title's libScePad wrote exactly two output reports through it,
+an ordinary one — rumble and both trigger effects — and one asking for nothing
+but the pad's audio path, and 22 milliseconds after the second the pad's
+Bluetooth link was gone. With `mgvf-0007` the emulation takes those fields back
+out on the pad's behalf: the flag bits that enable the audio settings are
+cleared and the bytes they govern zeroed, before the CRC, and every other byte
+goes to the pad exactly as the client wrote it — rumble, trigger effects,
+lightbar and player LEDs are untouched, and so is a client that speaks
+Bluetooth natively. Which bits and bytes those are was read out of Sony's own
+libScePad and not guessed. **That the request is what killed the link is not
+established**, and the honest form of it is worth having: in a two-hour session
+with the same pad presented truthfully, over Bluetooth, a client sent the same
+audio request twice and the link stayed up for another fifteen minutes and more
+after each. What is measured is the order of events. What the patch rests on is
+narrower: the request asks for hardware the pad has only on a cable, the
+emulation is the reason a client asks for it here at all, and nothing under
+wine is on the other end of the pad's audio path — so dropping it costs nothing
+that was measured and leaves less of the lie reaching the pad.
+
+**An experiment rides here too, and it is on by default.** `mgvf-0008` is the
+one thing in this set that is not a repair. In the fatal trace above the pad
+did not merely receive an audio request: 51 milliseconds before it, the title's
+libScePad **wrote a feature report** to the pad — report `0x08`, 48 bytes,
+`08 02` and then zeros — and macOS's own log for the moment the link ended says
+the pad initiated the parting, *"Received disconnection indication on device
+DualSense Edge Wireless Controller reason 431"*. Not a link failure and not
+macOS letting go: the pad chose to leave. That trace holds exactly one feature
+write. The two-hour session in which the same pad worked perfectly on
+Bluetooth under Steam holds none, and every session the pad left within seconds
+is a session Sony's library was driving. So while this experiment is running,
+**a feature write in the emulation path is answered as if it had succeeded and
+no byte of it reaches the pad** — answered, not refused, because that library
+drops the pad itself when a feature write fails, which would measure the
+library and not the pad. Feature *reads* are untouched, output reports are
+untouched, and a pad the emulation is not presenting is untouched.
+
+    HKLM\System\CurrentControlSet\Services\winebus\Devices\<vid>/<pid>
+        ForwardFeatureWrites  REG_DWORD  absent (default): the write is
+                                         answered and not sent. Non-zero: it
+                                         goes to the pad, as before this
+                                         experiment.
+
+Absence means swallow on purpose: an experiment that has to be switched on is
+one nobody runs. Set the value to `1` to put the write back on the wire without
+another build. It is read when the pad arrives, under the pad's **real** ids,
+beside `UsbEmulation` — so a change applies on the next connect or the next
+start of the bottle, exactly as `UsbEmulation` does. A `+hid` trace shows which
+of the two happened: *"swallowed the feature write, report id ... length ..."*
+where it used to say *"appended the Bluetooth CRC to feature report id ..."*.
+**What this does not establish** is that the write is what makes the pad leave
+— the pad answered a feature read 43 ms after it — and if the next trace shows
+the pad leaving at the same point anyway, this comes back out.
 
 **Limits.** No pad but a DualSense, and that is a decision rather than a gap:
 a DualShock 4's descriptor, input reports and output reports all differ, so it

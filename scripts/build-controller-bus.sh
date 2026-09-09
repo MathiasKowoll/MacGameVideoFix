@@ -2,9 +2,9 @@
 #
 # Build the four engine files that let a Windows client learn which bus a
 # controller is on, and let wine keep the pad to itself while it has it:
-# winebus.sys (mgvf-0002, and mgvf-0005 for the pad that must not be told),
-# setupapi.dll (mgvf-0003), ntoskrnl.exe (mgvf-0004) -- three PE files -- and
-# winebus.so (mgvf-0006), the UNIX half of winebus.
+# winebus.sys (mgvf-0002, and mgvf-0005, mgvf-0007 and mgvf-0008 for the pad
+# that must not be told), setupapi.dll (mgvf-0003), ntoskrnl.exe (mgvf-0004) --
+# three PE files -- and winebus.so (mgvf-0006), the UNIX half of winebus.
 #
 #     scripts/build-controller-bus.sh
 #
@@ -18,7 +18,18 @@
 # mgvf-0005 is the opposite, for the two consumers that turned out not to want
 # the truth: an opt-in per-device option that presents a DualSense on
 # Bluetooth as if it were on USB, off by default, so the shipped winebus.sys
-# behaves exactly as before unless a registry value says otherwise.
+# behaves exactly as before unless a registry value says otherwise. mgvf-0007
+# is the bill for that lie: a client told the pad is wired asks for the pad's
+# speaker, headphone jack and microphone, which are what a cable is for, so the
+# emulation takes those fields back out of the report on the pad's behalf and
+# leaves every other byte as the client wrote it. mgvf-0008 is the odd one out
+# and is marked as such wherever it is named: an EXPERIMENT rather than a fix.
+# In the emulation path a feature-report WRITE is answered as if it had
+# succeeded and no byte of it goes to the pad, because the feature write is the
+# one piece of traffic present in every session the pad left within seconds and
+# absent from the one it stayed in. It is what a fresh install does, and a
+# registry value puts the write back on the wire without another build. What it
+# does not establish is in its own header, at length.
 #
 # AND WHY THERE IS NOW A FOURTH FILE. mgvf-0006 changes how winebus OPENS the
 # pad, and that is bus_iohid.c, which compiles into the unix half. Measured
@@ -75,18 +86,53 @@ for t in llvm-strip llvm-readobj llvm-objdump; do
 done
 
 # ---- 1. our patches, on top of whatever the winegstreamer build applied ------
-for p in mgvf-0002 mgvf-0003 mgvf-0004 mgvf-0005 mgvf-0006; do
-  f=$(ls "$OWNPATCHES/$p"-*.patch 2>/dev/null | head -1)
-  [ -n "$f" ] || { say "no patch numbered $p in $OWNPATCHES"; exit 1; }
-  # Already applied is told by the reverse dry run applying cleanly: macOS's
-  # BSD patch and GNU patch word the "previously applied" message differently.
-  if ( cd "$TREE" && patch -p1 -R -l -F3 --dry-run <"$f" >/dev/null 2>&1 ); then
-    say "already applied $(basename "$f")"
-  elif ( cd "$TREE" && patch -p1 --forward -l -F3 <"$f" >/dev/null 2>&1 ); then
-    say "applied $(basename "$f")"
-  else
-    say "FAILED to apply $(basename "$f")"; exit 1
-  fi
+#
+# The tree is reused between runs, so each patch has to be asked whether it is
+# in it already. That used to be a reverse dry run of the one patch, on its own,
+# in the tree -- macOS's BSD patch and GNU patch word the "previously applied"
+# message differently, so the exit status of a reversal was the portable answer.
+# It stopped being a correct answer with mgvf-0007, which rewrites lines
+# mgvf-0005 added: in a tree carrying both, mgvf-0005 will not reverse, because
+# the context it wants is the text mgvf-0007 replaced, and the build then
+# reported a patch it had applied itself as FAILED.
+#
+# mgvf-0008 rewrites mgvf-0007's lines the same way, so the question was asked
+# again with seven in the list: the ordered reversal answers all seven
+# correctly, and needed no change to do it.
+#
+# So the question is asked where it can be answered: in a SCRATCH COPY of the
+# files the set touches, with the stack taken back off it LAST FIRST. Reversing
+# mgvf-0007 there puts the copy back into the state mgvf-0005 was applied to,
+# and mgvf-0005's own reversal then says what it always meant. Nothing is
+# written to the tree by the test; the tree is only ever forward-applied to,
+# and in order.
+PATCHSET="mgvf-0002 mgvf-0003 mgvf-0004 mgvf-0005 mgvf-0006 mgvf-0007 mgvf-0008"
+patch_file() { ls "$OWNPATCHES/$1"-*.patch 2>/dev/null | head -1; }
+for p in $PATCHSET; do
+  [ -n "$(patch_file "$p")" ] || { say "no patch numbered $p in $OWNPATCHES"; exit 1; }
+done
+
+SCRATCH="$(mktemp -d)"; trap 'rm -rf "$SCRATCH"' EXIT
+for f in $(for p in $PATCHSET; do /usr/bin/sed -n 's|^--- a/||p' "$(patch_file "$p")"; done | sort -u); do
+  [ -f "$TREE/$f" ] || continue
+  mkdir -p "$SCRATCH/$(dirname "$f")"; cp "$TREE/$f" "$SCRATCH/$f"
+done
+have=""
+for p in $(printf '%s\n' $PATCHSET | /usr/bin/sed -n '1!G;h;$p'); do
+  ( cd "$SCRATCH" && patch -p1 -R -l -F3 <"$(patch_file "$p")" >/dev/null 2>&1 ) && have="$have $p "
+done
+
+for p in $PATCHSET; do
+  f="$(patch_file "$p")"
+  case "$have" in
+    *" $p "*) say "already applied $(basename "$f")" ;;
+    *)
+      if ( cd "$TREE" && patch -p1 --forward -l -F3 <"$f" >/dev/null 2>&1 ); then
+        say "applied $(basename "$f")"
+      else
+        say "FAILED to apply $(basename "$f")"; exit 1
+      fi ;;
+  esac
 done
 
 # ---- 2. the three PE files and the unix half ----------------------------------
@@ -202,7 +248,7 @@ cat > "$OUT/controller-built-for.json" <<JSON
   "engine_app": "$STAMP_APP",
   "engine_version": "$(defaults read "$ENGINE_APP/Contents/Info.plist" CFBundleVersion 2>/dev/null || echo unknown)",
   "wine_build": "$(strings -a "$ENGINE/lib/wine/x86_64-unix/ntdll.so" | grep -oE 'wine-[0-9]+\.[0-9]+[^ ]*' | head -1)",
-  "patches": "mgvf-0002 mgvf-0003 mgvf-0004 mgvf-0005 mgvf-0006"
+  "patches": "mgvf-0002 mgvf-0003 mgvf-0004 mgvf-0005 mgvf-0006 mgvf-0007 mgvf-0008"
 }
 JSON
 say "built for: $(sed -n 's/.*"engine_app": "\(.*\)".*/\1/p' "$OUT/controller-built-for.json") / $(sed -n 's/.*"wine_build": "\(.*\)".*/\1/p' "$OUT/controller-built-for.json")"

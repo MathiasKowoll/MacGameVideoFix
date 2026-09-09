@@ -1,0 +1,347 @@
+From: MacGameVideoFix <https://github.com/MathiasKowoll/MacGameVideoFix>
+Subject: [PATCH] winebus.sys: the USB emulation refuses a wired-only audio request on the pad's behalf
+
+WHERE THIS CAME FROM
+
+MacGameVideoFix's own series, mgvf-NNNN, written on 2026-09-08, the sixth of
+ours and the fifth in the controller-bus set. It is a follow-up to mgvf-0005
+and does not apply without it: it changes that patch's own translation, in the
+emulation path and nowhere else. Nothing in it is specific to this project.
+
+THE FAULT
+
+mgvf-0005 tells a client that a DualSense on Bluetooth is on a cable. A client
+that believes it asks for what a wired pad has, and the pad's audio hardware --
+its speaker, its headphone jack and its microphone -- is the part of it that a
+cable is for.
+
+The first trace of the emulation under a real title, emulation-224719.log on
+2026-09-08, has the pad presented at 651695.444 ("presenting Bluetooth
+DualSense 054c:0df2 as USB 054c:0df2, 405-byte report descriptor") and then two
+output reports, which are the only two that title ever wrote through it:
+
+  651734.192  02 0d 17 00 00 00 00 00 00 00 00 05 ...  (224719:4633)
+  651734.193  02 80 40 00 00 00 00 00 0c 00 00 00 ...  (224719:4651)
+
+At 651734.215, 22 milliseconds after the second, IOKit reported the device
+removed: the Bluetooth link was gone.
+
+The translation is not what is wrong. Both reports were packed faithfully into
+a 0x31 of 78 bytes with the sequence byte, the 0x10 tag and a CRC, and the
+trace's own hex dumps show byte 3 onward of each packet equal to byte 1 onward
+of the report the client wrote. The first is ordinary: flag0 0x0d is rumble and
+the two trigger-effect blocks, and the trigger payload is in the report. The
+second asks for nothing but the pad's audio path: flag0 0x80 with the
+audio-control byte 0x0c, and every other byte zero.
+
+So what this patch changes is not how the emulation translates but what it lets
+through.
+
+THE CHANGE
+
+On the way from a client's USB output report to the Bluetooth one, the audio
+fields are taken back out: the validity-flag bits that enable them are cleared
+and the bytes those bits govern are zeroed, before the CRC is computed, so what
+the pad checks covers what it is actually sent. Every other byte goes out
+exactly as the client wrote it -- rumble, both trigger blocks, the lightbar,
+the player LEDs, the second flag byte in full -- and a report that asks for no
+audio field comes out byte for byte as it went in.
+
+Each bit is cleared only together with the byte it governs, and only when the
+client set it. A client that leaves a byte in the audio range set without
+setting its bit has written a byte the pad ignores, and it is passed through:
+what is refused is the request, not the bytes.
+
+Only in the emulation path. The code is reached from
+dualsense_usb_set_output_report, which exists only for a device carrying
+HIDRAW_FIXUP_DUALSENSE_USB; a client that knows the pad is on Bluetooth and
+writes a 0x31 itself is not this patch's business and its report is untouched.
+
+One line of trace when something is dropped, naming the bits cleared and the
+bytes zeroed. TRACE and not WARN, deliberately: a client that sets a volume
+every frame would fill a default log with it, and refusing the request is what
+the emulation is for rather than something going wrong.
+
+HOW THE LAYOUT WAS ESTABLISHED
+
+Not from memory and not from the community's field names: from the
+disassembly of the library that wrote the report. libScePad 1.0.4.1, the copy
+two current titles ship, read with llvm-objdump at image base 0x180000000.
+
+  scePadSetVolumeGain, exported at RVA 0x8c30, reaches the report builder at
+  0x18000c8e0. For each of three fields of its four-byte argument that is not
+  0xff it sets one bit of report byte 1 and writes one byte, translated
+  through a 256-entry table of its own:
+
+    0x18000c9e1  or 0x20 into byte 1   ->  0x18000c9f1  write byte 6
+    0x18000c9fa  or 0x10 into byte 1   ->  0x18000ca0b  write byte 5
+    0x18000ca14  or 0x40 into byte 1   ->  0x18000ca25  write byte 7
+
+  and sends the result at 0x18000ca35 as report 0x02, 0x30 bytes long.
+
+  scePadSetAudioOutPath, exported at RVA 0x8b40, reaches 0x18000c710, which
+  sets bit 0x80 of byte 1 at 0x18000c850 and writes byte 8 at 0x18000c857:
+  the pad's own audio-control byte with bits 0x30 replaced by the path it was
+  given (0x18000c7c4 clears them, 0x18000c7c8 shifts the argument in). A
+  second entry point at 0x18000c235 clears bits 0x0c of that same byte,
+  writes a two-bit value into them and sends the same report at 0x18000c2cb.
+  0x0c is exactly what byte 8 of the report that ended the trace carried.
+
+So the audio group is bits 0x10, 0x20, 0x40 and 0x80 of the first flag byte,
+governing bytes 5, 6, 7 and 8 in that order -- three volume or gain bytes and
+an audio-control byte -- and nothing else in the report. Those four bits and
+those four bytes are what this patch masks, and no more.
+
+The second flag byte is left alone, all of it, and that is a decision with its
+own evidence. The report that ended the trace also carried bit 0x40 there, and
+that bit is not audio: libScePad sets it on every DualSense output report it
+sends, in its own send path at 0x1800072e2, together with byte 37 (written at
+0x18000737b) and bit 0x04 of byte 39 (0x18000736d), which are vibration
+fields. Nothing on this disk says what the other bits of that byte mean, so
+they go through untouched.
+
+The host test beside the descriptors in the build directory, usb_emu_test.c,
+asserts all of the above against the captured bytes: the trace's first report
+comes out byte for byte as the driver packed it that night, CRC 2d1d855d
+included, with nothing dropped; the second comes out with 0x80 reported
+dropped, byte 8 zeroed, its second flag byte still 0x40 and the rest of the
+packet the trace's own with only that taken out; and a report that asks for all
+four fields at once keeps its rumble and trigger halves and loses only the
+audio ones.
+
+NOT COVERED
+
+THAT THE REQUEST KILLED THE LINK. It is not established, and the corpus argues
+against it. What is measured is the sequence: two writes, then the removal 22
+milliseconds after the second. Against that stands the session in
+steam-hid-game-145815.log, where the same pad -- 054c:0df2, on Bluetooth,
+presented truthfully -- was written 6477 times over about two hours, and where
+a client sent the same audio request twice, at 624067.389 (log line 53267:
+flag0 0x82, audio-control byte 0x0c, which is the trace's killer packet with
+one more bit set) and at 624190.818 (flag0 0x8d). The link stayed up for more
+than 900 seconds after each, and the one removal in that log is 1037 seconds
+after the first of them. A DualSense that is written that request over
+Bluetooth does not necessarily drop the link.
+
+What this patch rests on instead is narrower and does not need the causation:
+the request is for hardware the pad has on a cable, the emulation is the reason
+a client asks the pad for it in the USB report's shape, and there is nothing
+under wine on the other end of the pad's audio path to make the request worth
+forwarding. Dropping it costs nothing measured and leaves less of mgvf-0005's
+lie reaching the pad. WHAT ACTUALLY ENDED THAT SESSION IS UNKNOWN. The one
+thing in that trace that the working session has none of is the feature report
+0x08 written at 651734.142, with the Bluetooth CRC mgvf-0005 appends: there are
+no feature writes at all in steam-hid-game-145815.log. That is a difference,
+not a finding, and it has not been investigated.
+
+Which of bytes 5, 6 and 7 is the headphone volume, which the speaker's and
+which the microphone's is NOT asserted. What is established is that libScePad
+writes each of them from one field of its volume-gain argument and enables it
+with one bit; the pairing of bit to byte is what this patch needs and is what
+was read.
+
+Whether a pad that is sent a report with the audio bits cleared behaves
+differently from one that is sent no such report at all has not been measured;
+nor has any of this, yet, against a live pad -- as with mgvf-0005, the first
+use belongs in a +hid trace.
+
+---
+--- a/dlls/winebus.sys/dualsense_usb.c
++++ b/dlls/winebus.sys/dualsense_usb.c
+@@ -217,6 +217,76 @@
+     tail[1] = (crc >> 8) & 0xff;
+     tail[2] = (crc >> 16) & 0xff;
+     tail[3] = (crc >> 24) & 0xff;
++}
++
++/* Where a byte of the USB output report lands in the packed Bluetooth one: the
++ * id stays the id and everything after it moves two places, behind the
++ * sequence byte and the 0x10. Used only by the audio masking below, which is
++ * the one thing here that looks at a byte by its meaning rather than copying
++ * the block whole. */
++#define DUALSENSE_BT_OF(usb_byte) ((usb_byte) + 2)
++
++/* MGVF mgvf-0007: take the pad's audio settings back out of the report.
++ *
++ * WHY. The emulation tells a client the pad is on a cable, and a client that
++ * believes that asks for things only a wired pad has. A DualSense's speaker,
++ * headphone jack and microphone hang off its USB audio interfaces; over
++ * Bluetooth a Windows client reaches none of them, and the request is one the
++ * pad can only refuse. Nothing else in the report is affected: the rumble
++ * motors, the trigger effects, the lightbar and the player LEDs are the same
++ * fields on both transports, and they are passed through untouched.
++ *
++ * WHICH BITS, AND HOW THAT WAS ESTABLISHED. From the disassembly of Sony's own
++ * libScePad 1.0.4.1 (llvm-objdump, image base 0x180000000), which is the
++ * library that built the request that started this:
++ *
++ *   scePadSetVolumeGain (export at RVA 0x8c30) reaches the report builder at
++ *   0x18000c8e0. For each of three fields of its four-byte argument that is
++ *   not 0xff it sets one bit of byte 1 and writes one translated byte:
++ *   0x18000c9e1 sets 0x20 and 0x18000c9f1 writes byte 6; 0x18000c9fa sets 0x10
++ *   and 0x18000ca0b writes byte 5; 0x18000ca14 sets 0x40 and 0x18000ca25
++ *   writes byte 7. It then sends the report, id 0x02 and 0x30 bytes long, at
++ *   0x18000ca35.
++ *
++ *   scePadSetAudioOutPath (export at RVA 0x8b40) reaches 0x18000c710, which
++ *   sets bit 0x80 of byte 1 at 0x18000c850 and writes byte 8 at 0x18000c857 --
++ *   the pad's own audio-control byte with bits 0x30 replaced by the path it was
++ *   given (0x18000c7c4 clears them, 0x18000c7c8 shifts the argument into
++ *   place). A second entry point at 0x18000c235 sets bits 0x0c of the same
++ *   byte and sends the same report at 0x18000c2cb, and 0x0c is exactly what
++ *   the report that ended the trace carried in byte 8.
++ *
++ * So the audio group is bits 0x10, 0x20, 0x40 and 0x80 of the first flag byte,
++ * governing bytes 5, 6, 7 and 8 in that order, and nothing else. Each bit is
++ * cleared only with the byte it governs, and only when the client set it: a
++ * report that asks for none of them comes out of here byte for byte as the
++ * client wrote it.
++ *
++ * WHAT IS DELIBERATELY LEFT ALONE. The second flag byte, all of it. The report
++ * that ended the trace also carried bit 0x40 there, and that bit is not audio:
++ * libScePad sets it on every DualSense output report it sends, in its own send
++ * path at 0x1800072e2, together with byte 37 (written at 0x18000737b) and bit
++ * 0x04 of byte 39 (0x18000736d), which are vibration fields. Nothing measured
++ * says what the remaining bits of that byte mean, so they are passed through.
++ *
++ * Returns the bits it cleared, for the caller to trace. */
++static unsigned char dualsense_bt_drop_audio(unsigned char *out, unsigned int in_len)
++{
++    unsigned char dropped = 0, bit;
++    unsigned int i, byte;
++
++    for (i = 0; i < DUALSENSE_USB_OUTPUT_AUDIO_COUNT; i++)
++    {
++        bit = DUALSENSE_USB_OUTPUT_AUDIO_FIRST_FLAG << i;
++        byte = DUALSENSE_USB_OUTPUT_AUDIO_FIRST_BYTE + i;
++        if (byte >= in_len) break; /* the client's report is shorter than this byte */
++        if (!(out[DUALSENSE_BT_OF(DUALSENSE_USB_OUTPUT_FLAG0)] & bit)) continue;
++        out[DUALSENSE_BT_OF(DUALSENSE_USB_OUTPUT_FLAG0)] &= ~bit;
++        out[DUALSENSE_BT_OF(byte)] = 0;
++        dropped |= bit;
++    }
++
++    return dropped;
+ }
+ 
+ /* The USB 0x02 output report becomes a Bluetooth 0x31:
+@@ -230,12 +300,17 @@
+  * 0x10, the flag that marks the report as carrying the effects block.
+  * The CRC runs over the seed byte 0xa2 and then bytes 0..73. Verified byte
+  * for byte, CRC included, against Steam's own packets and against a packing
+- * that rumbled the pad through IOKit. */
++ * that rumbled the pad through IOKit.
++ *
++ * MGVF mgvf-0007: the audio settings are taken out of the copy before the CRC
++ * is computed, so what the pad checks covers what it is actually being sent. */
+ unsigned int dualsense_bt_output_from_usb(unsigned char *out, unsigned int out_size,
+                                           const unsigned char *in, unsigned int in_len,
+-                                          unsigned char seq, dualsense_crc32_fn crc32)
++                                          unsigned char seq, dualsense_crc32_fn crc32,
++                                          unsigned char *audio_dropped)
+ {
+     static const unsigned char seed = DUALSENSE_CRC_SEED_OUTPUT;
++    unsigned char dropped;
+     unsigned int crc;
+ 
+     if (in_len < 2 || in_len > DUALSENSE_USB_OUTPUT_MAX || in[0] != DUALSENSE_USB_OUTPUT_ID) return 0;
+@@ -247,6 +322,9 @@
+     out[2] = 0x10;
+     memcpy(out + 3, in + 1, in_len - 1);
+ 
++    dropped = dualsense_bt_drop_audio(out, in_len);
++    if (audio_dropped) *audio_dropped = dropped;
++
+     crc = crc32(0, &seed, 1);
+     crc = crc32(crc, out, DUALSENSE_BT_REPORT_LEN - DUALSENSE_CRC_TAIL);
+     dualsense_store_crc(out + DUALSENSE_BT_REPORT_LEN - DUALSENSE_CRC_TAIL, crc);
+--- a/dlls/winebus.sys/dualsense_usb.h
++++ b/dlls/winebus.sys/dualsense_usb.h
+@@ -58,6 +58,26 @@
+ #define DUALSENSE_USB_OUTPUT_ID    0x02
+ #define DUALSENSE_USB_OUTPUT_MAX   64
+ 
++/* MGVF mgvf-0007: the audio group of the output report.
++ *
++ * Byte 1 of the output report is the first validity-flag byte: a client sets a
++ * bit there for each field of the report it means the pad to act on. The top
++ * nibble is the audio group, one bit per byte, and the four bytes it enables
++ * sit together after the two motors:
++ *
++ *   0x10 -> byte 5   0x20 -> byte 6   0x40 -> byte 7   0x80 -> byte 8
++ *
++ * Three volume or gain bytes and an audio-control byte. Which bit goes with
++ * which byte was read out of Sony's own libScePad, not assumed; dualsense_usb.c
++ * names the addresses it was read at. The pad's speaker, headphone jack and
++ * microphone are reachable only on a cable, so these are the requests the USB
++ * emulation takes back out of a report before it goes over Bluetooth. */
++#define DUALSENSE_USB_OUTPUT_FLAG0            1
++#define DUALSENSE_USB_OUTPUT_AUDIO_FLAGS      0xf0
++#define DUALSENSE_USB_OUTPUT_AUDIO_FIRST_FLAG 0x10
++#define DUALSENSE_USB_OUTPUT_AUDIO_FIRST_BYTE 5
++#define DUALSENSE_USB_OUTPUT_AUDIO_COUNT      4
++
+ /* The feature report whose read switches the pad to its full input report;
+  * calibration data, 41 bytes, present in both descriptors. */
+ #define DUALSENSE_FEATURE_CALIBRATION      0x05
+@@ -81,9 +101,15 @@
+                                          const unsigned char *in, unsigned int in_len);
+ unsigned int dualsense_usb_input_from_short(unsigned char *out, unsigned int out_size,
+                                             const unsigned char *in, unsigned int in_len);
++/* MGVF mgvf-0007: audio_dropped, which may be NULL, receives the audio flag
++ * bits this packing took out of the report -- 0 when the client asked for none
++ * of them, which is every report of a well-behaved client. The dropping is not
++ * optional and does not depend on the pointer: a caller that does not want to
++ * trace it simply does not learn what was dropped. */
+ unsigned int dualsense_bt_output_from_usb(unsigned char *out, unsigned int out_size,
+                                           const unsigned char *in, unsigned int in_len,
+-                                          unsigned char seq, dualsense_crc32_fn crc32);
++                                          unsigned char seq, dualsense_crc32_fn crc32,
++                                          unsigned char *audio_dropped);
+ 
+ /* In place. Each returns len when the report was changed and 0 when it was
+  * left as it was: too short to carry a CRC tail at all, or, for the read, the
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -1612,17 +1612,23 @@
+ 
+ /* A USB 0x02 output report from the client becomes the Bluetooth 0x31 the
+  * pad wants, sent through a packet of our own; the client's IoStatus then
+- * reports the client's own length, as a wired write would. */
++ * reports the client's own length, as a wired write would.
++ *
++ * MGVF mgvf-0007: not everything the client wrote goes out. A client that
++ * believes the pad is wired may ask for the pad's speaker, headphone jack or
++ * microphone, which are reachable only on a cable; dualsense_usb.c takes those
++ * fields back out of the report and says which ones, and only those. */
+ static void dualsense_usb_set_output_report(DEVICE_OBJECT *device, HID_XFER_PACKET *packet, IO_STATUS_BLOCK *io)
+ {
+     struct device_extension *ext = (struct device_extension *)device->DeviceExtension;
+     BYTE buffer[DUALSENSE_BT_REPORT_LEN];
+     HID_XFER_PACKET bt = {.reportId = DUALSENSE_BT_REPORT_ID, .reportBuffer = buffer};
++    BYTE audio = 0;
+     ULONG i;
+ 
+     if (!(bt.reportBufferLen = dualsense_bt_output_from_usb(buffer, sizeof(buffer), packet->reportBuffer,
+                                                             packet->reportBufferLen, ext->dualsense_seq,
+-                                                            dualsense_crc32)))
++                                                            dualsense_crc32, &audio)))
+     {
+         WARN("output report id %u length %lu cannot be translated for Bluetooth\n",
+              packet->reportId, packet->reportBufferLen);
+@@ -1632,6 +1638,15 @@
+     }
+     ext->dualsense_seq++;
+ 
++    /* MGVF mgvf-0007: TRACE and not WARN. A client that sets a volume every
++     * frame would fill a default log with this, and the dropping is what the
++     * emulation is meant to do rather than something going wrong. */
++    if (audio)
++        TRACE("device %p: dropped the audio request in output report id %u -- cleared flag0 bits %#x and zeroed"
++              " the bytes they enable (%s%s%s%s), which the pad has only on a cable\n", device, packet->reportId,
++              audio, (audio & 0x10) ? "5 " : "", (audio & 0x20) ? "6 " : "",
++              (audio & 0x40) ? "7 " : "", (audio & 0x80) ? "8 " : "");
++
+     if (TRACE_ON(hid))
+     {
+         TRACE("translated output report id %u length %lu to id %u length %lu:\n", packet->reportId,

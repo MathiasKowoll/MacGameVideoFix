@@ -492,7 +492,7 @@ scripts/install-controller-build.sh
 ```
 
 These two produce a second engine set, and it is **optional**: four files from
-the same tree with four patches of ours applied — `winebus.sys`,
+the same tree with seven patches of ours applied — `winebus.sys`,
 `setupapi.dll` and `ntoskrnl.exe`, and `winebus.so`, the unix half of winebus.
 `mgvf-0002`, `mgvf-0003` and `mgvf-0004` let a Windows client learn a
 controller is on Bluetooth. A DualSense then rumbles over Bluetooth, and its PS
@@ -513,9 +513,46 @@ them while a game was running under wine. wine now **seizes** such a pad, and
 that costs exactly what it sounds like: **while a bottle holds the pad, macOS
 and its own applications cannot use it**, and it is released when the bottle
 closes. On by default for a DualSense on Bluetooth, and only for that; a
-registry value turns it off per device. An improvement rather than a
-fix: no row of the table needs it and the Motor column does not change. It is
-installed and removed with
+registry value turns it off per device.
+
+`mgvf-0007` is the bill for `mgvf-0005`'s lie. A client told the pad is wired
+asks for the part of a DualSense a cable is for — its speaker, its headphone
+jack, its microphone — and in the first trace of the emulation under a real
+title the title's Sony library wrote two output reports through it, an
+ordinary one and one asking for nothing but the pad's audio path, and 22
+milliseconds after the second the pad's Bluetooth link was gone. The emulation
+now refuses those requests on the pad's behalf: the flag bits that enable the
+audio settings are cleared and the bytes they govern zeroed, and every other
+byte — rumble, trigger effects, lightbar, player LEDs — goes to the pad
+exactly as the client wrote it. That the request is what killed the link is
+**not** established: the same pad, presented truthfully over Bluetooth, was
+sent the same request twice in a two-hour session and the link stayed up. What
+is measured is the order of events, and what the change rests on is that the
+request asks for hardware the pad has only on a cable and that nothing under
+wine is on the other end of it.
+
+`mgvf-0008` is the last of the seven, and it is **an experiment rather than a
+fix** — the only thing in this project that is, and it is marked as one
+wherever it is named. In that same fatal trace, 51 milliseconds before the
+audio request, the title's Sony library **wrote a feature report** to the pad,
+and macOS's own log for the moment the link ended says the pad initiated the
+parting: *"Received disconnection indication ... reason 431"*. Not a link
+failure and not macOS letting go. That trace holds exactly one feature write,
+and the two-hour session in which the same pad worked perfectly on Bluetooth
+under Steam holds none, and every session the pad left within seconds is one
+that library was driving. So the emulation now **answers a feature write
+as if it had succeeded and sends no byte of it to the pad** — answered and not
+refused, because that library drops the pad itself when a feature write fails,
+which would measure the library rather than the pad. It is what a fresh install
+does, on purpose, because an experiment that has to be switched on is one
+nobody runs; a per-device registry value puts the write back on the wire
+without another build. **That the write is what makes the pad leave is not
+established** — the pad answered a feature read 43 milliseconds after it — and
+if the next trace shows the pad leaving at the same point anyway, this comes
+back out.
+
+The set as a whole is an improvement rather than a fix: no row of the table
+needs it and the Motor column does not change. It is installed and removed with
 `runtime/install-engine-controller.sh <app> install | --status | --restore`,
 which keeps CodeWeavers' four files as `.mgvf-stock`, refuses any engine but the
 one both stamp fields name, refuses while a bottle is running, and re-signs the

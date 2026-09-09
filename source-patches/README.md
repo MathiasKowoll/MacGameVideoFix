@@ -16,14 +16,15 @@ and the installer chooses between them by the name of the engine it is pointed
 at. All of them record the patch set above.
 
 `scripts/build-controller-bus.sh` builds a **second, optional set** from the
-same tree, with `mgvf-0002`, `mgvf-0003`, `mgvf-0004`, `mgvf-0005` and
-`mgvf-0006` applied on top: `winebus.sys`, `setupapi.dll`, `ntoskrnl.exe` and
-`winebus.so` — three PE files and, since `mgvf-0006`, the unix half of winebus
-as well. It is stamped apart, in `runtime/engine-controller-built-for.json`
-beside `runtime/install-engine-controller.sh` and mirrored as
+same tree, with `mgvf-0002`, `mgvf-0003`, `mgvf-0004`, `mgvf-0005`,
+`mgvf-0006`, `mgvf-0007` and `mgvf-0008` applied on top: `winebus.sys`,
+`setupapi.dll`, `ntoskrnl.exe` and `winebus.so` — three PE files and, since
+`mgvf-0006`, the unix half of winebus as well. It is stamped apart, in
+`runtime/engine-controller-built-for.json` beside
+`runtime/install-engine-controller.sh` and mirrored as
 `runtime/engine-payload-controller/built-for.json`, and that stamp records only
-those five. The media stamps above record only the media patch set, and that
-stays so: the five are not applied to the winegstreamer pair and the pair is
+those seven. The media stamps above record only the media patch set, and that
+stays so: the seven are not applied to the winegstreamer pair and the pair is
 not rebuilt when they change.
 
 The set grew a unix half because `mgvf-0006` is in `bus_iohid.c`, which is unix
@@ -71,7 +72,13 @@ the two consumers that turned out not to want the truth. **`mgvf-0006` is ours
 too**, from the same day and the same set, and is the first of ours to touch
 the unix half of a driver rather than the PE half: it stops wine and macOS
 writing to the same pad at once. Unlike `mgvf-0005` it is **on by default**,
-because it repairs a defect rather than offering a behaviour.
+because it repairs a defect rather than offering a behaviour. **`mgvf-0007` is
+ours too**, and is the only one of the set that exists because of another one
+of ours: it is the bill for `mgvf-0005`'s lie, and takes back out of a report
+the audio settings a client asks for only because it has been told the pad is
+wired. **`mgvf-0008` is ours too, and is the only one here that is not a fix**:
+it is an experiment, marked as one wherever it is named, and it is in the set
+because the way to run it is to ship it and read the next trace.
 
 ## What each one is for
 
@@ -234,6 +241,92 @@ subkey by the same loop. It is therefore read once, at driver start, and a
 change applies when the bottle's `winedevice` next starts. What this patch
 touches is the first unix code in the set, which is why the set now ships a
 fourth file; `runtime/engine-payload-controller/README.md` says where it goes.
+
+### mgvf-0007 — the USB emulation refuses a wired-only audio request *(ours)*
+`mgvf-0005` tells a client the pad is on a cable, and a client that believes it
+asks for what a wired pad has: its speaker, its headphone jack and its
+microphone, which are the part of a DualSense a cable is for. In the first
+trace of the emulation under a real title, on 2026-09-08, the title's libScePad
+wrote exactly two output reports through it — the first ordinary (rumble and
+both trigger-effect blocks), the second asking for nothing but the pad's audio
+path — and 22 ms after the second the Bluetooth link was gone. The translation
+was not at fault: both packed faithfully, CRCs and all.
+
+On the way from the client's USB report to the Bluetooth one, the validity-flag
+bits that enable the audio fields are now cleared and the bytes those bits
+govern zeroed, before the CRC, so what the pad checks covers what it is
+actually sent. Every other byte is left exactly as the client wrote it, a bit
+is cleared only together with its own byte and only when the client set it, and
+a report that asks for no audio field comes out byte for byte as it went in.
+**Only in the emulation path**: a client that knows the pad is on Bluetooth and
+writes the `0x31` itself is untouched. One `TRACE` line names what was dropped.
+
+Which four bits and which four bytes those are was read out of Sony's own
+libScePad rather than assumed — `scePadSetVolumeGain` and
+`scePadSetAudioOutPath`, at the addresses the patch header names — and the
+second flag byte is left alone entirely, because the one bit of it in the
+killer packet is one libScePad sets on every report it sends, beside two
+vibration fields.
+
+**What is not established is that the request killed the link**, and the patch
+header says so at length: in a two-hour session with the same pad presented
+truthfully, a client sent the same audio request twice and the link stayed up
+for another 900 seconds and more after each. What is measured is the sequence.
+This patch rests on the narrower argument instead — the request is for hardware
+the pad has on a cable, the emulation is why a client asks for it in that
+shape, and nothing under wine is on the other end of the pad's audio path — and
+on costing nothing measured.
+
+### mgvf-0008 — the USB emulation answers a feature write without sending it *(ours, and an EXPERIMENT)*
+**Read this one as an instrument, not as a repair.** Everything else in the set
+changes something that was measured to be wrong. This changes what the
+emulation does with one class of traffic so that the next trace answers a
+question.
+
+The question: whether a feature-report **write** is what makes a DualSense on
+Bluetooth leave a session that `mgvf-0005` is presenting as wired. In the fatal
+trace of 2026-09-08 the pad was driven for 39 seconds and then, inside 104
+milliseconds, two feature reads were answered, one feature **write** went out
+(report `0x08`, 48 bytes, `08 02` and then zeros, with `mgvf-0005`'s CRC
+appended), a third feature read was **answered by the pad**, two output reports
+went out, and the device was gone. macOS's log says the pad initiated the
+parting — *"Received disconnection indication ... reason 431"* — so this was
+not a link failure and not macOS letting go. That trace holds exactly one
+feature write; the two-hour session in which the same pad worked perfectly on
+Bluetooth under Steam holds none. Every session the pad left within seconds is
+one Sony's libScePad was driving; every session it stayed is one only Steam
+was.
+
+So in the emulation path a feature write is now **answered as if it had
+succeeded** and no byte of it reaches the pad. **Answered, not refused**, and
+that distinction is the design: libScePad's feature sender at `0x1800074b0`
+returns a failure code when `HidD_SetFeature` fails, its caller at
+`0x180003deb` is inside the library's per-device reader thread, and a negative
+return there jumps to a teardown that closes the device handle and clears the
+pad's record — so refusing would make that library drop the pad itself and
+teach us nothing.
+
+    HKLM\System\CurrentControlSet\Services\winebus\Devices\<vid>/<pid>
+        ForwardFeatureWrites  REG_DWORD  absent (default): answered, not sent.
+                                         Non-zero: sent, as mgvf-0005 sends it.
+
+**Absence means swallow**, deliberately: an experiment that has to be switched
+on is one nobody runs, so it is what a fresh install does, and the value is how
+a session is put back to `mgvf-0005`'s behaviour between two launches without
+another build. It is read through `get_device_option`, `mgvf-0005`'s route
+rather than `mgvf-0006`'s, because the decision is made in the PE half in the
+same function as `UsbEmulation` — and it is read *before* the lines that
+rewrite the desc, so that `ProductId` cannot make it look under another pad's
+key. **Feature reads, output reports and every pad the emulation is not
+presenting are untouched.** One `TRACE` line per swallowed write names the
+report id and length, in the shape of the CRC line it replaces.
+
+**What is not established** is the point of the exercise and the header says it
+at length: that the write is what makes the pad leave. The pad answered a
+feature read 43 ms *after* it. What is measured is a correlation over a small
+number of sessions, all of which are also the sessions libScePad was driving.
+If the pad stays with this in place, the write is implicated; if it leaves at
+the same point, the write is cleared **and this patch should come back out**.
 
 ## If another of their patches is ever needed
 

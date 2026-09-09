@@ -1,0 +1,392 @@
+From: MacGameVideoFix <https://github.com/MathiasKowoll/MacGameVideoFix>
+Subject: [PATCH] winebus.sys: EXPERIMENT -- the USB emulation answers a feature write without sending it
+
+WHERE THIS CAME FROM
+
+MacGameVideoFix's own series, mgvf-NNNN, written on 2026-09-08, the seventh of
+ours and the sixth in the controller-bus set. Like mgvf-0007 it is a follow-up
+to mgvf-0005 and does not apply without it: it changes that patch's own feature
+path, in the emulation and nowhere else. Nothing in it is specific to this
+project.
+
+THIS IS AN EXPERIMENT AND NOT A FIX
+
+Every patch before this one in the set repairs something that was measured to
+be wrong. This one does not. It changes what the emulation does with one class
+of traffic so that the next trace answers a question, and it is written to be
+undone from the registry rather than by a rebuild. It should be read as an
+instrument, and the section at the end says what it does not establish.
+
+WHAT IT IS TESTING
+
+Whether a feature-report WRITE is what makes a DualSense on Bluetooth leave a
+session that mgvf-0005 is presenting as wired.
+
+WHAT IS MEASURED
+
+In emulation-224719.log on 2026-09-08 a DualSense Edge on Bluetooth, presented
+as USB 054c:0df2 from 651695.444, was driven for 39 seconds and then the link
+ended. The last exchanges, all inside 104 milliseconds:
+
+  651734.111  feature 0x09 read, 20 bytes, answered
+  651734.135  feature 0x20 read, 64 bytes, answered
+  651734.142  feature WRITE, report 0x08, 48 bytes, "08 02" and then zeros,
+              to which mgvf-0005 appended the Bluetooth CRC e0 ef a2 23
+  651734.185  feature 0x05 read, 41 bytes, ANSWERED BY THE PAD
+  651734.192  output report 0x02, translated and sent
+  651734.193  output report 0x02, translated and sent
+  651734.215  IOKit: device removed
+
+macOS's own log for that instant says the pad initiated the parting: "Received
+disconnection indication on device DualSense Edge Wireless Controller reason
+431". Not a link failure and not macOS letting go of the device: the pad chose
+to leave.
+
+That log contains exactly ONE feature write. Against it stands
+steam-hid-game-145815.log -- the same Edge, on Bluetooth, under Steam, written
+output reports from 623849.520 to 630997.316, about two hours -- which contains
+NOT ONE. Across every session recorded so far, the pad left within seconds of
+Sony's libScePad driving it and stayed when only Steam did, and the feature
+write is the one piece of traffic that separates the two.
+
+The audio-request theory that produced mgvf-0007 is REFUTED and that patch's
+own header says so: in the working session Steam sent the same audio bit twice
+and the pad stayed for another 900 seconds and more after each. mgvf-0007
+stands on its own narrower ground -- the request is for hardware the pad has
+only on a cable -- and is not the cause of anything here.
+
+THE CHANGE
+
+In the emulation path only, a feature-report WRITE is ANSWERED AS IF IT HAD
+SUCCEEDED and no byte of it reaches the pad. The client's IoStatus receives
+STATUS_SUCCESS and Information the length the client offered, which is what a
+wired pad's successful write returns.
+
+ANSWERED, NOT REFUSED. That distinction is the whole design and it is load
+bearing. libScePad builds this report in its feature sender at 0x1800074b0 --
+image base 0x180000000, read with llvm-objdump from the copy one current title
+ships -- which writes byte 0 as the report id (0x08 for a pad that is not a
+Bluetooth DualShock 4), byte 1 as 0x02, sends 0x30 bytes through HidD_SetFeature
+(the tenth entry of the HID.DLL import table at RVA 0x1F000, that is
+0x18001f048), and returns 0x8001002b when that call comes back FALSE. Its
+caller is at 0x180003de6, inside the library's per-device READER THREAD -- the
+function at 0x1800038d0, which is what it passes to its thread starter at
+0x180014ac4, where CreateThread is called at 0x180014b24, and whose first act
+is SetThreadPriority(GetCurrentThread(), 15). At 0x180003deb that caller tests
+the return and, on a negative one, jumps to 0x180004263, which frees the
+preparsed data, calls CloseHandle on the device handle at [dev+0x10], clears
+the pad's slot in the library's device table and zeroes its 0x21f8-byte record;
+the thread then returns at 0x1800043fc. So REFUSING the write would have that
+library drop the pad by itself, within milliseconds, and the session would end
+for a reason we introduced. Nothing would be learnt about the pad. Answering
+successfully leaves the client believing what it believed on a cable and takes
+only the bytes off the wire.
+
+HOW TO UNDO IT WITHOUT A REBUILD
+
+  HKLM\System\CurrentControlSet\Services\winebus\Devices\<vid>/<pid>
+      ForwardFeatureWrites  REG_DWORD  absent (the default): the write is
+                                       answered and not sent. Non-zero: the
+                                       write goes to the pad exactly as
+                                       mgvf-0005 sends it, CRC tail and all.
+
+The same key mgvf-0005's UsbEmulation and ProductId and mgvf-0006's
+SeizeDevice live under, named after the pad's REAL ids in lower-case hex with a
+slash. ABSENCE MEANS SWALLOW, deliberately: the experiment has to be what a
+fresh install does, because an experiment that must be switched on is an
+experiment nobody runs, and the value exists so that a session can be put back
+to mgvf-0005's behaviour between two launches without another build.
+
+It is read the way mgvf-0005 reads UsbEmulation -- get_device_option in main.c,
+which opens the device's subkey under the driver key -- and not the way
+mgvf-0006 reads SeizeDevice. mgvf-0006 had no choice: its decision is made in
+bus_iohid.c, in the unix half, where the registry is not reachable, so the
+value has to ride struct device_options across the boundary. This decision is
+made in the PE half, in the same file and the same function as the option that
+turns the emulation on, so it uses the same reader and is read at the same
+moment, when the pad arrives.
+
+It is read BEFORE the two lines that rewrite the desc, and that placement is
+the point: mgvf-0005's ProductId may replace the pad's product id with another
+DualSense's, and a read after that would look for this pad's option under the
+other pad's key while UsbEmulation and SeizeDevice were read under the real
+one. The answer is carried to the write path as one bit of the report-fixups
+word, which is the only thing about the pad besides its desc that
+bus_create_hid_device is given, and it is set only together with
+HIDRAW_FIXUP_DUALSENSE_USB.
+
+THE SCOPE
+
+Feature WRITES, and nothing else.
+
+Feature READS are untouched: mgvf-0005's rule still applies, the CRC tail of a
+read is still zeroed so the read looks wired, and the calibration report 0x05 is
+still exempt from it. That matters here, because the pad answered such a read
+after the write this patch takes away, and the experiment would be worthless if
+the reads changed too.
+
+Output reports are untouched: a 0x02 from the client still goes out as the
+0x31 the pad wants, with its sequence byte and its CRC, and mgvf-0007 still
+takes the audio fields out of it on the way.
+
+A pad the emulation is not presenting is untouched entirely. The decision
+function is given that condition as its first argument rather than assuming it,
+so that the scope is an assertion in the host test and not only a sentence
+here. A client that knows the pad is on Bluetooth and writes to it itself is
+not reached by any of this.
+
+The pure half is in dualsense_usb.c, with the reasoning, and usb_emu_test.c
+beside the descriptors in the build directory exercises it: swallowed with
+nothing set, forwarded for any non-zero value, and forwarded always on a device
+the emulation is not presenting.
+
+One TRACE line per swallowed write, naming the report id and the length, in the
+shape of the "appended the Bluetooth CRC to feature report id ... length ..."
+line it replaces, so that the next +hid trace shows plainly which of the two
+happened. TRACE and not WARN, for mgvf-0007's reason: nothing has gone wrong,
+this is what the build is now for.
+
+NOT ESTABLISHED
+
+THAT THE FEATURE WRITE IS WHAT MAKES THE PAD LEAVE. It is not, and the same
+trace argues against it: 43 milliseconds AFTER the write the pad answered a
+feature read, which is not the behaviour of a device that has already decided
+to go, and two ordinary output reports went out after that -- 50 and 51
+milliseconds after the write, with the pad gone at 73. What is measured is a
+correlation between the presence of a feature write and a session ending
+within seconds, over a small number of sessions, all of which are also the
+sessions libScePad was driving. The write is the one thing unique to them, not
+a demonstrated cause.
+
+WHAT REPORT 0x08 IS FOR is not established either. Its content in the fatal
+trace is a report id, the byte 0x02, and 46 zeros; libScePad's sender writes
+exactly those two bytes and leaves the rest of the buffer as it was allocated.
+Nothing on this disk says what the pad does with it, and this patch does not
+claim the pad dislikes it -- only that it is the traffic that separates the
+sessions.
+
+WHETHER SWALLOWING CHANGES ANYTHING is the question, and it is open until a
+trace answers it. Two outcomes are worth naming in advance. If the pad stays,
+the write is implicated and the next step is to narrow which write. If the pad
+still leaves at the same point, the write is cleared and the difference lies
+somewhere else in what libScePad does -- and this patch should come back out.
+
+WHAT A CLIENT LOSES by being told a write succeeded that did not is not
+measured. Any state the pad would have taken from report 0x08 it does not take,
+and a client that reads back what it wrote would see the difference; nothing in
+the traces does that. The one thing this patch is sure of is that the client
+does not stop for it, which is the whole reason it answers rather than refuses.
+
+None of this has run against a live pad yet. As with mgvf-0005 and mgvf-0007,
+the first use belongs in a +hid trace.
+
+---
+--- a/dlls/winebus.sys/dualsense_usb.c
++++ b/dlls/winebus.sys/dualsense_usb.c
+@@ -368,4 +368,66 @@
+ 
+     memset(report + len - DUALSENSE_CRC_TAIL, 0, DUALSENSE_CRC_TAIL);
+     return len;
++}
++
++/* MGVF mgvf-0008: whether a client's feature WRITE reaches the pad at all.
++ *
++ * AN EXPERIMENT, NOT A FIX. What it tests is whether a feature write is what
++ * makes a DualSense on Bluetooth leave a session that mgvf-0005 is presenting
++ * as wired.
++ *
++ * WHAT IS MEASURED. In emulation-224719.log on 2026-09-08 a DualSense Edge on
++ * Bluetooth, presented as USB, was driven for 39 seconds and then the link
++ * ended. The last exchanges: feature 0x09 read at t=651734.111, feature 0x20
++ * read at .135, a feature WRITE of report 0x08, 48 bytes, content "08 02" and
++ * then zeros, at .142 -- to which mgvf-0005 appended the Bluetooth CRC
++ * e0 ef a2 23 -- a feature 0x05 read at .185 which the pad ANSWERED, two
++ * output reports at .192 and .193, and IOKit reporting the device removed at
++ * .215. macOS's own log for that instant says the pad initiated the parting:
++ * "Received disconnection indication on device DualSense Edge Wireless
++ * Controller reason 431". Not a link failure and not macOS letting go: the pad
++ * chose to leave. That log holds exactly one feature write. In
++ * steam-hid-game-145815.log -- the same pad on Bluetooth under Steam, written
++ * to from 623849.520 to 630997.316, about two hours -- there is not one.
++ *
++ * WHAT IS NOT ESTABLISHED. That the write is what makes the pad leave. The
++ * pad answered a feature READ 43 milliseconds after it, which is not the
++ * behaviour of a device that has already decided to go, and two ordinary
++ * output reports went out after that, 50 and 51 milliseconds after the
++ * write, before the pad was gone at 73. The correlation is between libScePad
++ * driving the pad and the pad leaving; the feature write is the one thing
++ * unique to those sessions, not a demonstrated cause.
++ *
++ * WHY ANSWERED AND NOT REFUSED. This distinction is the whole design. Sony's
++ * libScePad builds that report in its sender at 0x1800074b0 (image base
++ * 0x180000000, the copy one current title ships): report id 0x08, byte 1 set
++ * to 0x02, 0x30 bytes, sent with HidD_SetFeature. Its caller is the library's
++ * per-device reader thread, and at 0x180003deb a negative return from that
++ * sender jumps to 0x180004263, which frees the preparsed data, closes the
++ * device handle, clears the pad's slot and zeroes its 0x21f8-byte record --
++ * the thread then returns. Refusing the write would therefore have that
++ * library drop the pad itself, which measures nothing about the pad. So the
++ * write is answered as a successful write of every byte the client offered,
++ * and the bytes go nowhere.
++ *
++ * THE SCOPE. Feature WRITES only. Feature reads are untouched -- mgvf-0005's
++ * CRC-tail rule still applies to them, with report 0x05 still exempt -- and so
++ * are output reports, which still go out as the 0x31 mgvf-0007 masks. A pad
++ * that mgvf-0005 is not presenting is not this experiment's business at all,
++ * which is what the first argument says: main.c reaches this only for an
++ * emulated device, and saying it here as well is what lets the host test check
++ * it.
++ *
++ * HOW TO UNDO IT WITHOUT A REBUILD. forward_option is the ForwardFeatureWrites
++ * value read from the pad's own key under
++ * HKLM\System\CurrentControlSet\Services\winebus\Devices\<vid>/<pid>, where
++ * mgvf-0005's UsbEmulation and mgvf-0006's SeizeDevice live. Its ABSENCE means
++ * swallow: the experiment is what a fresh install does, because a build that
++ * has to be asked to run the experiment would not be run. Any non-zero value
++ * puts the write back on the wire exactly as mgvf-0005 sends it. */
++unsigned int dualsense_usb_feature_write_action(int emulated, unsigned int forward_option)
++{
++    if (!emulated) return DUALSENSE_FEATURE_WRITE_FORWARD;
++    if (forward_option) return DUALSENSE_FEATURE_WRITE_FORWARD;
++    return DUALSENSE_FEATURE_WRITE_SWALLOW;
+ }
+--- a/dlls/winebus.sys/dualsense_usb.h
++++ b/dlls/winebus.sys/dualsense_usb.h
+@@ -83,6 +83,17 @@
+ #define DUALSENSE_FEATURE_CALIBRATION      0x05
+ #define DUALSENSE_FEATURE_CALIBRATION_LEN  41
+ 
++/* MGVF mgvf-0008: what the USB emulation does with a client's feature WRITE.
++ *
++ * AN EXPERIMENT, NOT A FIX. dualsense_usb.c says at length what it is testing
++ * and what has not been established; the short of it is that every session in
++ * which the pad left within seconds is a session in which a feature report was
++ * written to it, and no session in which it stayed has one. Swallowing is what
++ * happens by DEFAULT, so that the next trace is the measurement; the registry
++ * value below puts the write back on the wire without a rebuild. */
++#define DUALSENSE_FEATURE_WRITE_FORWARD 0
++#define DUALSENSE_FEATURE_WRITE_SWALLOW 1
++
+ /* The CRC-32 the pad checks over Bluetooth runs over one seed byte and then
+  * the report up to the last four bytes, where it is stored little-endian. */
+ #define DUALSENSE_CRC_TAIL                 4
+@@ -111,6 +122,19 @@
+                                           unsigned char seq, dualsense_crc32_fn crc32,
+                                           unsigned char *audio_dropped);
+ 
++/* MGVF mgvf-0008: DUALSENSE_FEATURE_WRITE_FORWARD when the client's feature
++ * write is to go to the pad as mgvf-0005 sends it, CRC tail and all, and
++ * DUALSENSE_FEATURE_WRITE_SWALLOW when it is to be ANSWERED SUCCESSFUL without
++ * a byte of it reaching the pad. Not refused: answered. dualsense_usb.c says
++ * why that distinction is the whole experiment.
++ *
++ *   emulated       whether this device carries mgvf-0005's USB emulation. A
++ *                  pad that is not being emulated always forwards.
++ *   forward_option the ForwardFeatureWrites value under the device's own key,
++ *                  or 0 when the key carries none -- absence and 0 are the
++ *                  same answer, as they are for mgvf-0005's UsbEmulation. */
++unsigned int dualsense_usb_feature_write_action(int emulated, unsigned int forward_option);
++
+ /* In place. Each returns len when the report was changed and 0 when it was
+  * left as it was: too short to carry a CRC tail at all, or, for the read, the
+  * calibration report, whose tail a wired pad returns as well. */
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -83,6 +83,17 @@
+  * leaves it alone -- a client's first write is not a reason to stop, it is
+  * the reason the emulation exists. */
+ #define HIDRAW_FIXUP_DUALSENSE_USB 0x4
++
++/* MGVF mgvf-0008: the client's feature WRITES reach the pad. Set from a
++ * per-device registry value when the device arrives, and CLEAR IS THE DEFAULT:
++ * without the value a feature write is answered successful and sent nowhere.
++ * That is an experiment and dualsense_usb.c says what it is testing; the bit
++ * is what turns it off again without a rebuild. It is only ever set together
++ * with HIDRAW_FIXUP_DUALSENSE_USB -- the experiment is the emulation's bill
++ * and has no meaning on a pad that is not being presented as wired -- and
++ * hidraw_disable_report_fixups leaves it alone for the same reason it leaves
++ * that one alone. */
++#define HIDRAW_FIXUP_DUALSENSE_USB_FEATURE_WRITE 0x8
+ 
+ struct device_extension
+ {
+@@ -434,6 +445,8 @@
+          * already says USB, so the Bluetooth fixups below cannot also fire. */
+         TRACE("Enabling USB emulation for Bluetooth DualSense device %p\n", device);
+         ext->report_fixups |= HIDRAW_FIXUP_DUALSENSE_USB;
++        /* MGVF mgvf-0008: carried with it, never on its own. */
++        ext->report_fixups |= report_fixups & HIDRAW_FIXUP_DUALSENSE_USB_FEATURE_WRITE;
+     }
+ 
+     if (desc->is_hidraw && (desc->bus_type == BUS_TYPE_BLUETOOTH) && is_dualshock4_gamepad(desc->vid, desc->pid))
+@@ -599,6 +612,7 @@
+ static UINT32 dualsense_usb_emulation_fixups(struct device_desc *desc)
+ {
+     unsigned int length;
++    UINT32 fixups;
+     DWORD present;
+ 
+     if (!desc->is_hidraw || desc->bus_type != BUS_TYPE_BLUETOOTH) return 0;
+@@ -622,9 +636,24 @@
+ 
+     TRACE("presenting Bluetooth DualSense %04x:%04x as USB %04x:%04lx, %u-byte report descriptor\n",
+           desc->vid, desc->pid, desc->vid, present, length);
++
++    /* MGVF mgvf-0008: read here, before the two lines below, because this is
++     * the last point at which the desc still carries the pad's REAL product
++     * id. "ProductId" may replace it with another DualSense's, and a read
++     * after that would look for this pad's option under the other pad's key --
++     * while UsbEmulation and SeizeDevice, which this value sits beside, were
++     * read under the real one. Absence means swallow; see dualsense_usb.c. */
++    fixups = HIDRAW_FIXUP_DUALSENSE_USB;
++    if (dualsense_usb_feature_write_action(TRUE, get_device_option(desc->vid, desc->pid, L"ForwardFeatureWrites", 0))
++        == DUALSENSE_FEATURE_WRITE_FORWARD)
++        fixups |= HIDRAW_FIXUP_DUALSENSE_USB_FEATURE_WRITE;
++    TRACE("feature writes from the client will be %s\n", (fixups & HIDRAW_FIXUP_DUALSENSE_USB_FEATURE_WRITE) ?
++          "sent to the pad, because ForwardFeatureWrites is set for it" :
++          "answered without being sent, which is mgvf-0008's default");
++
+     desc->bus_type = BUS_TYPE_USB;
+     desc->pid = present;
+-    return HIDRAW_FIXUP_DUALSENSE_USB;
++    return fixups;
+ }
+ 
+ static BOOL is_hidraw_enabled(WORD vid, WORD pid, const USAGE_AND_PAGE *usages, UINT buttons)
+@@ -1667,12 +1696,35 @@
+ 
+ /* A feature report written by the client goes to the pad with the CRC it
+  * checks over Bluetooth in its last four bytes, from a copy: the client's
+- * buffer is not ours to rewrite. */
++ * buffer is not ours to rewrite.
++ *
++ * MGVF mgvf-0008: unless it goes nowhere. By default the write is ANSWERED
++ * SUCCESSFUL and no byte of it is sent -- an experiment, not a fix, and
++ * dualsense_usb.c carries what it is testing and what is not established.
++ * Answered and not refused, deliberately: libScePad's reader thread closes the
++ * device handle and drops the pad when its feature write fails, so a refusal
++ * would measure that library and not the pad. */
+ static void dualsense_usb_set_feature_report(DEVICE_OBJECT *device, HID_XFER_PACKET *packet, IO_STATUS_BLOCK *io)
+ {
++    struct device_extension *ext = (struct device_extension *)device->DeviceExtension;
+     BYTE buffer[256];
+     HID_XFER_PACKET bt = {.reportId = packet->reportId, .reportBuffer = buffer, .reportBufferLen = packet->reportBufferLen};
+ 
++    /* One line per swallowed write, in the shape of the CRC line it replaces,
++     * so that a +hid trace shows plainly which of the two happened. TRACE and
++     * not WARN, as mgvf-0007's is: nothing has gone wrong, this is what the
++     * build is now for. */
++    if (dualsense_usb_feature_write_action(!!(ext->report_fixups & HIDRAW_FIXUP_DUALSENSE_USB),
++                                           !!(ext->report_fixups & HIDRAW_FIXUP_DUALSENSE_USB_FEATURE_WRITE))
++        == DUALSENSE_FEATURE_WRITE_SWALLOW)
++    {
++        TRACE("swallowed the feature write, report id %u length %lu: answered successful and not a byte of it sent to the pad\n",
++              packet->reportId, packet->reportBufferLen);
++        io->Information = packet->reportBufferLen;
++        io->Status = STATUS_SUCCESS;
++        return;
++    }
++
+     if (packet->reportBufferLen > sizeof(buffer) || packet->reportBufferLen <= DUALSENSE_CRC_TAIL)
+     {
+         WARN("feature report id %u length %lu has no room for a CRC, forwarding it unchanged\n",
