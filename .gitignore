@@ -5,6 +5,10 @@
 # silently tracked from the rename commit onward.
 app/MacGameVideoFix.app/
 app/MortalShell2MacFix.app/
+# The second app's bundle, for the same reason: it is built from files
+# already tracked in runtime/, so a copy of it in here is a second copy
+# that can go stale without anything noticing.
+app-padfix/MacGamePadFix.app/
 *.zip
 .DS_Store
 
