@@ -4379,6 +4379,86 @@ struct SetupWizard: View {
 }
 
 
+/// What a CrossOver's winebus can actually do for a pad, read from the engine.
+///
+/// The controller set is optional: an engine may carry all of it, some of it,
+/// or none. Offering a choice the engine cannot honour is worse than not
+/// offering it -- the setting is written, nothing happens, and the person is
+/// left looking for the fault in their pad.
+///
+/// Asked of `winebus.sys`, not of a version file or an install receipt. A
+/// receipt says what an installer did; the binary says what is there, which is
+/// what survives a winebus installed by hand, an older payload, or a stock
+/// CrossOver update putting its own back. Each patch left a UTF-16 literal an
+/// unpatched winebus has no reason to contain, so the literal is the evidence.
+///
+/// A missing engine, or one that cannot be read, answers no -- never a guess.
+enum EngineControllerSet {
+
+    /// mgvf-0002: winebus names the bus in its compatible ids, so a client can
+    /// tell a Bluetooth pad from a wired one. The one that matters for
+    /// everybody: without it a DualSense on Bluetooth never rumbles.
+    static func namesTheBus(engine: URL) -> Bool {
+        contains("BTHENUM\\{00001124-0000-1000-8000-00805f9b34fb}", inWinebusOf: engine)
+    }
+
+    /// mgvf-0005: winebus can present a Bluetooth pad as if it were wired.
+    /// Installed is not enabled -- it stays off unless a title asks, because
+    /// presenting a Bluetooth pad as USB makes Sony's own library engage it and
+    /// in all three titles measured the pad dropped its link within a minute.
+    static func canPresentAsWired(engine: URL) -> Bool {
+        contains("UsbEmulation", inWinebusOf: engine) && contains("ProductId", inWinebusOf: engine)
+    }
+
+    /// mgvf-0009: winebus can be told to rewrite or silence the motors.
+    static func canRewriteVibration(engine: URL) -> Bool {
+        contains("VibrationMode", inWinebusOf: engine)
+            && contains("VibrationGain", inWinebusOf: engine)
+    }
+
+    /// One line for the interface, or nil when the engine carries none of it.
+    static func summary(engine: URL) -> String? {
+        var has: [String] = []
+        if namesTheBus(engine: engine) { has.append("Bluetooth pads named") }
+        if canRewriteVibration(engine: engine) { has.append("vibration") }
+        if canPresentAsWired(engine: engine) { has.append("USB presentation") }
+        return has.isEmpty ? nil : has.joined(separator: ", ")
+    }
+
+    private static func contains(_ literal: String, inWinebusOf engine: URL) -> Bool {
+        let sys = engine.appendingPathComponent(
+            "Contents/SharedSupport/CrossOver/lib/wine/x86_64-windows/winebus.sys")
+        guard let data = FileManager.default.contents(atPath: sys.path) else { return false }
+        let marker = Data(literal.utf16.flatMap { [UInt8($0 & 0xff), UInt8($0 >> 8)] })
+        return data.range(of: marker) != nil
+    }
+}
+
+/// The engine's controller row, in its own view.
+///
+/// Split out because the bottles sheet's body had already reached the point
+/// where the Swift type-checker gives up, and one more inline row tips it over.
+struct ControllerSetRow: View {
+    let engine: URL
+
+    var body: some View {
+        GridRow {
+            Text("Controller").font(.callout)
+            if let carried = EngineControllerSet.summary(engine: engine) {
+                Text(carried).font(.callout)
+                    .help("Read from this engine's winebus.sys. The USB presentation "
+                          + "is installed but off unless a title asks for it.")
+            } else {
+                Text("not installed").font(.callout).foregroundStyle(.secondary)
+                    .help("This CrossOver's winebus is the one it shipped with. A "
+                          + "DualSense on Bluetooth will not rumble. Making an engine "
+                          + "copy installs the set.")
+            }
+        }
+    }
+}
+
+
 struct ContentView: View {
     @State private var confirming = false
     @State private var installAction = true
@@ -4789,6 +4869,14 @@ struct ContentView: View {
                                 }
                             }
                         }
+                    }
+                    // What this engine's winebus can do for a pad. Next to the toolkit
+                    // because it is the same kind of fact: engine-scoped, and true for
+                    // every bottle running under it. Read from the binary rather than
+                    // from an install receipt -- see EngineControllerSet.
+                    if let engine = pickedEngine ?? picked?.target,
+                       let engineURL = Codecs.installedEngines()[engine] {
+                        ControllerSetRow(engine: engineURL)
                     }
                     // Only for an engine that actually ships more than one. A
                     // picker with a single option tells the user there is a
