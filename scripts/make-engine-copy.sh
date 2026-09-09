@@ -4,7 +4,7 @@
 #
 #     scripts/make-engine-copy.sh [--from <CrossOver.app>|--from-archive <zip>]
 #                                 [--name <Name.app>] [--gptk <apple_gptk_4 dir>]
-#                                 [--force] [--check]
+#                                 [--force] [--check] [--no-controller]
 #
 # WHY A COPY. The CrossOver a person paid for stays byte-identical to what
 # CodeWeavers shipped. Everything this project changes in an engine is changed
@@ -53,6 +53,16 @@ else
   echo "error: install-engine-media.sh is not beside this script or in runtime/" >&2
   exit 1
 fi
+# The controller set lives beside the media one, in both layouts. Absent is not
+# an error: an older payload that carries no controller installer still makes a
+# perfectly good engine, it just makes one without the pad improvements.
+if [ -f "$HERE/../runtime/install-engine-controller.sh" ]; then
+  CONTROLLER_INSTALLER="$(cd "$HERE/.." && pwd)/runtime/install-engine-controller.sh"
+elif [ -f "$HERE/install-engine-controller.sh" ]; then
+  CONTROLLER_INSTALLER="$HERE/install-engine-controller.sh"
+else
+  CONTROLLER_INSTALLER=""
+fi
 FROM="/Applications/CrossOver.app"
 ARCHIVE=""
 NAME="Crossover_MGVF.app"
@@ -71,6 +81,7 @@ while [ $# -gt 0 ]; do
     --gptk)         GPTK="$2"; shift 2 ;;
     --bottle-path)  BOTTLE_PATH="$2"; shift 2 ;;
     --no-autoupdate) NO_AUTOUPDATE=1; shift ;;
+    --no-controller) NO_CONTROLLER=1; shift ;;
     --force)        FORCE=1; shift ;;
     --check)        CHECK=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -212,7 +223,7 @@ if [ -z "$ARCHIVE" ] && [ -d "$FROM" ] && [ -d "$DEST" ] \
 fi
 
 # --- 1. copy -----------------------------------------------------------------
-say "[1/6] copying"
+say "[1/7] copying"
 rm -rf "$DEST"
 mkdir -p "$HOME/Applications"
 if [ -n "$ARCHIVE" ]; then
@@ -243,7 +254,7 @@ fi
 # The installer refuses an engine it cannot identify, and a copy answers to a
 # different name than the engine its binaries were built for. This is what lets
 # it be recognised without weakening that refusal.
-say "[2/6] provenance"
+say "[2/7] provenance"
 cat > "$CX/mgvf-origin.json" <<EOF
 {
   "made_by": "MacGameVideoFix",
@@ -257,12 +268,35 @@ cat > "$CX/mgvf-origin.json" <<EOF
 EOF
 
 # --- 3. the engine media pair ------------------------------------------------
-say "[3/6] winegstreamer"
+say "[3/7] winegstreamer"
 "$ENGINE_INSTALLER" "$DEST" 2>&1 | sed 's/^/      /'
 
-# --- 4. the toolkit, if a source was named -----------------------------------
+# --- 4. the controller-bus set -----------------------------------------------
+#
+# Installed by default. It is an improvement rather than a fix -- no title in
+# the table needs it and every one of them runs without it -- but the three
+# patches that carry it are what make a DualSense on Bluetooth behave the way
+# it does over USB, and that is worth having on every engine this makes.
+#
+# What it does NOT turn on is the USB presentation. Those patches are in the
+# same winebus, and they stay off: presenting a Bluetooth pad as a USB one
+# makes Sony's own library engage it, and in all three titles measured the pad
+# then dropped its Bluetooth link inside a minute. It is a per-title registry
+# value, off unless something asks for it, and installing the set does not ask.
+#
+# --no-controller skips this. The engine is still complete without it.
+say "[4/7] controller bus"
+if [ -n "${NO_CONTROLLER:-}" ]; then
+  say "      skipped, by --no-controller"
+elif [ -z "$CONTROLLER_INSTALLER" ]; then
+  say "      not in this payload -- the engine is complete without it"
+else
+  "$CONTROLLER_INSTALLER" "$DEST" 2>&1 | sed 's/^/      /'
+fi
+
+# --- 5. the toolkit, if a source was named -----------------------------------
 if [ -n "$GPTK" ]; then
-  say "[4/6] toolkit"
+  say "[5/7] toolkit"
   [ -d "$GPTK" ] || die "no toolkit directory at $GPTK"
   DST="$CX/lib64/apple_gptk"
   BAK="$CX/lib64/apple_gptk_bak"
@@ -341,7 +375,7 @@ if [ -n "$GPTK" ]; then
   n_placed=$(printf '%s' "$PLACED" | /usr/bin/grep -c . || true)
   say "      $n_placed file(s) placed that the engine never had"
 else
-  say "[4/6] toolkit: unchanged"
+  say "[5/7] toolkit: unchanged"
 fi
 
 # --- 4b. the provenance, now that there is something to record ---------------
@@ -386,7 +420,7 @@ TOOLKIT="$(/usr/bin/defaults read "$CX/lib64/apple_gptk/external/D3DMetal.framew
 # In the engine rather than staged beside a bottle: one place instead of one per
 # bottle, no GST_PLUGIN_PATH to write, and no second GStreamer core on the search
 # path -- which is the crash the staging arrangement exists to avoid.
-say "[5/6] codecs"
+say "[6/7] codecs"
 PL="$PAYLOAD"
 # In the repository the three plugins are under gstreamer-1.0/ and their support
 # libraries one level out; in the app everything is flat in Resources. The three
@@ -438,7 +472,7 @@ if [ "$NO_AUTOUPDATE" = 1 ]; then
 fi
 
 # --- 6. sign, then clear attributes, in that order ---------------------------
-say "[6/6] signing"
+say "[7/7] signing"
 /usr/bin/codesign --force --deep --sign - "$DEST" 2>&1 | sed 's/^/      /'
 /usr/bin/xattr -cr "$DEST" 2>/dev/null || true
 
