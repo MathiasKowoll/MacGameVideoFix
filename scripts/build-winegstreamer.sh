@@ -116,16 +116,62 @@ export GSTREAMER_CFLAGS="-I$INC $(pkg-config --cflags glib-2.0) \
 export GSTREAMER_LIBS="-L$ENGINE/lib64 -lgstreamer-1.0 -lgstvideo-1.0 -lgstaudio-1.0 \
   -lgsttag-1.0 -lgobject-2.0 -lglib-2.0"
 export CC="clang -arch x86_64 -isysroot $SDKROOT" LDFLAGS="-isysroot $SDKROOT"
+# SDL2 is the one optional dependency below that is NOT turned off, and it is
+# worth saying why, because everything around it is.
+#
+# This configure was written for one dll, winegstreamer, and every --without-
+# there is a dependency that dll does not need. Then the controller set started
+# riding on the same tree, and it ships winebus's UNIX half -- which is where
+# wine's SDL joystick bus lives. Built --without-sdl, that bus is compiled out
+# entirely, so installing the set REPLACED the engine's winebus.so with one
+# that has only IOHID: our build was 45 KB against CodeWeavers' 85 KB, and a
+# bottle told to prefer SDL found no bus at all and no pad at all. Measured on
+# 2026-09-09, after three attempts to run a control that could never have run.
+#
+# The flags are set explicitly rather than left to pkg-config so that the build
+# does not quietly depend on what is on PATH, which is how the loss happened.
+# The headers can come from anywhere -- they carry no architecture -- but the
+# LIBRARY has to be the engine's own: this build is x86_64 and homebrew's SDL2
+# on an Apple Silicon machine is arm64, which does not even link.
+export SDL2_CFLAGS="-I/opt/homebrew/include/SDL2 -D_THREAD_SAFE"
+export SDL2_LIBS="-L$ENGINE/lib64 -lSDL2"
+
+# And the name winebus will dlopen at run time, which is NOT the soname
+# configure would find on its own.
+#
+# bus_sdl.c does dlopen(SONAME_LIBSDL2), and configure fills that in with the
+# library's leaf name, "libSDL2-2.0.0.dylib". On macOS today a leaf name reaches
+# only /usr/lib and the cryptexes -- measured on 2026-09-09: not $HOME/lib, not
+# /usr/local/lib, both of which the old fallback list used to include. The
+# engine keeps its copy in lib64, so the dlopen simply fails, and it fails the
+# same way in the file CodeWeavers ship: the SDL bus has never been able to
+# start on this stack. DYLD_FALLBACK_LIBRARY_PATH is no way out either, because
+# bin/wine is a Perl script and SIP strips DYLD_* on the way into /usr/bin/perl.
+#
+# @loader_path IS honoured by dlopen, and winebus.so lands at a fixed depth --
+# <CX>/lib/wine/x86_64-unix/winebus.so -- so three levels up and into lib64
+# reaches the engine's own copy wherever the engine is installed. Passed as a
+# cache variable so that configure records it instead of probing for it.
+SDL2_SONAME="@loader_path/../../../lib64/libSDL2-2.0.0.dylib"
 ( cd "$OUT/wine-build" && "$TREE/configure" --host=x86_64-apple-darwin --enable-win64 \
     --with-mingw --without-freetype --without-x --without-alsa --without-oss \
     --without-pulse --without-sane --without-capi --without-gphoto --without-krb5 \
     --without-gssapi --without-opencl --without-pcap --without-usb --without-v4l2 \
     --without-vulkan --without-cups --without-dbus --without-fontconfig \
     --without-gnutls --without-inotify --without-netapi --without-opengl \
-    --without-sdl --without-udev --without-unwind --without-xml --without-ffmpeg \
+    --with-sdl --without-udev --without-unwind --without-xml --without-ffmpeg \
+    ac_cv_lib_soname_SDL2="$SDL2_SONAME" \
     >"$OUT/configure.log" 2>&1 ) || { say "configure failed, see $OUT/configure.log"; exit 1; }
 grep -q "gst_pad_new in -lgstreamer-1.0... yes" "$OUT/configure.log" \
   || { say "configure did not find GStreamer -- it would build without it"; exit 1; }
+# The same question for SDL2, for the same reason: a build that silently loses
+# it produces a winebus.so that looks fine and has one bus fewer than the file
+# it replaces.
+# The pattern is anchored on #define: config.h carries a commented "#undef
+# SONAME_LIBSDL2" line when the library was NOT found, and an unanchored match
+# would find that and call it success.
+grep -q "^#define SONAME_LIBSDL2 \"$SDL2_SONAME\"" "$OUT/wine-build/include/config.h" \
+  || { say "configure did not take the SDL2 soname -- winebus.so would ship a bus that cannot load it"; exit 1; }
 
 say "building"
 ( cd "$OUT/wine-build" && make -j8 dlls/winegstreamer/all >"$OUT/make.log" 2>&1 ) \
