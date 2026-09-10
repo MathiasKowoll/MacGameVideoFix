@@ -38,16 +38,32 @@ set -uo pipefail
 BOTTLE="${1:?usage: capture-hid-trace.sh <bottle name or full path> [engine .app name]}"
 ENGINE="${2:-CrossOver}"
 
-. "$(cd "$(dirname "$0")/../runtime" && pwd)/bottles.sh"
-
 APP=""
 for root in /Applications "$HOME/Applications"; do
   [ -d "$root/$ENGINE.app" ] && APP="$root/$ENGINE.app" && break
 done
 [ -n "$APP" ] || { echo "error: no $ENGINE.app" >&2; exit 1; }
 
-B="$(find_bottle_dir "$BOTTLE")" || { echo "error: no bottle named $BOTTLE in any root" >&2; exit 1; }
-[ -d "$B" ] || { echo "error: no bottle named $BOTTLE" >&2; exit 1; }
+# THE ENGINE DECIDES WHICH BOTTLE, not the search. --bottle becomes CX_BOTTLE,
+# which is a NAME, and the root it is looked up in is the CX_BOTTLE_PATH that
+# this engine declares in its own etc/CrossOver.conf. So a name that exists in
+# two roots is not ambiguous here at all: only one of them is the one this
+# engine can open. Asking find_bottle_dir first made the tool refuse to start
+# over an ambiguity the engine does not have.
+BOTTLE="$(basename "$BOTTLE")"
+CONF="$APP/Contents/SharedSupport/CrossOver/etc/CrossOver.conf"
+ROOT="$(/usr/bin/grep -a '"CX_BOTTLE_PATH"' "$CONF" 2>/dev/null | head -1 | cut -d'"' -f4)"
+case "$ROOT" in "~"*) ROOT="$HOME${ROOT#\~}" ;; esac
+[ -n "$ROOT" ] || ROOT="$HOME/Library/Application Support/CrossOver/Bottles/"
+B="${ROOT%/}/$BOTTLE"
+[ -d "$B" ] || {
+  echo "error: $ENGINE has no bottle called $BOTTLE" >&2
+  echo "       it opens bottles in: ${ROOT%/}" >&2
+  echo "       which holds:" >&2
+  ls -1 "${ROOT%/}" 2>/dev/null | sed 's/^/         /' >&2
+  exit 1
+}
+echo "root   : ${ROOT%/}   (declared by $ENGINE itself)"
 
 OUT="$HOME/Desktop/hid-$(date +%H%M%S).log"
 
