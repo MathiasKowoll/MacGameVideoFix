@@ -303,8 +303,9 @@ no repetition, nothing blind — which is why this has to be switched on.
 The same key as `UsbEmulation`, `SeizeDevice` and `ForwardFeatureWrites`, named
 after the pad's real ids in lower-case hex with a slash — `054c/0ce6`,
 `054c/0df2`. Both are read once, as the device arrives, so a change applies the
-next time the pad connects. Only a **DualSense** (`054c:0ce6`, `054c:0df2`) that
-arrived over **Bluetooth** is affected; every other device is untouched.
+next time the pad connects. Only a **DualSense** (`054c:0ce6`, `054c:0df2`) on
+the raw route is affected — **on either transport** since `mgvf-0016`; every
+other device is untouched.
 
 **What is rewritten, exactly.** Flag0 bit `0x01` is set and byte 38 bit `0x04` is
 cleared, and nothing else. Flag0 bit `0x02` is left alone because SDL sets it on
@@ -313,13 +314,39 @@ alone entirely; and the motors are **not** halved the way SDL halves them on tha
 path, because halving them is exactly what would undo what was preferred.
 `VibrationGain` is the separate, explicit way to change the number.
 
-**Both routes.** The title measured writes `0x31` itself, so this cannot live
+**Every route.** The title measured writes `0x31` itself, so this cannot live
 only in the USB emulation: such a packet is rewritten on the raw route too, in a
 copy of the client's buffer, and in the emulation path after the translation.
 Either way **the CRC is computed again** over what is actually sent — the pad
 drops a `0x31` whose CRC does not cover its bytes, so rewriting without
 re-signing would take the rumble away rather than change it. One `TRACE` line per
 rewritten packet gives the mode change and both motors before and after.
+
+**And on a cable** (`mgvf-0016`). A wired pad is written report `0x02`, whose
+common block starts at byte 1 rather than byte 3 and which carries **no CRC** —
+the four bytes that hold one over Bluetooth are ordinary report bytes there.
+That is the whole of the difference, so it is a second envelope and not a second
+rewrite: mode and gain go on meaning what they meant. Before `mgvf-0016` the two
+values were written for a wired pad, read, and dropped, so plugging the pad in
+turned the setting off without saying so. Which rewrite a packet gets is decided
+by `report[0]` and not by the id the client asked with, because a packet on the
+emulation route carries the client's `0x02` over a buffer already packed into a
+`0x31`.
+
+**On a cable the defect is measured and the benefit is not.** `emulation-111440.log`
+holds both transports in one session under one registry: `dualsense_vibration_options`
+prints "output reports will be rewritten" for the pad created with `bus_type 2`
+and prints nothing at all for the same model created with `bus_type 1` eighty
+seconds later. That is the fault, on disk. But the cable has a corpus of its own
+and it says the opposite of the Bluetooth one: of **10,684 captured wired `0x02`
+writes — 10,676 of them in that same log — not one carries a non-zero motor
+byte**, and byte 39, the haptic path's own bit, is `0x00` in every one. So on
+everything captured so far this is a **no-op**: no motor to scale, and no haptic
+bit to move. What a wired title would ask of the motors if it asked at all is
+unknown. Note too that a wired pad on the **XInput** route already honoured
+`VibrationGain` before this — the driver reads that value for both transports and
+`mgvf-0010`'s thread applies it itself — so what this closes is narrower than it
+sounds: a client writing the pad's *own* `0x02` with a motor in it.
 
 **Not established:** why the two paths feel different, and what firmware this pad
 runs — nothing here reads it. No title has been played with the rewrite on; what

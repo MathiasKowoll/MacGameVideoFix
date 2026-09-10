@@ -563,7 +563,7 @@ established** — the pad answered a feature read 43 milliseconds after it — a
 if the next trace shows the pad leaving at the same point anyway, this comes
 back out.
 
-`mgvf-0009` is the eighth and last, and it is neither a fix nor an experiment
+`mgvf-0009` is the eighth, and it is neither a fix nor an experiment
 but a **preference**. A DualSense knows two ways to be told to vibrate, and a
 game that drives the pad through Unreal's WinDualShock asks for one of them: in
 a two-hour Bluetooth session with nothing lied to, the title wrote the pad's own
@@ -574,11 +574,24 @@ clearly stronger**, and this mode at half strength felt like the game. That is a
 perception, on one person's hand, with nothing instrumented, and it is the whole
 of the evidence — so the rewrite is **off** unless a per-device registry value
 asks for it, and a second value scales the motor bytes by a percentage for
-anyone who wants more or less than the game asked for. It acts on **both**
-routes, the pad's own report as well as `mgvf-0005`'s translation, because the
-title measured writes that report itself; and either way the packet's CRC is
+anyone who wants more or less than the game asked for. It acts on **every**
+route, the pad's own report as well as `mgvf-0005`'s translation, because the
+title measured writes that report itself; and over Bluetooth the packet's CRC is
 computed again, because a pad ignores a report whose CRC does not cover its
 bytes.
+
+`mgvf-0016` is that preference on a **cable**. It was written from a Bluetooth
+trace and came out Bluetooth-shaped in two places that have nothing to do with
+the preference: the common block starts at byte 3 of a `0x31`, and the packet is
+signed. A wired pad is written report `0x02` instead, whose common block starts
+at byte 1 and which carries no CRC — so the two values were written for it, read,
+and dropped, and plugging the pad in turned the setting off without saying so.
+This adds the second envelope; the rewrite underneath is the same one, which is
+what keeps mode and gain meaning the same thing on both transports. **The fault
+is measured** — one trace holds both transports under one registry and shows the
+values read for the Bluetooth pad and not for the wired one — **and the benefit
+is not**: of 10,684 captured wired writes, not one asks the motors for anything,
+so on everything seen so far this is a no-op waiting for a title that asks.
 
 The set as a whole is an improvement rather than a fix: no row of the table
 needs it and the Motor column does not change. It is installed and removed with

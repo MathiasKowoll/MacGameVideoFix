@@ -4410,7 +4410,11 @@ enum EngineControllerSet {
         contains("UsbEmulation", inWinebusOf: engine) && contains("ProductId", inWinebusOf: engine)
     }
 
-    /// mgvf-0009: winebus can be told to rewrite or silence the motors.
+    /// mgvf-0009: winebus can be told to rewrite or silence the motors. Since
+    /// mgvf-0016 that holds on a cable as well as over Bluetooth, and the two
+    /// builds are indistinguishable here because both read the same two value
+    /// names -- see DualSenseRoute.engineCanRewriteVibration in RaccoonBot for
+    /// why that is left alone rather than given a marker of its own.
     static func canRewriteVibration(engine: URL) -> Bool {
         contains("VibrationMode", inWinebusOf: engine)
             && contains("VibrationGain", inWinebusOf: engine)

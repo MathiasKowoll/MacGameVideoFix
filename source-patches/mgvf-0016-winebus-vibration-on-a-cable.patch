@@ -1,0 +1,605 @@
+winebus: the vibration preference reaches a pad on a cable too.
+
+mgvf-0009 gave a DualSense two per-device values -- VibrationMode and
+VibrationGain -- that rewrite what a game asks of the motors. It was written
+from a Bluetooth trace and came out Bluetooth-shaped in two places that have
+nothing to do with the preference itself: the common block starts at byte 3 of
+a 0x31, and the packet is signed. So its rewrite refuses anything that is not a
+78-byte 0x31, and dualsense_vibration_options refused to read the values at all
+for a pad that arrived on USB.
+
+THE DEFECT IS MEASURED, and better than by a sentence. emulation-111440.log
+holds both transports in one session under one registry:
+
+  :11767  bus_create_hid_device desc {vid 054c, pid 0df2, ... bus_type 2}
+  :11765  dualsense_vibration_options DualSense 054c:0df2 on Bluetooth:
+          output reports will be rewritten -- the haptic path becomes the
+          legacy compatible motors, gain 100%
+
+  :20179  bus_create_hid_device desc {vid 054c, pid 0df2, ... bus_type 1}
+          (and no dualsense_vibration_options line at all)
+
+Same pad, same preference, eighty seconds apart. One transport reads the values
+and the other silently does not. That is what the owner reported on 2026-09-09:
+"con usb no toma los niveles de vibracion".
+
+WHAT THE WIRE DIFFERS BY, and both halves of it are measured rather than
+assumed. A wired pad is written report 0x02, whose common block starts at byte
+1 -- which is what dualsense_bt_output_from_usb has been doing since mgvf-0005,
+memcpy(out + 3, in + 1, ...) -- and which carries NO CRC: across 10,684 captured
+0x02 writes not one has a tail equal to crc32(seed 0xa2) over its own bytes, and
+10,683 of them end in four zero bytes. The one that does not, a 48-byte write
+ending 24 00 00 40, is disproof by itself: ten milliseconds earlier the same
+title wrote an id followed by 47 zeros, and no CRC over that payload is zero.
+Those four bytes are ordinary report bytes.
+
+So this adds a second ENVELOPE and not a second rewrite. Both entry points stand
+on the one static function underneath, and the host test asserts that the same
+common block through both comes out identical. The lengths come from the pads'
+own descriptors -- 47 data bytes on a DualSense, 63 on an Edge -- so the flag
+byte at common 38 sits inside both; a report too short to carry it is refused
+rather than read past its end.
+
+NEITHER ENTRY POINT IS CHOSEN BY A BRANCH, and that is the shape of the patch
+rather than a detail. The obvious way to write it is to pick by the report id,
+and the id to hand is the CLIENT's -- which on mgvf-0005's route is 0x02 over a
+buffer already packed into a 78-byte 0x31. That was written here first, and it
+sent Bluetooth packets to the wired rewrite, which refused them for their
+length: mgvf-0009 stopped working on BOTH of its own routes, silently and
+safely. Each entry point already examines report[0] and the length for itself
+and touches nothing when it declines, so the buffer is offered to both in order
+and there is no branch left to get wrong. The TRACE prints report[0] for the
+same reason: on that route the client's id names a report the pad will never
+see, and this line is the instrument the hand tests are read with.
+
+WHAT IS ESTABLISHED IS THE DEFECT, NOT THE BENEFIT, and saying so is the point
+of this paragraph. The Bluetooth case behind mgvf-0009 is a corpus: 6493 output
+reports, 335 carrying a motor, all 335 on the haptic path. The cable has a
+corpus too and it says the opposite -- of those same 10,684 wired writes, NOT
+ONE carries a non-zero motor byte. Byte 39, the haptic path's own bit, is 0x00
+in every one; six set the legacy bit and ask for zero with it. On everything
+captured so far this patch is a NO-OP: with no motor to scale the gain leaves
+the packet alone, and with no haptic bit the mode rewrite finds nothing to move.
+What a wired title would ask of the motors if it asked at all is UNKNOWN.
+
+AND THE REPORT THAT PROMPTED THIS MAY NOT BE ABOUT IT. A wired pad driven
+through mgvf-0010's haptics collection already honours VibrationGain -- that
+value is read into ext->haptics_gain for both transports and the haptics thread
+applies it on the cable itself. What this closes is narrower than the sentence
+that prompted it: a client writing the pad's OWN 0x02 with a motor in it, which
+the captures show wired titles never doing. Whether the title in the owner's
+hands is one of those is not established. The first use of this belongs in a
++hid trace, where dualsense_vibration_fixup's own line says what it changed.
+
+mgvf-0010's haptics thread is deliberately left alone. It never passes the
+dispatch this lives in, so there is nothing to apply twice, and it must not be
+routed through here: it works on a report of five bytes where this one insists
+on forty. The arithmetic in the two is the same three lines.
+
+Signed-off-by: MacGameVideoFix
+---
+--- a/dlls/winebus.sys/dualsense_usb.h
++++ b/dlls/winebus.sys/dualsense_usb.h
+@@ -119,6 +119,7 @@
+  * haptics", which is why that bit is left alone here: it is not the choice
+  * between the two paths. dualsense_usb.c says what the pad did with each. */
+ #define DUALSENSE_BT_COMMON              3
++#define DUALSENSE_USB_COMMON             1
+ #define DUALSENSE_COMMON_FLAG0           0
+ #define DUALSENSE_COMMON_MOTOR_RIGHT     2
+ #define DUALSENSE_COMMON_MOTOR_LEFT      3
+@@ -126,6 +127,16 @@
+ #define DUALSENSE_FLAG0_LEGACY_VIBRATION 0x01
+ #define DUALSENSE_FLAG2_HAPTIC_VIBRATION 0x04
+ 
++/* MGVF mgvf-0016: the shortest output report that carries the whole of what
++ * the rewrite reads. flag2 is the last of the four bytes and it is common byte
++ * 38, so a USB report has to reach index 39 and therefore be 40 bytes long.
++ *
++ * No pad measured here comes near it: report 0x02 is 48 bytes on a DualSense
++ * and 64 on an Edge, read from their own descriptors on 2026-09-08 and named
++ * at the top of this file. The bound exists so that a report of some length
++ * neither pad declares is refused rather than read past its end. */
++#define DUALSENSE_USB_OUTPUT_VIBRATION_MIN (DUALSENSE_USB_COMMON + DUALSENSE_COMMON_FLAG2 + 1)
++
+ /* MGVF mgvf-0009: what to do with an output report on its way to the pad.
+  *
+  *   mode  DUALSENSE_VIBRATION_MODE_CLIENT leaves every packet exactly as the
+@@ -137,7 +148,16 @@
+  *         100 means leave them alone, and so does an absent value, which is
+  *         read as 100. 0 is not absence: it silences the motors, which is how
+  *         somebody who does not want the pad to buzz at all turns it off for
+- *         every game at once. Clamped to DUALSENSE_VIBRATION_GAIN_MAX. */
++ *         every game at once. Clamped to DUALSENSE_VIBRATION_GAIN_MAX.
++ *
++ *         SILENCE BY GAIN ALONE DOES NOT REACH THE PAD, and the paragraph
++ *         above is what this warns about. A gain of 0 with no mode is {0, 0},
++ *         which main.c's dualsense_vibration_options stores for "nothing asked
++ *         for" as well, so mgvf-0014's guard cannot tell them apart and the
++ *         motors are left alone. Asking for silence therefore means writing
++ *         VibrationMode too -- which is what the launcher does. The functions
++ *         below honour a bare gain of 0 correctly; it is the driver that never
++ *         hands them one. */
+ #define DUALSENSE_VIBRATION_MODE_CLIENT 0
+ #define DUALSENSE_VIBRATION_MODE_LEGACY 1
+ #define DUALSENSE_VIBRATION_GAIN_MAX    1000
+@@ -208,15 +228,35 @@
+  * have nothing to say about -- so that a caller can forward the client's own
+  * buffer untouched in that case. change may be NULL.
+  *
+- * Both routes call this and neither is a special case: the emulation calls it
+- * after dualsense_bt_output_from_usb has packed and signed the report, and the
+- * driver calls it on a 0x31 a client wrote itself, which is what the title this
+- * patch was measured on does. */
++ * Both Bluetooth routes call this and neither is a special case: the emulation
++ * calls it after dualsense_bt_output_from_usb has packed and signed the report,
++ * and the driver calls it on a 0x31 a client wrote itself, which is what the
++ * title this patch was measured on does. A pad on a cable writes neither of
++ * those and goes through mgvf-0016's entry point below. */
+ unsigned int dualsense_bt_vibration_fixup(unsigned char *report, unsigned int len,
+                                           const struct dualsense_vibration *vib,
+                                           dualsense_crc32_fn crc32,
+                                           struct dualsense_vibration_change *change);
+ 
++/* MGVF mgvf-0016: the same rewrite for a pad on a cable, which writes its own
++ * report 0x02 and has no CRC to recompute.
++ *
++ * TWO ENTRY POINTS AND ONE REWRITE. What differs between the transports is not
++ * the preference but the envelope: where the common block starts -- byte 3 of a
++ * Bluetooth 0x31, byte 1 of a USB 0x02 -- and whether the packet is signed.
++ * Everything the option means happens in the same static function underneath,
++ * so a byte that is scaled one way on Bluetooth cannot be scaled another way on
++ * a cable without the two being changed together.
++ *
++ * Returns len when it changed something and 0 when it did not -- a report that
++ * is not a 0x02, one too short to carry the whole common block, or one the
++ * options have nothing to say about -- so a caller can forward the client's own
++ * buffer untouched in that case, exactly as the Bluetooth entry point lets it.
++ * change may be NULL. */
++unsigned int dualsense_usb_vibration_fixup(unsigned char *report, unsigned int len,
++                                           const struct dualsense_vibration *vib,
++                                           struct dualsense_vibration_change *change);
++
+ /* In place. Each returns len when the report was changed and 0 when it was
+  * left as it was: too short to carry a CRC tail at all, or, for the read, the
+  * calibration report, whose tail a wired pad returns as well. */
+--- a/dlls/winebus.sys/dualsense_usb.c
++++ b/dlls/winebus.sys/dualsense_usb.c
+@@ -473,7 +473,9 @@
+     return changed;
+ }
+ 
+-/* MGVF mgvf-0009: the entry point both routes use.
++/* MGVF mgvf-0009: the entry point every Bluetooth route uses -- a client's own
++ * 0x31 and mgvf-0005's translation of a 0x02 alike. mgvf-0016 adds the wired
++ * one below; both stand on the same rewrite.
+  *
+  * The CRC is computed again over the rewritten bytes, and that is not a detail:
+  * the pad checks it and drops a 0x31 whose four trailing bytes do not cover the
+@@ -498,6 +500,58 @@
+     crc = crc32(0, &seed, 1);
+     crc = crc32(crc, report, DUALSENSE_BT_REPORT_LEN - DUALSENSE_CRC_TAIL);
+     dualsense_store_crc(report + DUALSENSE_BT_REPORT_LEN - DUALSENSE_CRC_TAIL, crc);
++    return len;
++}
++
++/* MGVF mgvf-0016: the same preference, on a cable.
++ *
++ * WHY THIS EXISTS AT ALL. mgvf-0009 was written for a pad on Bluetooth and is
++ * shaped by that transport in two places -- the common block starts at byte 3
++ * of a 0x31, and the packet is signed -- so the entry point above refuses
++ * anything else. The consequence was reported by the owner on 2026-09-09, in
++ * exactly these words: "con usb no toma los niveles de vibracion". Plugging the
++ * pad in did not weaken the setting or change it; it silently stopped applying,
++ * while the panel that wrote it went on saying it had.
++ *
++ * WHAT IS DIFFERENT AND WHAT IS NOT. The common block is at byte 1 rather than
++ * byte 3, and there is no CRC: a wired 0x02 is not signed, and the four bytes
++ * that would carry a signature over Bluetooth are ordinary report bytes here.
++ * Nothing else differs. The rewrite is the same static function, so the mode
++ * and the gain mean the same thing on both transports by construction rather
++ * than by two implementations agreeing.
++ *
++ * THE LENGTH IS CHECKED AGAINST WHAT THE REWRITE READS, NOT AGAINST A PAD.
++ * Both pads measured here declare a 0x02 that is far longer than the minimum --
++ * 48 bytes on a DualSense, 64 on an Edge -- so the bound never fires for them.
++ * It is a bound on this function and not a claim about hardware: a report of
++ * some length neither descriptor declares is left alone rather than read past
++ * its end, and the client's own bytes then go to the pad as they always did.
++ *
++ * THE DEFECT IS MEASURED. emulation-111440.log holds both transports in one
++ * session under one registry: bus_create_hid_device brings the pad up with
++ * bus_type 2 at t=696586.859 and dualsense_vibration_options prints "output
++ * reports will be rewritten" for it, then brings the same model up with
++ * bus_type 1 at t=696666.844 and prints nothing at all. One transport reads
++ * the values, the other silently does not.
++ *
++ * THE BENEFIT IS NOT, and that is said here rather than left for somebody to
++ * discover. That log carries 10,676 wired writes of report 0x02 and four other
++ * traces carry two each -- 10,684 in all -- and NOT ONE of them carries a
++ * non-zero motor byte. Byte 39, the haptic path's own bit, is 0x00 in every
++ * one; six set the legacy bit and ask for zero with it. So on everything
++ * captured so far this function is a NO-OP: with no motor to scale the gain
++ * leaves the packet alone, and with no haptic bit the mode rewrite finds
++ * nothing to move. What a wired title would ask of the motors if it asked at
++ * all is UNKNOWN. The first use of this belongs in a +hid trace, where
++ * dualsense_vibration_fixup's own line says what it changed. */
++unsigned int dualsense_usb_vibration_fixup(unsigned char *report, unsigned int len,
++                                           const struct dualsense_vibration *vib,
++                                           struct dualsense_vibration_change *change)
++{
++    if (len < DUALSENSE_USB_OUTPUT_VIBRATION_MIN || len > DUALSENSE_USB_OUTPUT_MAX) return 0;
++    if (report[0] != DUALSENSE_USB_OUTPUT_ID) return 0;
++    if (vib->mode == DUALSENSE_VIBRATION_MODE_CLIENT && vib->gain == 100) return 0;
++    if (!dualsense_vibration_rewrite(report + DUALSENSE_USB_COMMON, vib, change)) return 0;
+     return len;
+ }
+ 
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -119,8 +119,9 @@
+     UINT32 report_fixups;
+     BYTE dualsense_seq; /* MGVF mgvf-0005: high nibble of byte 1 of every 0x31 written */
+     /* MGVF mgvf-0009: read from the pad's own key when the device arrives, and
+-     * all zeros for every device that is not a DualSense on Bluetooth, which is
+-     * what makes the two hooks below cost nothing on anything else. */
++     * all zeros for every device that is not a hidraw DualSense -- on either
++     * transport since mgvf-0016 -- which is what makes the hooks below cost
++     * nothing on anything else. */
+     struct dualsense_vibration dualsense_vibration;
+     /* MGVF mgvf-0010: the two report ids the haptics collection was given, or
+      * zero when it was not offered -- which is every device but a DualSense
+@@ -691,19 +692,32 @@
+  * pid in the desc with another DualSense's, and a read after that would look
+  * for this pad's options under the other pad's key.
+  *
+- * Scoped to a hidraw DualSense that arrived over Bluetooth, which is the only
+- * device whose output reports either hook below touches, and left at all zeros
+- * for everything else. Unlike SeizeDevice this is OFF by default: it changes
+- * what a game asked for, which is a preference and not a repair, and the
+- * evidence for it is one person's hand.
++ * Scoped to a hidraw DualSense, which is the only device whose output reports
++ * any hook below touches, and left at all zeros for everything else. Unlike
++ * SeizeDevice this is OFF by default: it changes what a game asked for, which
++ * is a preference and not a repair, and the evidence for it is one person's
++ * hand.
++ *
++ * MGVF mgvf-0016: BOTH TRANSPORTS, where this used to read a pad on Bluetooth
++ * and nothing else. That scope was not a decision about which pads deserve the
++ * preference; it was the shape of the only rewrite that existed, which refuses
++ * anything that is not a 78-byte 0x31. What the owner saw was the gap between
++ * the two: the panel wrote the values, the driver read none of them, and
++ * plugging the pad in turned the setting off without saying so. On 2026-09-09,
++ * in his words: "con usb no toma los niveles de vibracion".
+  *
++ * The transport is still read, but only to say which of the two rewrites the
++ * write path will reach for -- and it is read again there, from the report
++ * itself, because a pad that mgvf-0005 is presenting as wired has a bus_type of
++ * USB and writes a Bluetooth 0x31 all the same.
++ *
+  * @@ Wine registry key: HKLM\System\CurrentControlSet\Services\WineBus\Devices\<VID/PID>
+  */
+ static void dualsense_vibration_options(const struct device_desc *desc, struct dualsense_vibration *vib)
+ {
+     memset(vib, 0, sizeof(*vib));
+ 
+-    if (!desc->is_hidraw || desc->bus_type != BUS_TYPE_BLUETOOTH) return;
++    if (!desc->is_hidraw) return;
+     if (!is_dualsense_gamepad(desc->vid, desc->pid)) return;
+ 
+     vib->mode = get_device_option(desc->vid, desc->pid, L"VibrationMode", DUALSENSE_VIBRATION_MODE_CLIENT);
+@@ -711,17 +725,35 @@
+     if (vib->gain > DUALSENSE_VIBRATION_GAIN_MAX) vib->gain = DUALSENSE_VIBRATION_GAIN_MAX;
+ 
+     /* Nothing asked for is stored as nothing at all, so that "the options are
+-     * all zero" is the one test the write path has to make. An absent
+-     * VibrationGain reads as 100 above and lands here; a gain written as 0
+-     * does not, because 0 is a request -- silence -- and not an absence. */
++     * all zero" is the one test the write path has to make.
++     *
++     * AND THAT SENTINEL COLLIDES WITH SILENCE, which this comment used to deny.
++     * It claimed a gain written as 0 does not land here, because 0 is a request
++     * and not an absence. It does land here: VibrationGain 0 with no
++     * VibrationMode is {0, 0}, byte-identical to "nothing asked for", so
++     * mgvf-0014's guard in the write path reads it as an absence and every
++     * motor is left exactly as the game asked. Silence by gain alone does NOT
++     * work, whatever dualsense_usb.h promises about it.
++     *
++     * It cannot be reached from the launcher, which writes VibrationMode 1
++     * beside its "Custom strength", so a 0% chosen there does silence the pad.
++     * Only a registry edited by hand finds it. Left standing rather than fixed
++     * in passing: the fix is to stop using all-zeros as the sentinel and store
++     * {CLIENT, 100} instead, which changes every device created with no options
++     * at all, and that deserves its own patch and its own test. */
+     if (vib->mode == DUALSENSE_VIBRATION_MODE_CLIENT && vib->gain == 100)
+     {
+         memset(vib, 0, sizeof(*vib));
+         return;
+     }
+ 
+-    TRACE("DualSense %04x:%04x on Bluetooth: output reports will be rewritten -- %s, gain %u%%\n",
+-          desc->vid, desc->pid, vib->mode == DUALSENSE_VIBRATION_MODE_LEGACY ?
++    /* All three cases named rather than two and a default: this line is the
++     * instrument that says which transport read the preference, and a device
++     * whose bus IOKit never named is not a cable. */
++    TRACE("DualSense %04x:%04x on %s: output reports will be rewritten -- %s, gain %u%%\n",
++          desc->vid, desc->pid, desc->bus_type == BUS_TYPE_BLUETOOTH ? "Bluetooth" :
++          desc->bus_type == BUS_TYPE_USB ? "a cable" : "a bus it did not name",
++          vib->mode == DUALSENSE_VIBRATION_MODE_LEGACY ?
+           "the haptic path becomes the legacy compatible motors" : "the client's own mode is kept", vib->gain);
+ }
+ 
+@@ -1731,7 +1763,7 @@
+         BYTE motors[DUALSENSE_USB_OUTPUT_MAX];
+         HID_XFER_PACKET out = {.reportId = DUALSENSE_HAPTICS_MOTOR_REPORT_ID, .reportBuffer = motors};
+         IO_STATUS_BLOCK io = {{0}};
+-        LARGE_INTEGER started, ended;
++        LARGE_INTEGER started, ended, freq;
+         unsigned int rumble, buzz;
+         ULONG length;
+         LONG wanted;
+@@ -1750,8 +1782,27 @@
+             length = DUALSENSE_HAPTICS_MOTOR_REPORT_LEN;
+         /* On Bluetooth the packet goes through mgvf-0009's rewrite on its way
+          * out and the preference is applied there; applying it here as well
+-         * would apply it twice. On a cable nothing downstream does, so it is
+-         * applied here -- which is the only reason this parameter exists. */
++         * would apply it twice. On a cable it is applied here -- which is the
++         * only reason this parameter exists.
++         *
++         * MGVF mgvf-0016 GAVE THE CABLE A REWRITE OF ITS OWN AND THIS STILL
++         * DOES NOT USE IT, for two reasons worth writing down rather than
++         * rediscovering. First, neither of this thread's two writes reaches
++         * mgvf-0016's dispatch arm -- and that has to be said carefully,
++         * because the two writes get there differently. On a cable it calls
++         * unix_device_set_output_report and passes no dispatch at all. Over
++         * Bluetooth it calls dualsense_usb_set_output_report, which DOES reach
++         * dualsense_vibration_fixup, so there the two very much meet, and what
++         * keeps the gain from being applied twice is the line four above: this
++         * call passes 100. Second, the reason not to route the cable through it
++         * either: the rewrite reads flag2 at common byte 38 and refuses
++         * any report too short to carry it, while this one needs only the two
++         * motors and works on a report of five bytes. Routing this through it
++         * would make the gain quietly stop applying to a pad whose descriptor
++         * declares a short 0x02. The arithmetic is the same in both --
++         * haptics_scale and dualsense_scale_motor are the same three lines --
++         * and dualsense_haptics.c's offsets are the wired ones, so what differs
++         * is only how much of the report each insists on. */
+         if (!length || !(out.reportBufferLen = dualsense_haptics_motor_report(motors, sizeof(motors), length,
+                                                                              rumble, buzz,
+                                                                              ext->desc.bus_type == BUS_TYPE_BLUETOOTH
+@@ -1764,11 +1815,47 @@
+ 
+         TRACE("device %p: telling the motors rumble %u, buzz %u\n", device, rumble, buzz);
+ 
++        /* MGVF mgvf-0016: and what the packet actually carries, which on a
++         * cable can be seen nowhere else.
++         *
++         * A client's own writes are dumped by hid_internal_dispatch when +hid
++         * is on, and over Bluetooth this packet is dumped again by
++         * dualsense_usb_set_output_report after the translation. The cable path
++         * below passes neither: it goes straight to the unix device. So without
++         * this line the trace shows what was ASKED FOR and never what was SENT,
++         * and a gain that saturated, a gain that was not applied at all, and a
++         * pad whose motors are simply weaker on this transport all look exactly
++         * the same to somebody reading the log.
++         *
++         * The gain is named rather than left to be inferred. It is 100 over
++         * Bluetooth because the preference is applied further down, on the
++         * translated packet, and the number here would otherwise read as "the
++         * setting was ignored". */
++        TRACE("device %p: the packet carries motors %u/%u, flag0 %#x, %u bytes, at gain %u%%\n", device,
++              motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_MOTOR_RIGHT],
++              motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_MOTOR_LEFT],
++              motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_FLAG0],
++              (unsigned int)out.reportBufferLen,
++              ext->desc.bus_type == BUS_TYPE_BLUETOOTH ? 100 : ext->haptics_gain);
++
+         /* How long the write itself takes, because the interval above is only
+          * a floor: if a write costs more than the floor, the floor does
+          * nothing and every value below it behaves the same. Measuring that is
+-         * the difference between choosing a number and guessing one. */
+-        KeQuerySystemTime(&started);
++         * the difference between choosing a number and guessing one.
++         *
++         * MGVF mgvf-0016: THE PERFORMANCE COUNTER, AND IN MICROSECONDS, because
++         * the first version of this measured the one thing it could not see.
++         * It read KeQuerySystemTime and printed integer milliseconds, so every
++         * write faster than a millisecond printed "0 ms" -- and a Bluetooth
++         * write reading 0 was quoted for days as evidence that the link was
++         * free, while a wired write on the same build measured 1 to 2 ms. A
++         * clock whose smallest step is larger than the thing being timed does
++         * not measure it; it rounds it away.
++         *
++         * kernel32's counter and not the DDK's: wine declares no
++         * KeQueryPerformanceCounter and its ntoskrnl exports none, and this
++         * file already reaches for kernel32 for its thread and its events. */
++        QueryPerformanceCounter(&started);
+ 
+         /* The report is built in the pad's USB shape whatever the transport,
+          * because that is the shape the rest of this driver delivers: on a
+@@ -1782,9 +1869,10 @@
+         else
+             unix_device_set_output_report(device, &out, &io);
+ 
+-        KeQuerySystemTime(&ended);
+-        TRACE("device %p: the write took %u ms\n", device,
+-              (unsigned int)((ended.QuadPart - started.QuadPart) / 10000));
++        QueryPerformanceCounter(&ended);
++        if (QueryPerformanceFrequency(&freq) && freq.QuadPart)
++            TRACE("device %p: the write took %u us\n", device,
++                  (unsigned int)((ended.QuadPart - started.QuadPart) * 1000000 / freq.QuadPart));
+ 
+         /* A floor on how often the link is used. Anything asked for in the
+          * meantime is still in `wanted` and goes out on the next turn, so
+@@ -1938,9 +2026,11 @@
+     TRACE("device %p: the link is used at most every %u ms\n",
+           device, (unsigned int)(ext->haptics_interval / 10000ull));
+ 
+-    /* Read for both transports, unlike mgvf-0009's, which are only read for a
+-     * pad on Bluetooth because that is the only transport whose packets it
+-     * rewrites. What this drives is a packet of our own making. */
++    /* The same registry value mgvf-0009 reads, kept as a field of its own
++     * because what it scales is a packet of OUR making rather than a client's.
++     * mgvf-0016 gave that one both transports too, so the two are no longer
++     * distinguished by scope; the haptics thread says at its own write why it
++     * still does its own scaling rather than borrowing the rewrite. */
+     ext->haptics_gain = get_device_option(ext->desc.vid, ext->desc.pid, L"VibrationGain", 100);
+     if (ext->haptics_gain > DUALSENSE_VIBRATION_GAIN_MAX) ext->haptics_gain = DUALSENSE_VIBRATION_GAIN_MAX;
+     if (ext->haptics_gain != 100 && ext->desc.bus_type != BUS_TYPE_BLUETOOTH)
+@@ -1992,21 +2082,22 @@
+               device, packet.reportId, io.Information);
+ }
+ 
+-/* MGVF mgvf-0009: rewrite the vibration of a packed 0x31 on its way to the pad,
+- * and say in one line what was done to it.
++/* MGVF mgvf-0009: rewrite the vibration of an output report on its way to the
++ * pad, and say in one line what was done to it.
+  *
+- * Both routes end here, which is the point: the title this was measured on
++ * Every route ends here, which is the point: the title this was measured on
+  * writes report 0x31 itself with no emulation in the way, so a hook that lived
+  * only in the emulation path would never see the packets it was written for.
+- * dualsense_usb.c does the rewrite and computes the CRC again -- a 0x31 whose
+- * CRC does not cover its bytes is one the pad ignores.
++ * dualsense_usb.c does the rewrite and, over Bluetooth, computes the CRC again
++ * -- a 0x31 whose CRC does not cover its bytes is one the pad ignores. A wired
++ * 0x02 has no CRC and mgvf-0016 writes none.
+  *
+  * TRACE and not WARN, as mgvf-0007's line is: with the option on this fires on
+  * every packet that asks for a motor, hundreds of times in a session, and it is
+  * what the option is for rather than something going wrong. The line carries
+  * both halves of everything it touched, because the next trace has to show
+  * plainly what was changed and what was left. */
+-static BOOL dualsense_vibration_fixup(DEVICE_OBJECT *device, BYTE reportId, BYTE *report, ULONG len)
++static BOOL dualsense_vibration_fixup(DEVICE_OBJECT *device, BYTE *report, ULONG len)
+ {
+     struct device_extension *ext = (struct device_extension *)device->DeviceExtension;
+     struct dualsense_vibration_change change;
+@@ -2025,11 +2116,35 @@
+      * The test belongs here, where every caller passes, rather than in each of
+      * them. */
+     if (!ext->dualsense_vibration.mode && !ext->dualsense_vibration.gain) return FALSE;
++    if (!len) return FALSE;
+ 
+-    if (!dualsense_bt_vibration_fixup(report, len, &ext->dualsense_vibration, dualsense_crc32, &change)) return FALSE;
++    /* MGVF mgvf-0016: BOTH ARE OFFERED THE BUFFER AND EACH DECIDES FOR ITSELF.
++     *
++     * There is no branch here on purpose, and the reason is worth the four
++     * lines. The obvious way to write this is to pick the entry point by the
++     * report id -- and the id that is to hand is the CLIENT's, which on
++     * mgvf-0005's route is 0x02 over a buffer dualsense_bt_output_from_usb has
++     * already packed into a 78-byte 0x31. Choosing by it sends Bluetooth
++     * packets to the wired rewrite, which refuses them for their length, and
++     * mgvf-0009 stops working on both of its own routes without a word. That
++     * mistake was made here once and caught before it shipped; a branch that
++     * has to be got right twice is better deleted than commented.
++     *
++     * Each entry point already examines report[0] and the length for itself and
++     * returns 0 for a packet that is not its own, touching nothing on the way
++     * out. So offering the buffer to both, in order, cannot be got wrong: a
++     * 0x31 of 78 bytes is taken by the first, a 0x02 within its bounds by the
++     * second, and anything that is neither is refused by both. */
++    if (!dualsense_bt_vibration_fixup(report, len, &ext->dualsense_vibration, dualsense_crc32, &change)
++        && !dualsense_usb_vibration_fixup(report, len, &ext->dualsense_vibration, &change))
++        return FALSE;
+ 
++    /* report[0] and not the client's id, for the same reason: on the emulation
++     * route they are different bytes, and the one that matters is the one the
++     * pad will read. A line naming the wrong report is worse than no line --
++     * this is the instrument the hand tests are read with. */
+     TRACE("device %p: rewrote the vibration in output report id %u -- mode flag0 %#x -> %#x, flag2 %#x -> %#x"
+-          " (%s), motors %u/%u -> %u/%u\n", device, reportId, change.flag0_before, change.flag0_after,
++          " (%s), motors %u/%u -> %u/%u\n", device, report[0], change.flag0_before, change.flag0_after,
+           change.flag2_before, change.flag2_after,
+           (change.flag2_before != change.flag2_after) ? "the haptic path becomes the legacy compatible motors" :
+           "the mode is the client's own", change.motor_right_before, change.motor_left_before,
+@@ -2051,12 +2166,53 @@
+                           .reportBufferLen = DUALSENSE_BT_REPORT_LEN};
+ 
+     memcpy(buffer, packet->reportBuffer, DUALSENSE_BT_REPORT_LEN);
+-    if (dualsense_vibration_fixup(device, packet->reportId, buffer, DUALSENSE_BT_REPORT_LEN))
++    if (dualsense_vibration_fixup(device, buffer, DUALSENSE_BT_REPORT_LEN))
+         unix_device_set_output_report(device, &bt, io);
+     else
+         unix_device_set_output_report(device, packet, io);
+ }
+ 
++/* MGVF mgvf-0016: a pad on a cable, writing the pad's own report 0x02.
++ *
++ * The wired twin of dualsense_bt_set_output_report above, and deliberately its
++ * twin rather than something cleverer: nothing is emulated, nothing is
++ * translated, the packet is already what the pad wants, and all that happens is
++ * the rewrite -- in a copy, because the client's buffer is not ours to change.
++ * A packet the options have nothing to say about is forwarded as the client
++ * wrote it, from the client's own buffer, so a pad with no preference set costs
++ * exactly the memcpy that never happens.
++ *
++ * The buffer is the largest 0x02 either pad declares. A write longer than that
++ * is not copied and not rewritten; it goes down as it came, which is what this
++ * driver did with it before mgvf-0016 existed. */
++static void dualsense_usb_native_set_output_report(DEVICE_OBJECT *device, HID_XFER_PACKET *packet,
++                                                   IO_STATUS_BLOCK *io)
++{
++    BYTE buffer[DUALSENSE_USB_OUTPUT_MAX];
++    HID_XFER_PACKET usb = {.reportId = packet->reportId, .reportBuffer = buffer,
++                           .reportBufferLen = packet->reportBufferLen};
++
++    if (packet->reportBufferLen > sizeof(buffer))
++    {
++        /* Neither pad declares a 0x02 longer than 64 bytes, so this is a pad
++         * nobody here has measured rather than a client doing something wrong.
++         * It is worth a line either way: it says plainly that the preference
++         * was not applied to this write, which is the one thing somebody
++         * looking for a missing rumble needs to know. */
++        WARN("device %p: output report id %u is %Iu bytes, longer than any DualSense declares one -- it goes to the"
++             " pad as the client wrote it, and the vibration preference is not applied to it\n",
++             device, packet->reportId, (size_t)packet->reportBufferLen);
++        unix_device_set_output_report(device, packet, io);
++        return;
++    }
++
++    memcpy(buffer, packet->reportBuffer, packet->reportBufferLen);
++    if (dualsense_vibration_fixup(device, buffer, packet->reportBufferLen))
++        unix_device_set_output_report(device, &usb, io);
++    else
++        unix_device_set_output_report(device, packet, io);
++}
++
+ /* A USB 0x02 output report from the client becomes the Bluetooth 0x31 the
+  * pad wants, sent through a packet of our own; the client's IoStatus then
+  * reports the client's own length, as a wired write would.
+@@ -2098,7 +2254,7 @@
+      * that what is rewritten is the packet as it would have gone out, and
+      * before the dump below, so that the dump shows what the pad is actually
+      * sent. dualsense_usb.c signs it again. */
+-    dualsense_vibration_fixup(device, packet->reportId, buffer, bt.reportBufferLen);
++    dualsense_vibration_fixup(device, buffer, bt.reportBufferLen);
+ 
+     if (TRACE_ON(hid))
+     {
+@@ -2562,13 +2718,21 @@
+             if ((ext->report_fixups & HIDRAW_FIXUP_DUALSENSE_USB) && packet->reportId == DUALSENSE_USB_OUTPUT_ID)
+                 dualsense_usb_set_output_report(device, packet, &irp->IoStatus);
+             /* MGVF mgvf-0009: or the client wrote the pad's own 0x31 itself.
+-             * The options are all zero unless this is a DualSense that arrived
+-             * over Bluetooth and its key asks for something, so every other
+-             * device takes the branch below exactly as before. */
++             * The options are all zero unless this is a hidraw DualSense whose
++             * key asks for something, so every other device takes the last
++             * branch below exactly as before. */
+             else if ((ext->dualsense_vibration.mode || ext->dualsense_vibration.gain)
+                      && packet->reportId == DUALSENSE_BT_REPORT_ID
+                      && packet->reportBufferLen == DUALSENSE_BT_REPORT_LEN)
+                 dualsense_bt_set_output_report(device, packet, &irp->IoStatus);
++            /* MGVF mgvf-0016: or the pad is on a cable and the client wrote its
++             * 0x02. AFTER the emulation branch and not before it, which is the
++             * whole of what keeps the two apart: an emulated pad's 0x02 has to
++             * become a 0x31, and only a pad nobody is lying about reaches here
++             * with one. */
++            else if ((ext->dualsense_vibration.mode || ext->dualsense_vibration.gain)
++                     && packet->reportId == DUALSENSE_USB_OUTPUT_ID)
++                dualsense_usb_native_set_output_report(device, packet, &irp->IoStatus);
+             else
+                 unix_device_set_output_report(device, packet, &irp->IoStatus);
+             if (!irp->IoStatus.Status) hidraw_disable_report_fixups(device);

@@ -60,6 +60,13 @@ about it was where to find it in their repository. Ours are `mgvf-NNNN` and
 theirs are `NNNN`, and the two can never be confused again. See
 `mgvf-0001-winegstreamer-2D-capable-media-source-samples.patch`.
 
+**Two numbers are missing and that is deliberate.** `mgvf-0013` and `mgvf-0015`
+were both written and both discarded before they were ever built into anything
+that shipped — `mgvf-0015` blamed Windows.Gaming.Input for a fault whose binary
+turned out not to reference it at all. Neither number is reused, so a number
+means one thing in every note and transcript that mentions it. A gap here is a
+patch that was tried and abandoned, not one that was forgotten.
+
 **`mgvf-0002`, `mgvf-0003` and `mgvf-0004` are ours too**, written on 2026-09-08
 for one fault between them. They touch `winebus.sys`, `setupapi.dll` and
 `ntoskrnl.exe`, not winegstreamer, and go into the optional controller-bus set
@@ -405,6 +412,56 @@ drives different actuators or the same ones differently, and what firmware this
 pad runs — nothing here reads it. No title has been played with the rewrite on
 either; what is measured is the ladder, by hand, and the corpus the mode was read
 out of.
+
+### mgvf-0016 — the same preference, on a cable *(ours)*
+
+`mgvf-0009` above was written from a Bluetooth trace and came out
+Bluetooth-shaped in two places that have nothing to do with the preference
+itself: the common block starts at byte 3 of a `0x31`, and the packet is signed.
+So its rewrite refuses anything that is not a 78-byte `0x31`, and the options
+were not even read for a pad that arrived on USB.
+
+From outside that is worse than a missing feature. The two values were written
+for the pad, the launcher said what they would do, and plugging the pad in
+turned them off without saying so. Reported by the owner on 2026-09-09: *"con
+usb no toma los niveles de vibracion"*.
+
+**What the wire differs by.** A wired pad is written report `0x02`, whose common
+block starts at byte 1, and which carries **no CRC** — the four bytes that hold
+one over Bluetooth are ordinary report bytes there. That is the whole of it, so
+this adds a second **envelope** and not a second rewrite: both entry points
+stand on the one function underneath, and the host test asserts that the same
+common block through both comes out identical. The lengths are read rather than
+assumed — `0x02` is 47 data bytes on a DualSense and 63 on an Edge, from their
+own captured descriptors — so the flag byte at common 38 sits inside both; a
+report too short to carry it is refused rather than read past its end.
+
+**Which rewrite is chosen by `report[0]`, never by the client's report id**, and
+that is written into the code because it was got wrong once first. `mgvf-0005`'s
+emulation calls the rewrite with the client's id, `0x02`, over a buffer already
+packed into a `0x31`; a dispatch that believed the id sent Bluetooth packets to
+the wired rewrite, which refused them for their length, and `mgvf-0009` quietly
+stopped working on both of its own routes.
+
+**What is established is the defect, not the benefit.** `emulation-111440.log`
+holds both transports in one session under one registry: the options are read
+for the pad created with `bus_type 2` and never for the same model created with
+`bus_type 1` eighty seconds later. That is the fault, on disk. The benefit is
+another matter — of **10,684 captured wired `0x02` writes not one carries a
+non-zero motor byte**, and byte 39 is `0x00` in every one, so on everything seen
+so far this is a **no-op**. And the report that prompted it may not be about it:
+a wired pad on the XInput route already honoured `VibrationGain`, so what this
+closes is a client writing the pad's *own* `0x02` with a motor in it, which no
+capture shows a wired title doing. `mgvf-0010`'s haptics thread keeps its own
+gain rather than borrowing this one: it never passes the dispatch this lives in,
+and it works on a report of five bytes where this one insists on forty.
+
+> **`mgvf-0010`, `mgvf-0011`, `mgvf-0012` and `mgvf-0014` are in the set and are
+> not written up here yet.** They are the XInput rumble work of 2026-09-09 —
+> a haptics collection on the pad's own descriptor, `hidclass` offering such a
+> pad to xinput, xinput learning the Sony axis convention, and the guard that
+> stops "no options" from being read as "silence". Each patch file carries its
+> own header in the meantime.
 
 ## If another of their patches is ever needed
 
