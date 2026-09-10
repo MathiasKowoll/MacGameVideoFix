@@ -456,6 +456,30 @@ capture shows a wired title doing. `mgvf-0010`'s haptics thread keeps its own
 gain rather than borrowing this one: it never passes the dispatch this lives in,
 and it works on a report of five bytes where this one insists on forty.
 
+### mgvf-0019 — which descriptor the guest got is not which radio the bytes leave by *(ours)*
+
+`ext->desc.bus_type` answers two different questions in this file, and three
+sites asked the second and got the first answer. It says **which descriptor the
+guest was given** — which `get_compatible_ids` and the Bluetooth input-report
+naming want, and are right to ask. It does **not** say which transport a packet
+leaves by, because `mgvf-0005` sets it to USB for a pad that is physically on
+Bluetooth.
+
+The consequence: with `UsbEmulation` **and** `XInputRumble` both set — a pair the
+launcher offers together in one panel — `mgvf-0010`'s haptics thread concluded
+"cable" for a pad on the air and wrote a raw `0x02` to a pad whose Bluetooth
+descriptor declares no such report. Every write was refused and XInput rumble
+did nothing at all, silently.
+
+`dualsense_speaks_bluetooth` asks what those sites meant.
+`HIDRAW_FIXUP_DUALSENSE_USB` is set only for a pad that arrived over Bluetooth
+and is never cleared, so it means "physically on the radio and presented
+otherwise", exactly.
+
+**And it is what makes a default possible.** `mgvf-0018` left the deadband off
+because the right value depends on a transport that could not be asked. Now:
+**0 on a cable, 4 over Bluetooth.**
+
 ### mgvf-0018 — a motor step nobody can feel is not worth a slot on the link *(ours)*
 
 `mgvf-0010` writes the motors whenever the value a client asks for changes. On a

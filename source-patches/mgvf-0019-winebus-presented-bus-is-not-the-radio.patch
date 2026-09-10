@@ -1,0 +1,159 @@
+winebus: which descriptor the guest was given is not which radio the bytes leave by.
+
+ext->desc.bus_type answers a question this file asks in two different senses,
+and three places asked the second and got the first answer.
+
+It says WHICH DESCRIPTOR THE GUEST WAS GIVEN. get_compatible_ids wants that, and
+so does mgvf-0013's input-report naming: both are about what the client sees,
+and both are right to ask it. It does NOT say which transport a packet leaves
+by, because mgvf-0005 sets it to BUS_TYPE_USB for a pad that is physically on
+Bluetooth -- that is the whole of what mgvf-0005 does.
+
+THE DEFECT. With UsbEmulation and XInputRumble both set -- a pair this project's
+launcher offers together, per title, in one panel -- mgvf-0010's haptics thread
+concluded "cable" for a pad on the air. It applied the gain itself instead of
+leaving it to the rewrite downstream, and then wrote a raw report 0x02 to a pad
+whose Bluetooth descriptor declares no such report. Every write was refused.
+XInput rumble did nothing at all, silently, for as long as that pair was set,
+and the announcement at device arrival said the gain was being applied while
+nothing was reaching the motors.
+
+dualsense_speaks_bluetooth is the question those three sites meant to ask.
+HIDRAW_FIXUP_DUALSENSE_USB is set only by dualsense_usb_emulation_fixups, which
+returns early for anything that did not arrive over Bluetooth, and
+hidraw_disable_report_fixups deliberately never clears it -- so the flag means
+"physically on Bluetooth and being presented otherwise", exactly. The two sites
+that legitimately mean "which descriptor" are left reading bus_type, because
+there they are correct.
+
+AND IT IS WHAT MAKES A DEFAULT POSSIBLE. mgvf-0018 added a deadband and left it
+off, because the right value depends on the transport and the transport could
+not be asked. It can now: zero on a cable, where a write costs 1 to 2 ms and
+there is nothing to ration, and four over Bluetooth, where the link carries
+about 65 reports a second and 76% of the packets this driver was sending moved a
+motor by less than four steps of 255.
+
+Measured on Beast of Reincarnation over Bluetooth: 3 to 5 frames a second and
+visible stutter became 2 frames and none, with the rumble unchanged to the hand
+that had been complaining about it. A registry value still overrides it, and 0
+still means off.
+
+WHAT IS NOT ESTABLISHED. That four is right for every pad, every link and every
+title -- it is one hand on one Edge on one Mac, and it is a default rather than
+a constant for that reason. And the two frames that remain are not explained:
+the cost is the write (mgvf-0017 proved that by removing only the write), but
+why a write that burns no CPU, starves no input and provokes no mode change
+costs a frame at all is still unknown, and every mechanism proposed for it so
+far has been measured and eliminated.
+
+Signed-off-by: MacGameVideoFix
+---
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -1738,7 +1738,32 @@
+ }
+ 
+ static void dualsense_usb_set_output_report(DEVICE_OBJECT *device, HID_XFER_PACKET *packet, IO_STATUS_BLOCK *io);
++
++/* MGVF mgvf-0019: whether the bytes will actually travel over a radio.
++ *
++ * ext->desc.bus_type answers a different question, and this file needs both.
++ * It says WHICH DESCRIPTOR THE GUEST WAS GIVEN -- which is what
++ * dualsense_bt_input_describe and get_compatible_ids want, and they are right
++ * to ask it. It does NOT say which transport a packet leaves by, because
++ * mgvf-0005 sets it to USB for a pad that is physically on Bluetooth.
++ *
++ * Three places asked it the second question and got the first answer. With
++ * UsbEmulation and XInputRumble both on -- a pair the launcher offers together
++ * -- the haptics thread concluded "cable", applied the gain here instead of
++ * downstream, and wrote a raw 0x02 to a pad whose Bluetooth descriptor declares
++ * no such report. Every write was refused and XInput rumble did nothing at all,
++ * silently, for as long as that pair was set.
++ *
++ * HIDRAW_FIXUP_DUALSENSE_USB is set only by dualsense_usb_emulation_fixups,
++ * which returns early for anything that did not arrive over Bluetooth, and
++ * hidraw_disable_report_fixups deliberately never clears it. So it means
++ * "physically on Bluetooth and being presented otherwise", exactly. */
++static BOOL dualsense_speaks_bluetooth(const struct device_extension *ext)
++{
++    return (ext->report_fixups & HIDRAW_FIXUP_DUALSENSE_USB) || ext->desc.bus_type == BUS_TYPE_BLUETOOTH;
++}
+ 
++
+ /* MGVF mgvf-0010: the motors are written from here, never from the caller.
+  *
+  * Sending a pair of motor levels is a synchronous write to the device, and over
+@@ -1790,7 +1815,7 @@
+         buzz = (unsigned int)wanted & 0xffff;
+ 
+         length = get_output_report_length(ext, DUALSENSE_HAPTICS_MOTOR_REPORT_ID);
+-        if (!length && ext->desc.bus_type == BUS_TYPE_BLUETOOTH)
++        if (!length && dualsense_speaks_bluetooth(ext))
+             length = DUALSENSE_HAPTICS_MOTOR_REPORT_LEN;
+         /* On Bluetooth the packet goes through mgvf-0009's rewrite on its way
+          * out and the preference is applied there; applying it here as well
+@@ -1817,7 +1842,7 @@
+          * is only how much of the report each insists on. */
+         if (!length || !(out.reportBufferLen = dualsense_haptics_motor_report(motors, sizeof(motors), length,
+                                                                              rumble, buzz,
+-                                                                             ext->desc.bus_type == BUS_TYPE_BLUETOOTH
++                                                                             dualsense_speaks_bluetooth(ext)
+                                                                              ? 100 : ext->haptics_gain)))
+         {
+             WARN("device %p: no output report %#x of a usable length to carry the motors\n",
+@@ -1872,7 +1897,7 @@
+               motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_MOTOR_LEFT],
+               motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_FLAG0],
+               (unsigned int)out.reportBufferLen,
+-              ext->desc.bus_type == BUS_TYPE_BLUETOOTH ? 100 : ext->haptics_gain);
++              dualsense_speaks_bluetooth(ext) ? 100 : ext->haptics_gain);
+ 
+         /* How long the write itself takes, because the interval above is only
+          * a floor: if a write costs more than the floor, the floor does
+@@ -1914,7 +1939,7 @@
+             io.Status = STATUS_SUCCESS;
+             io.Information = out.reportBufferLen;
+         }
+-        else if (ext->desc.bus_type == BUS_TYPE_BLUETOOTH)
++        else if (dualsense_speaks_bluetooth(ext))
+             dualsense_usb_set_output_report(device, &out, &io);
+         else
+             unix_device_set_output_report(device, &out, &io);
+@@ -2083,7 +2108,7 @@
+      * still does its own scaling rather than borrowing the rewrite. */
+     ext->haptics_gain = get_device_option(ext->desc.vid, ext->desc.pid, L"VibrationGain", 100);
+     if (ext->haptics_gain > DUALSENSE_VIBRATION_GAIN_MAX) ext->haptics_gain = DUALSENSE_VIBRATION_GAIN_MAX;
+-    if (ext->haptics_gain != 100 && ext->desc.bus_type != BUS_TYPE_BLUETOOTH)
++    if (ext->haptics_gain != 100 && !dualsense_speaks_bluetooth(ext))
+         TRACE("device %p: what a game asks of the motors is scaled to %u%%\n", device, ext->haptics_gain);
+ 
+     /* MGVF mgvf-0017: the dry run. OFF unless asked for, and it exists to answer
+@@ -2109,7 +2134,8 @@
+      * from a tremble, which is why raising it makes rumble feel dead. This drops
+      * changes by SIZE: every transition a hand can notice goes out at once, and
+      * what is held back is dithering. */
+-    ext->haptics_deadband = get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumbleDeadband", 0);
++    ext->haptics_deadband = get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumbleDeadband",
++                                              dualsense_speaks_bluetooth(ext) ? DUALSENSE_HAPTICS_BT_DEADBAND : 0);
+     if (ext->haptics_deadband > 255) ext->haptics_deadband = 255;
+     if (ext->haptics_deadband)
+         TRACE("device %p: a motor must move %u of 255 before the link is used\n",
+--- a/dlls/winebus.sys/dualsense_haptics.h
++++ b/dlls/winebus.sys/dualsense_haptics.h
+@@ -101,6 +101,16 @@
+  * link rather than on the pad. */
+ #define DUALSENSE_HAPTICS_MIN_INTERVAL_MS  8
+ 
++/* MGVF mgvf-0019: the default deadband for a pad on a radio, in steps of 255.
++ *
++ * Zero on a cable, where a write costs 1-2 ms and there is nothing to ration.
++ * Four over Bluetooth, where the link carries about 65 reports a second and 76%
++ * of the packets this driver was sending moved a motor by less than this. Four
++ * is 1.6% of a motor's range. Measured on Beast of Reincarnation: 3-5 fps and
++ * visible stutter became 2 fps and none, with the rumble unchanged to the hand
++ * that had been complaining about it. */
++#define DUALSENSE_HAPTICS_BT_DEADBAND      4
++
+ /* An upper bound on what the collection adds to a descriptor, for the caller
+  * to size its buffer with. The real figure is returned by the builder. */
+ #define DUALSENSE_HAPTICS_DESC_MAX         320
