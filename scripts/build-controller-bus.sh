@@ -113,7 +113,7 @@ done
 # and mgvf-0005's own reversal then says what it always meant. Nothing is
 # written to the tree by the test; the tree is only ever forward-applied to,
 # and in order.
-PATCHSET="mgvf-0002 mgvf-0003 mgvf-0004 mgvf-0005 mgvf-0006 mgvf-0007 mgvf-0008 mgvf-0009"
+PATCHSET="mgvf-0002 mgvf-0003 mgvf-0004 mgvf-0005 mgvf-0006 mgvf-0007 mgvf-0008 mgvf-0009 mgvf-0010 mgvf-0011 mgvf-0012 mgvf-0014"
 patch_file() { ls "$OWNPATCHES/$1"-*.patch 2>/dev/null | head -1; }
 for p in $PATCHSET; do
   [ -n "$(patch_file "$p")" ] || { say "no patch numbered $p in $OWNPATCHES"; exit 1; }
@@ -148,9 +148,21 @@ done
 # x86_64-unix/ directory: the PE halves are built into a per-arch subdirectory
 # and the unix half is not, which is the same shape winegstreamer has and the
 # reason build-winegstreamer.sh reads its .so from the module directory too.
+# hidclass.sys and the five xinput DLLs joined the set with mgvf-0011 and
+# mgvf-0012. wine builds xinput1_1, 1_2, 1_4 and xinputuap from xinput1_3's
+# sources, so one patch produces five binaries and all five have to ship: a
+# game links whichever it was built against, and the one it links is the one
+# that must know how to read a Sony pad. xinput9_1_0 is NOT here on purpose --
+# it is a 20 KB forwarder that loads its functions from xinput1_4.dll, which is.
 ( cd "$OUT/wine-build" && make -j8 dlls/winebus.sys/x86_64-windows/winebus.sys \
                                   dlls/setupapi/x86_64-windows/setupapi.dll \
                                   dlls/ntoskrnl.exe/x86_64-windows/ntoskrnl.exe \
+                                  dlls/hidclass.sys/x86_64-windows/hidclass.sys \
+                                  dlls/xinput1_1/x86_64-windows/xinput1_1.dll \
+                                  dlls/xinput1_2/x86_64-windows/xinput1_2.dll \
+                                  dlls/xinput1_3/x86_64-windows/xinput1_3.dll \
+                                  dlls/xinput1_4/x86_64-windows/xinput1_4.dll \
+                                  dlls/xinputuap/x86_64-windows/xinputuap.dll \
                                   dlls/winebus.sys/winebus.so >"$OUT/make-controller.log" 2>&1 ) \
   || { say "make failed, see $OUT/make-controller.log"; exit 1; }
 
@@ -158,10 +170,26 @@ SYS="$OUT/wine-build/dlls/winebus.sys/x86_64-windows/winebus.sys"
 DLL="$OUT/wine-build/dlls/setupapi/x86_64-windows/setupapi.dll"
 KRN="$OUT/wine-build/dlls/ntoskrnl.exe/x86_64-windows/ntoskrnl.exe"
 USO="$OUT/wine-build/dlls/winebus.sys/winebus.so"
-[ -f "$SYS" ] && [ -f "$DLL" ] && [ -f "$KRN" ] && [ -f "$USO" ] || { say "build produced no output"; exit 1; }
-cp "$SYS" "$OUT/winebus.sys.unstripped"
-cp "$DLL" "$OUT/setupapi.dll.unstripped"
-cp "$KRN" "$OUT/ntoskrnl.exe.unstripped"
+
+# Every PE file of the set, and where make left it. Named once here so that the
+# strip, the checks and the stamp all walk the same list.
+PE_FILES="winebus.sys setupapi.dll ntoskrnl.exe hidclass.sys \
+          xinput1_1.dll xinput1_2.dll xinput1_3.dll xinput1_4.dll xinputuap.dll"
+pe_built() {
+  case "$1" in
+    winebus.sys)  echo "$OUT/wine-build/dlls/winebus.sys/x86_64-windows/winebus.sys" ;;
+    setupapi.dll) echo "$OUT/wine-build/dlls/setupapi/x86_64-windows/setupapi.dll" ;;
+    ntoskrnl.exe) echo "$OUT/wine-build/dlls/ntoskrnl.exe/x86_64-windows/ntoskrnl.exe" ;;
+    hidclass.sys) echo "$OUT/wine-build/dlls/hidclass.sys/x86_64-windows/hidclass.sys" ;;
+    *)            echo "$OUT/wine-build/dlls/${1%.dll}/x86_64-windows/$1" ;;
+  esac
+}
+for name in $PE_FILES; do
+  built="$(pe_built "$name")"
+  [ -f "$built" ] || { say "build produced no $name"; exit 1; }
+  cp "$built" "$OUT/$name.unstripped"
+done
+[ -f "$USO" ] || { say "build produced no winebus.so"; exit 1; }
 cp "$USO" "$OUT/winebus.so.unstripped"
 
 # ---- 3. strip, and prove the strip changed nothing that matters ---------------
@@ -173,7 +201,7 @@ cp "$USO" "$OUT/winebus.so.unstripped"
 # is a reason to stop, not a warning. The build-tree file keeps its symbols for
 # debugging, under the .unstripped name beside the shipped one.
 tables() { llvm-readobj --coff-exports --coff-imports "$1" | /usr/bin/grep -E '^[[:space:]]*(Name|Symbol):' | sort; }
-for name in winebus.sys setupapi.dll ntoskrnl.exe; do
+for name in $PE_FILES; do
   full="$OUT/$name.unstripped"; lean="$OUT/$name"
   llvm-strip --strip-all "$full" -o "$lean"
   if ! cmp -s <(tables "$full") <(tables "$lean"); then
@@ -255,12 +283,12 @@ cat > "$OUT/controller-built-for.json" <<JSON
   "engine_app": "$STAMP_APP",
   "engine_version": "$(defaults read "$ENGINE_APP/Contents/Info.plist" CFBundleVersion 2>/dev/null || echo unknown)",
   "wine_build": "$(strings -a "$ENGINE/lib/wine/x86_64-unix/ntdll.so" | grep -oE 'wine-[0-9]+\.[0-9]+[^ ]*' | head -1)",
-  "patches": "mgvf-0002 mgvf-0003 mgvf-0004 mgvf-0005 mgvf-0006 mgvf-0007 mgvf-0008 mgvf-0009"
+  "patches": "$PATCHSET"
 }
 JSON
 say "built for: $(sed -n 's/.*"engine_app": "\(.*\)".*/\1/p' "$OUT/controller-built-for.json") / $(sed -n 's/.*"wine_build": "\(.*\)".*/\1/p' "$OUT/controller-built-for.json")"
-say "built:  $OUT/winebus.sys  ($(stat -f %z "$OUT/winebus.sys") bytes)"
-say "        $OUT/setupapi.dll ($(stat -f %z "$OUT/setupapi.dll") bytes)"
-say "        $OUT/ntoskrnl.exe ($(stat -f %z "$OUT/ntoskrnl.exe") bytes)"
-say "        $OUT/winebus.so   ($(stat -f %z "$OUT/winebus.so") bytes)  -- the unix half"
+for name in $PE_FILES; do
+  say "built:  $OUT/$name ($(stat -f %z "$OUT/$name") bytes)"
+done
+say "built:  $OUT/winebus.so ($(stat -f %z "$OUT/winebus.so") bytes)  -- the unix half"
 say "put it in the repository with: scripts/install-controller-build.sh"

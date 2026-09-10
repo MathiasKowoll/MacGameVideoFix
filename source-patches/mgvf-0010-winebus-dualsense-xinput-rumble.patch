@@ -1,0 +1,1081 @@
+winebus: let a DualSense be driven by XInput without taking anything away from it.
+
+A game that reads XInput gets no vibration from a DualSense under wine.
+xinput1_3 drives a pad through a HID haptics collection (usage page 0x0E)
+and nothing else, and no report descriptor Sony ships contains one. wine can
+build that collection -- hid_device_add_haptics does it for every pad winebus
+describes itself -- but a DualSense is not one of those: it arrives with its
+own descriptor, which is precisely what makes the adaptive triggers, the
+touchpad and Sony's own library work. Replacing it is what the SDL bus does,
+and the price is all three.
+
+So the collection is APPENDED. The descriptor is left byte for byte as it was
+and two collections are added after it, rumble and buzz, sharing one new
+feature id and one new output id. Both new reports are far shorter than what
+a DualSense already declares, so the three report lengths libScePad gates on
+do not move -- asserted for the plain pad and for both of the Edge captured
+descriptors by dualsense-descriptors/haptics_augment.py, which parses the
+bytes this build really produces rather than a copy of them.
+
+Off unless the device key says XInputRumble. In this step an intensity
+written to the collection is READ AND TRACED, not acted on: the question this
+answers first is whether offering the collection costs a pad anything it
+already did, and moving the motors as well would answer two questions at once
+and tell us which one failed.
+
+Signed-off-by: MacGameVideoFix
+
+AND THE SECOND HALF, for Bluetooth. Over there the pad sends report 0x31, and its
+own descriptor declares all 77 bytes of it as one vendor block -- not an axis,
+not a button. The nine-byte report 0x01 that does declare them is the one the pad
+STOPS SENDING as soon as anything reads a feature report from it, which
+everything does. So over Bluetooth nothing that goes through HidP -- xinput,
+dinput, any of it -- can read the pad's state at all.
+
+The fields are there; only the declaration was missing. This replaces that opaque
+block with Sony's own declaration of the SAME payload from the pad's USB
+descriptor, copied item for item, with one byte of padding in front for the
+sequence byte Bluetooth adds. And then it takes the state declaration off report
+0x01, which is not sent any more: two reports claiming to carry the device's
+state made dinput say "multiple device state reports found!" twenty-two times in
+one session, and which one it reads is not a thing to leave to chance. The
+report keeps its nine bytes; they are simply no longer named.
+---
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -41,6 +41,7 @@
+ 
+ #include "unixlib.h"
+ #include "dualsense_usb.h"
++#include "dualsense_haptics.h"
+ 
+ #include "initguid.h"
+ DEFINE_GUID(GUID_NULL,0,0,0,0,0,0,0,0,0,0,0);
+@@ -121,6 +122,12 @@
+      * all zeros for every device that is not a DualSense on Bluetooth, which is
+      * what makes the two hooks below cost nothing on anything else. */
+     struct dualsense_vibration dualsense_vibration;
++    /* MGVF mgvf-0010: the two report ids the haptics collection was given, or
++     * zero when it was not offered -- which is every device but a DualSense
++     * whose key asks for it, and a DualSense whose descriptor already uses
++     * those ids. Zero is not a valid report id, so it doubles as "no". */
++    BYTE haptics_feature_id;
++    BYTE haptics_output_id;
+     UINT64 unix_device;
+ };
+ 
+@@ -1612,6 +1619,19 @@
+ static unsigned int dualsense_crc32(unsigned int initial, const unsigned char *data, int len)
+ {
+     return RtlComputeCrc32(initial, data, len);
++}
++
++/* MGVF mgvf-0010: the length the presented descriptor declares for one output
++ * report -- 48 bytes on a DualSense and 64 on an Edge -- so that the motor
++ * report is written the size the pad expects rather than a guessed one. */
++static ULONG get_output_report_length(struct device_extension *ext, BYTE id)
++{
++    HIDP_REPORT_IDS *reports = ext->collection_desc.ReportIDs;
++    ULONG i;
++
++    for (i = 0; i < ext->collection_desc.ReportIDsLength; ++i)
++        if (reports[i].ReportID == id) return reports[i].OutputLength;
++    return 0;
+ }
+ 
+ static ULONG get_feature_report_length(struct device_extension *ext, BYTE id)
+@@ -1660,11 +1680,134 @@
+ 
+     TRACE("device %p: presenting the %u-byte USB report descriptor of %04x:%04x in place of the %u-byte Bluetooth one\n",
+           device, length, ext->desc.vid, ext->desc.pid, ext->report_desc_length);
++    HidP_FreeCollectionDescription(&ext->collection_desc);
++    RtlFreeHeap(GetProcessHeap(), 0, ext->report_desc);
++    ext->report_desc = copy;
++    ext->report_desc_length = length;
++    ext->collection_desc = collection_desc;
++    return STATUS_SUCCESS;
++}
++
++/* MGVF mgvf-0010: give a DualSense the haptics collection wine's own xinput
++ * looks for, WITHOUT taking anything away from it.
++ *
++ * A game that reads XInput gets no vibration from a DualSense under wine.
++ * xinput1_3 drives a pad through a HID haptics collection (usage page 0x0E)
++ * and nothing else, and no descriptor Sony ships has one. wine can build that
++ * collection -- hid_device_add_haptics does it for every pad winebus describes
++ * itself -- but a DualSense is not one of those: it arrives with its own
++ * descriptor, which is exactly what makes the adaptive triggers, the touchpad
++ * and Sony's own library work. Replacing it is what the SDL bus does, and the
++ * price is all three.
++ *
++ * So the collection is APPENDED. The pad's descriptor is left byte for byte as
++ * it was and two collections are added after it, rumble and buzz, sharing one
++ * new feature id and one new output id. Both new reports are far shorter than
++ * what the pad already declares, so the three report lengths libScePad gates on
++ * do not move -- asserted for all three captured descriptors by
++ * dualsense-descriptors/haptics_augment.py, which parses the bytes this build
++ * really produces.
++ *
++ * Off unless the device's key says XInputRumble, and it is read here rather
++ * than at driver start because, like UsbEmulation, it is wanted per device as
++ * the device arrives.
++ *
++ * Called after dualsense_usb_replace_descriptors, so that when the USB
++ * emulation is on the collection lands on the descriptor being presented
++ * rather than on the one it replaced. */
++static NTSTATUS dualsense_haptics_add_descriptor(DEVICE_OBJECT *device)
++{
++    struct device_extension *ext = (struct device_extension *)device->DeviceExtension;
++    unsigned char described[DUALSENSE_DESCRIPTOR_MAX];
++    HIDP_DEVICE_DESC collection_desc;
++    const unsigned char *source;
++    unsigned int source_length, length;
++    NTSTATUS status;
++    ULONG i;
++    BYTE *copy;
++
++    if (!is_dualsense_gamepad(ext->desc.vid, ext->desc.pid)) return STATUS_SUCCESS;
++    if (!get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumble", 0)) return STATUS_SUCCESS;
++
++    /* Two ids are needed that the pad does not already use. They are free on
++     * every descriptor we have captured, but a firmware revision could start
++     * using them, and colliding silently would be worse than offering nothing:
++     * a client would then write intensities into one of the pad's own reports. */
++    for (i = 0; i < ext->collection_desc.ReportIDsLength; ++i)
++    {
++        BYTE id = ext->collection_desc.ReportIDs[i].ReportID;
++        if (id != DUALSENSE_HAPTICS_FEATURE_ID && id != DUALSENSE_HAPTICS_OUTPUT_ID) continue;
++        WARN("device %p: report id %#x is already used by %04x:%04x, no haptics offered\n",
++             device, id, ext->desc.vid, ext->desc.pid);
++        return STATUS_SUCCESS;
++    }
++
++    source = ext->report_desc;
++    source_length = ext->report_desc_length;
++
++    /* MGVF mgvf-0010, second half: on Bluetooth, name the fields of the report the pad
++     * actually sends, before anything else is done to the descriptor.
++     *
++     * Without this the rest is decoration over there: the pad's 0x31 is one
++     * opaque vendor block, so xinput finds the motors, writes to them, and
++     * still cannot read a single axis or button -- which a game feels as a
++     * stick jammed in a corner. Left alone on a cable, where the pad's own
++     * report 0x01 already declares everything. */
++    if (ext->desc.bus_type == BUS_TYPE_BLUETOOTH)
++    {
++        unsigned int named = dualsense_bt_input_describe(described, sizeof(described),
++                                                         source, source_length);
++        if (!named)
++            WARN("device %p: no Bluetooth input report %#x to name in the descriptor of %04x:%04x\n",
++                 device, DUALSENSE_BT_INPUT_REPORT_ID, ext->desc.vid, ext->desc.pid);
++        else
++        {
++            TRACE("device %p: named the fields of Bluetooth input report %#x, %u descriptor bytes become %u\n",
++                  device, DUALSENSE_BT_INPUT_REPORT_ID, source_length, named);
++            source = described;
++            source_length = named;
++        }
++    }
++
++    length = source_length + DUALSENSE_HAPTICS_DESC_MAX;
++    if (!(copy = RtlAllocateHeap(GetProcessHeap(), 0, length))) return STATUS_NO_MEMORY;
++
++    /* Inside the pad's own top-level collection, not after it: hidclass makes
++     * one device per top-level collection, so a haptics collection written
++     * after this one would arrive as a second device with the motors and no
++     * axes, and leave the axes on a device with no motors. */
++    if (!(length = dualsense_haptics_augment(copy, length, source, source_length,
++                                             DUALSENSE_HAPTICS_FEATURE_ID, DUALSENSE_HAPTICS_OUTPUT_ID)))
++    {
++        WARN("device %p: the descriptor of %04x:%04x does not end in a top-level collection, "
++             "no haptics offered\n", device, ext->desc.vid, ext->desc.pid);
++        RtlFreeHeap(GetProcessHeap(), 0, copy);
++        return STATUS_SUCCESS;
++    }
++
++    status = HidP_GetCollectionDescription(copy, length, PagedPool, &collection_desc);
++    if (status != HIDP_STATUS_SUCCESS)
++    {
++        /* Nothing is swapped unless the grown descriptor parses. The pad keeps
++         * the descriptor it came with and loses only the haptics. */
++        ERR("device %p: the descriptor of %04x:%04x does not parse with the haptics collection, status %#lx\n",
++            device, ext->desc.vid, ext->desc.pid, status);
++        RtlFreeHeap(GetProcessHeap(), 0, copy);
++        return STATUS_SUCCESS;
++    }
++
++    TRACE("device %p: %04x:%04x keeps its %u-byte descriptor and grows to %u with haptics, "
++          "feature %#x, output %#x\n", device, ext->desc.vid, ext->desc.pid,
++          ext->report_desc_length, length,
++          DUALSENSE_HAPTICS_FEATURE_ID, DUALSENSE_HAPTICS_OUTPUT_ID);
++
+     HidP_FreeCollectionDescription(&ext->collection_desc);
+     RtlFreeHeap(GetProcessHeap(), 0, ext->report_desc);
+     ext->report_desc = copy;
+     ext->report_desc_length = length;
+     ext->collection_desc = collection_desc;
++    ext->haptics_feature_id = DUALSENSE_HAPTICS_FEATURE_ID;
++    ext->haptics_output_id = DUALSENSE_HAPTICS_OUTPUT_ID;
+     return STATUS_SUCCESS;
+ }
+ 
+@@ -1901,7 +2044,8 @@
+                 ERR("Failed to start device %p, status %#lx\n", device, status);
+             else if (!(status = get_device_descriptors(ext->unix_device, &ext->report_desc, &ext->report_desc_length,
+                                                        &ext->collection_desc)) &&
+-                     !(status = dualsense_usb_replace_descriptors(device)))
++                     !(status = dualsense_usb_replace_descriptors(device)) &&
++                     !(status = dualsense_haptics_add_descriptor(device)))
+             {
+                 status = STATUS_SUCCESS;
+                 reports = ext->collection_desc.ReportIDs;
+@@ -1918,7 +2062,21 @@
+                     }
+                 }
+                 if (!status) ext->state = DEVICE_STATE_STARTED;
++                /* MGVF mgvf-0010: the same kick, for the same reason, on the
++                 * route that is not emulated.
++                 *
++                 * A paired pad sends its 10-byte 0x01 until something reads a
++                 * feature report from it, and only then starts sending the
++                 * 0x31 whose fields this patch names. Nothing here reads one:
++                 * the only feature a client asks of us is the haptics waveform
++                 * list, which winebus answers itself without a byte reaching
++                 * the pad. So the pad stayed in its short mode, that report is
++                 * declared opaque, and xinput read nothing at all -- 255
++                 * HidP_GetUsageValue failures per axis in one twenty-second
++                 * run, measured 2026-09-09. */
+                 if (!status && (ext->report_fixups & HIDRAW_FIXUP_DUALSENSE_USB)) dualsense_usb_kick(device);
++                else if (!status && ext->haptics_output_id && ext->desc.bus_type == BUS_TYPE_BLUETOOTH)
++                    dualsense_usb_kick(device);
+             }
+             RtlLeaveCriticalSection(&ext->cs);
+             break;
+@@ -2167,6 +2325,73 @@
+                     TRACE("%s\n", buffer);
+                 }
+             }
++            /* MGVF mgvf-0010: an intensity written to the haptics collection.
++             *
++             * FOR NOW IT IS ONLY READ. This step of the work exists to answer
++             * one question on a real pad and a real game -- does offering the
++             * collection cost anything the pad already did? -- and moving the
++             * motors as well would answer two at once and tell us which. The
++             * write is completed as a success, as the descriptor promises, and
++             * the trace says what was asked for, so a game can be watched
++             * driving the motors before a single byte reaches the pad.
++             *
++             * hidraw_disable_report_fixups is deliberately NOT called on this
++             * path: it exists to notice that a client is writing the pad's own
++             * reports, and this report is not the pad's. */
++            if (ext->haptics_output_id && packet->reportId == ext->haptics_output_id)
++            {
++                unsigned int rumble = 0, buzz = 0;
++                BYTE motors[DUALSENSE_USB_OUTPUT_MAX];
++                HID_XFER_PACKET out = {.reportId = DUALSENSE_HAPTICS_MOTOR_REPORT_ID, .reportBuffer = motors};
++                ULONG length = get_output_report_length(ext, DUALSENSE_HAPTICS_MOTOR_REPORT_ID);
++                ULONG asked = packet->reportBufferLen;
++
++                /* Over Bluetooth the pad declares no output report 0x02 -- its
++                 * own outputs are 0x31 and up -- and asking the descriptor for
++                 * one there refused every write. Nothing of that shape is ever
++                 * sent on that transport anyway: it is only what the
++                 * translation below packs into a 0x31. */
++                if (!length && ext->desc.bus_type == BUS_TYPE_BLUETOOTH)
++                    length = DUALSENSE_HAPTICS_MOTOR_REPORT_LEN;
++
++                if (!dualsense_haptics_output_levels(packet->reportBuffer, asked,
++                                                     ext->haptics_output_id, &rumble, &buzz))
++                {
++                    WARN("device %p: a haptics write of %lu bytes is too short to read\n", device, asked);
++                    irp->IoStatus.Status = STATUS_INVALID_PARAMETER;
++                    irp->IoStatus.Information = 0;
++                    break;
++                }
++
++                TRACE("device %p: xinput asks for rumble %u, buzz %u\n", device, rumble, buzz);
++
++                if (!length || !(out.reportBufferLen = dualsense_haptics_motor_report(motors, sizeof(motors),
++                                                                                     length, rumble, buzz)))
++                {
++                    WARN("device %p: no output report %#x of a usable length to carry the motors\n",
++                         device, DUALSENSE_HAPTICS_MOTOR_REPORT_ID);
++                    irp->IoStatus.Status = STATUS_INVALID_PARAMETER;
++                    irp->IoStatus.Information = 0;
++                    break;
++                }
++
++                /* The report is built in the pad's USB shape whatever the
++                 * transport, because that is the shape the rest of this driver
++                 * delivers: on a cable it goes down as it is, and over
++                 * Bluetooth mgvf-0005's translation packs it into a 0x31, signs
++                 * it, and mgvf-0009's preferences are applied to it on the way
++                 * -- so what a client asked of the motors here is scaled by the
++                 * same percentage as what a client asks of them itself. */
++                if (ext->desc.bus_type == BUS_TYPE_BLUETOOTH)
++                    dualsense_usb_set_output_report(device, &out, &irp->IoStatus);
++                else
++                    unix_device_set_output_report(device, &out, &irp->IoStatus);
++
++                /* The client wrote the haptics report and is owed that report's
++                 * length, not the length of what the pad was actually sent. */
++                if (!irp->IoStatus.Status) irp->IoStatus.Information = asked;
++                break;
++            }
+             /* MGVF mgvf-0005: the USB 0x02 goes out as a Bluetooth 0x31 */
+             if ((ext->report_fixups & HIDRAW_FIXUP_DUALSENSE_USB) && packet->reportId == DUALSENSE_USB_OUTPUT_ID)
+                 dualsense_usb_set_output_report(device, packet, &irp->IoStatus);
+@@ -2186,6 +2411,19 @@
+         case IOCTL_HID_GET_FEATURE:
+         {
+             HID_XFER_PACKET *packet = (HID_XFER_PACKET *)irp->UserBuffer;
++            /* MGVF mgvf-0010: the waveform list is ours, not the pad's. This is
++             * what xinput reads to learn that one collection is the rumble
++             * motor and the other the buzz motor; the pad has never heard of
++             * this report id and must not be asked about it. */
++            if (ext->haptics_feature_id && packet->reportId == ext->haptics_feature_id)
++            {
++                unsigned int len = dualsense_haptics_feature_report(packet->reportBuffer,
++                                                                    packet->reportBufferLen,
++                                                                    ext->haptics_feature_id);
++                irp->IoStatus.Status = len ? STATUS_SUCCESS : STATUS_BUFFER_TOO_SMALL;
++                irp->IoStatus.Information = len;
++                break;
++            }
+             unix_device_get_feature_report(device, packet, &irp->IoStatus);
+             /* MGVF mgvf-0005: the pad's CRC tail is zeroed, as a wired pad's is */
+             if (!irp->IoStatus.Status && (ext->report_fixups & HIDRAW_FIXUP_DUALSENSE_USB))
+--- a/dlls/winebus.sys/Makefile.in
++++ b/dlls/winebus.sys/Makefile.in
+@@ -11,6 +11,7 @@
+ 	bus_sdl.c \
+ 	bus_udev.c \
+ 	bus_xbox360.c \
++	dualsense_haptics.c \
+ 	dualsense_usb.c \
+ 	hid.c \
+ 	main.c \
+--- /dev/null
++++ b/dlls/winebus.sys/dualsense_haptics.h
+@@ -0,0 +1,221 @@
++/*
++ * MGVF mgvf-0010: HID haptics on a pad that keeps its own report descriptor.
++ *
++ * A game that reads XInput gets no vibration from a DualSense here. wine's
++ * xinput1_3 does know how to rumble a pad, but only through a HID haptics
++ * collection (usage page 0x0E): it looks for a Waveform List, reads which
++ * waveform each one drives, and writes an Intensity value to the output report
++ * beside it. winebus already builds exactly that collection for the pads it
++ * describes itself, in hid_device_add_haptics -- but a DualSense is not one of
++ * those. It arrives with its own report descriptor, which winebus passes
++ * through untouched, and no descriptor Sony ships contains a haptics page.
++ *
++ * So the collection is appended to the pad's real descriptor instead of
++ * replacing it. Everything the pad already declares stays exactly where it was
++ * -- the adaptive triggers, the touchpad, the gyro, the feature reports Sony's
++ * own library reads -- and two collections are added after it, one for rumble
++ * and one for buzz, sharing one new feature report id and one new output id.
++ *
++ * The three numbers libScePad gates on are the *longest* report of each kind,
++ * and both new reports are far shorter than what a DualSense already declares,
++ * so none of them moves. That is the whole reason this can be an addition
++ * rather than a replacement, and dualsense-descriptors/haptics_augment.py
++ * asserts it against the descriptors captured from the real pads.
++ *
++ * This file is the pure half: descriptor bytes, the feature report's contents,
++ * and the reading of an output report. It has no kernel or wine dependency so
++ * that the host test can compile it. main.c decides when to call these and
++ * turns the intensities into motor levels.
++ *
++ * Copyright 2026 MacGameVideoFix
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#ifndef __WINEBUS_DUALSENSE_HAPTICS_H
++#define __WINEBUS_DUALSENSE_HAPTICS_H
++
++/* The two report ids the collection uses. Report ids 3 and 4 are free on every
++ * DualSense descriptor we have captured -- the plain pad's USB one, and the
++ * Edge's over both transports -- but they are checked against the parsed
++ * descriptor at run time all the same, because a firmware revision could
++ * start using them and silently colliding would be worse than not offering
++ * haptics at all. */
++#define DUALSENSE_HAPTICS_OUTPUT_ID    0x03
++#define DUALSENSE_HAPTICS_FEATURE_ID   0x04
++
++/* The input report the little device declares so that a client has something to
++ * read from it. Free on every DualSense descriptor captured, like the two
++ * above, and checked against the real one all the same. */
++#define DUALSENSE_HAPTICS_INPUT_ID     0x06
++
++/* One waveform's entry in the feature report: which waveform this collection
++ * drives, how long it lasts, and how long the pad should keep going after the
++ * last write. Two of them, rumble then buzz, in the order the collections
++ * appear in the descriptor. */
++#define DUALSENSE_HAPTICS_WAVEFORM_ENTRY   8
++#define DUALSENSE_HAPTICS_WAVEFORMS        2
++#define DUALSENSE_HAPTICS_FEATURE_LEN      (1 + DUALSENSE_HAPTICS_WAVEFORMS * DUALSENSE_HAPTICS_WAVEFORM_ENTRY)
++
++/* The output report: one 16-bit intensity per collection, in the same order. */
++#define DUALSENSE_HAPTICS_OUTPUT_LEN       (1 + DUALSENSE_HAPTICS_WAVEFORMS * 2)
++
++/* The pad's own output report id -- the one the motors listen on, which is not
++ * the id the haptics collection declares. Spelled here rather than reached for
++ * from dualsense_usb.h so that this file stays compilable on its own. */
++#define DUALSENSE_HAPTICS_MOTOR_REPORT_ID  0x02
++
++/* The pad's Bluetooth input report -- the 78-byte one it sends once anything
++ * has read a feature report from it. Spelled here for the same reason as the
++ * line above. */
++#define DUALSENSE_BT_INPUT_REPORT_ID       0x31
++
++/* The length to build that output report with when the descriptor does not say.
++ * Over Bluetooth the pad declares no report 0x02 at all -- its outputs are 0x31
++ * and up -- and none is ever sent as such: the report is only what the
++ * translation packs into a 0x31. 48 is a plain DualSense's wired output report,
++ * which covers the whole common block. */
++#define DUALSENSE_HAPTICS_MOTOR_REPORT_LEN 48
++
++/* How long the pad keeps buzzing when nothing writes again. xinput's contract
++ * is that a set vibration persists until it is changed, so this is a safety
++ * net for a client that stops writing, not a duration. wine uses the same
++ * second in hid_device_add_haptics. */
++#define DUALSENSE_HAPTICS_CUTOFF_MS        1000
++
++/* The default shortest gap between two writes to the motors, in milliseconds.
++ * Eight is 125 a second, well past what the motors can follow; the value under
++ * the device's key overrides it, because how much a write costs depends on the
++ * link rather than on the pad. */
++#define DUALSENSE_HAPTICS_MIN_INTERVAL_MS  8
++
++/* An upper bound on what the collection adds to a descriptor, for the caller
++ * to size its buffer with. The real figure is returned by the builder. */
++#define DUALSENSE_HAPTICS_DESC_MAX         320
++
++/* An upper bound on a DualSense report descriptor after both operations, for a
++ * caller that wants one on the stack. The largest captured descriptor is 436
++ * bytes and this patch adds about a hundred. */
++#define DUALSENSE_DESCRIPTOR_MAX           1024
++
++/* Write the haptics collections on their own. Returns the number of bytes
++ * written, or 0 if they do not fit. */
++unsigned int dualsense_haptics_descriptor(unsigned char *out, unsigned int out_size,
++                                          unsigned char feature_id, unsigned char output_id);
++
++/* Write a copy of `desc` with a SECOND top-level collection after it, carrying
++ * the haptics and nothing else, and return the new length.
++ *
++ * A top level of its own, and that is the point. hidclass makes one device per
++ * top-level collection, so this produces two: the pad exactly as it was, which
++ * every client keeps reading as it always did, and beside it a small device
++ * that has motors and no axes.
++ *
++ * That separation is what stops a game being told the same thing twice. A game
++ * that reads the pad through raw HID for its glyphs and its adaptive triggers,
++ * and through XInput for rumble, would otherwise receive both -- and they do not
++ * merely duplicate, they fight: HID counts the Y axis downwards and XInput
++ * upwards, so the two cancel and the stick loses its vertical entirely while
++ * keeping its horizontal. Measured that way on 2026-09-09. With the motors on
++ * their own device, XInput has nothing to report but rumble.
++ *
++ * The little device still declares a two-byte input report. It carries nothing
++ * -- a vendor byte and one button that is never pressed -- and exists because a
++ * client opens a device and reads from it, and one with no input report at all
++ * is a device xinput drops before it ever looks for the motors.
++ */
++unsigned int dualsense_haptics_endpoint(unsigned char *out, unsigned int out_size,
++                                        const unsigned char *desc, unsigned int len,
++                                        unsigned char feature_id, unsigned char output_id,
++                                        unsigned char input_id);
++
++/* Write a copy of `desc` with the haptics collections INSIDE its last top-level
++ * collection, and return the new length, or 0 if the descriptor does not end in
++ * a top-level collection or the result does not fit.
++ *
++ * Inside, not after, and the difference is the whole feature. hidclass creates
++ * one device per TOP-LEVEL collection: a haptics collection written after the
++ * pad's would become a second device, carrying the motors and no axes, while
++ * the device carrying the axes carried no motors -- and xinput needs both on
++ * the one device it opens. Written inside, the pad still presents exactly one
++ * top-level collection, with two more logical collections in it. */
++unsigned int dualsense_haptics_augment(unsigned char *out, unsigned int out_size,
++                                       const unsigned char *desc, unsigned int len,
++                                       unsigned char feature_id, unsigned char output_id);
++
++/* Fill the feature report that says which waveform each collection drives.
++ * This is what xinput reads to decide that one collection is the rumble motor
++ * and the other the buzz motor. Returns the length written, or 0. */
++unsigned int dualsense_haptics_feature_report(unsigned char *out, unsigned int out_size,
++                                              unsigned char feature_id);
++
++/* Build the output report that moves the pad's two motors, in the USB shape --
++ * id 0x02, the 47-byte common block after it -- of `length` bytes. That shape
++ * is the one the rest of this driver already knows how to deliver: on a cable
++ * it goes to the pad as it is, and over Bluetooth mgvf-0005's translation packs
++ * it into a 0x31 and signs it.
++ *
++ * The intensities are xinput's, 0..65535, and the pad's motors take a byte
++ * each, so they are scaled down rather than clamped -- an intensity of 300
++ * must not arrive as full power. xinput's rumble is the low-frequency motor,
++ * which is the pad's LEFT, and its buzz the high-frequency one, the RIGHT.
++ *
++ * `gain` is a percentage over the two motor bytes, saturating at full power:
++ * 100 leaves them alone, 0 silences them. It is here because the preference the
++ * owner sets applies to what a game asks for, and until now it could not: the
++ * options mgvf-0009 reads are only read for a pad on Bluetooth, because that is
++ * the only transport whose packets it rewrites. This report is made rather than
++ * rewritten, and is made on both transports, so the preference can be honoured
++ * on both -- which matters, because the same game's rumble is noticeably milder
++ * on a cable than over the air.
++ *
++ * Returns the length written, or 0 if it does not fit. */
++unsigned int dualsense_haptics_motor_report(unsigned char *out, unsigned int out_size,
++                                            unsigned int length,
++                                            unsigned int rumble, unsigned int buzz,
++                                            unsigned int gain);
++
++/* MGVF mgvf-0010, second half: describe the fields of the pad's Bluetooth input report.
++ *
++ * Over Bluetooth a DualSense sends report 0x31, and its own descriptor declares
++ * all 77 bytes of it as one vendor-defined block: not an axis, not a button,
++ * nothing HidP can read. The 9-byte report 0x01 that does declare axes is the
++ * short one the pad stops sending the moment anything reads a feature report,
++ * which everything does. So over Bluetooth xinput -- and dinput, and anything
++ * else that goes through HidP -- cannot read the pad's state at all.
++ *
++ * The fields are there; only the declaration is missing. This replaces that one
++ * opaque block with the declaration Sony itself writes for the SAME CONTENT
++ * over USB, copied item for item from the pad's own USB descriptor, with one
++ * byte of padding in front for the sequence byte Bluetooth adds and the
++ * trailing vendor block widened to match. Every byte of the report keeps its
++ * place; what changes is that the first eleven are now named.
++ *
++ * Returns the new length, or 0 when the descriptor has no such report, which is
++ * every pad on a cable and every device that is not a DualSense.
++ */
++unsigned int dualsense_bt_input_describe(unsigned char *out, unsigned int out_size,
++                                         const unsigned char *desc, unsigned int len);
++
++/* Read the two intensities out of an output report written by a client.
++ * Returns 0 when the report is not the haptics one, so a caller can pass every
++ * write through this and act only on the ones that are. The intensities are
++ * 0..65535, the range the descriptor declares and xinput scales its own
++ * 0..65535 vibration into unchanged. */
++int dualsense_haptics_output_levels(const unsigned char *report, unsigned int len,
++                                    unsigned char output_id,
++                                    unsigned int *rumble, unsigned int *buzz);
++
++#endif /* __WINEBUS_DUALSENSE_HAPTICS_H */
+--- /dev/null
++++ b/dlls/winebus.sys/dualsense_haptics.c
+@@ -0,0 +1,497 @@
++/*
++ * MGVF mgvf-0010: HID haptics on a pad that keeps its own report descriptor.
++ * See dualsense_haptics.h for what this is for and why it is an addition
++ * rather than a replacement.
++ *
++ * Copyright 2026 MacGameVideoFix
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#include <string.h>
++
++/* psh_hid_macros.h pulls in hidusage.h, which spells its usage constants with
++ * USHORT. Inside wine that comes from windef.h, which this translation unit
++ * does not include and must not, because the host test compiles the same file
++ * on its own. It is unsigned short in both worlds. */
++typedef unsigned short USHORT;
++
++#include "psh_hid_macros.h"
++#include "dualsense_haptics.h"
++
++/* One waveform's collection. The shape is hid_device_add_haptics' template in
++ * hid.c, kept item for item so that anything wine's own xinput accepts from a
++ * pad winebus describes, it accepts from this one too. Both collections carry
++ * the same two report ids and differ only in the waveform the feature report
++ * names for each, which is how xinput tells them apart: it walks each Waveform
++ * List, reads the ordinal value out of the feature report, and calls that
++ * collection rumble or buzz accordingly.
++ *
++ * The Duration List and Cutoff Time are not optional decoration. xinput reads
++ * the waveform ordinal with HidP_GetUsageValue over the whole feature report,
++ * so every field the report declares must be there for the offsets to line up
++ * with what we answer in dualsense_haptics_feature_report. */
++static unsigned int haptics_collection(unsigned char *out, unsigned int out_size,
++                                       unsigned char feature_id, unsigned char output_id)
++{
++    const unsigned char template[] =
++    {
++        USAGE_PAGE(2, HID_USAGE_PAGE_HAPTICS),
++        USAGE(1, HID_USAGE_HAPTICS_SIMPLE_CONTROLLER),
++        COLLECTION(1, Logical),
++            REPORT_ID(1, feature_id),
++
++            USAGE(1, HID_USAGE_HAPTICS_WAVEFORM_LIST),
++            COLLECTION(1, NamedArray),
++                /* ordinal 1 and 2 are reserved for implicit waveforms */
++                USAGE(4, (HID_USAGE_PAGE_ORDINAL<<16)|3),
++                REPORT_SIZE(1, 16),
++                REPORT_COUNT(1, 1),
++                FEATURE(1, Data|Var|Abs|Null),
++            END_COLLECTION,
++
++            USAGE(1, HID_USAGE_HAPTICS_DURATION_LIST),
++            COLLECTION(1, NamedArray),
++                USAGE(4, (HID_USAGE_PAGE_ORDINAL<<16)|3),
++                REPORT_SIZE(1, 16),
++                REPORT_COUNT(1, 1),
++                FEATURE(1, Data|Var|Abs|Null),
++            END_COLLECTION,
++
++            USAGE(1, HID_USAGE_HAPTICS_WAVEFORM_CUTOFF_TIME),
++            UNIT(2, 0x1001), /* seconds */
++            UNIT_EXPONENT(1, -3), /* 10^-3 */
++            LOGICAL_MINIMUM(4, 0x00000000),
++            LOGICAL_MAXIMUM(4, 0x7fffffff),
++            REPORT_SIZE(1, 32),
++            REPORT_COUNT(1, 1),
++            FEATURE(1, Data|Var|Abs),
++            /* reset the globals this collection moved, so that the next one
++             * starts from the same state the pad's own descriptor left */
++            UNIT(1, 0),
++            UNIT_EXPONENT(1, 0),
++
++            REPORT_ID(1, output_id),
++            USAGE(1, HID_USAGE_HAPTICS_INTENSITY),
++            LOGICAL_MINIMUM(4, 0x00000000),
++            LOGICAL_MAXIMUM(4, 0x0000ffff),
++            REPORT_SIZE(1, 16),
++            REPORT_COUNT(1, 1),
++            OUTPUT(1, Data|Var|Abs),
++        END_COLLECTION,
++    };
++
++    if (out_size < sizeof(template)) return 0;
++    memcpy(out, template, sizeof(template));
++    return sizeof(template);
++}
++
++unsigned int dualsense_haptics_descriptor(unsigned char *out, unsigned int out_size,
++                                          unsigned char feature_id, unsigned char output_id)
++{
++    unsigned int written = 0, i, len;
++
++    for (i = 0; i < DUALSENSE_HAPTICS_WAVEFORMS; ++i)
++    {
++        if (!(len = haptics_collection(out + written, out_size - written, feature_id, output_id)))
++            return 0;
++        written += len;
++    }
++    return written;
++}
++
++/* The offset of the item that closes the descriptor's last top-level
++ * collection, which is where anything added to that collection has to go.
++ * Returns the length when there is no such item, which makes the caller
++ * refuse rather than write a descriptor that does not nest. */
++static unsigned int last_top_level_end(const unsigned char *desc, unsigned int len)
++{
++    unsigned int i = 0, depth = 0, close = len;
++
++    while (i < len)
++    {
++        unsigned char head = desc[i];
++        unsigned int size = head & 0x03;
++
++        if (size == 3) size = 4;
++        if ((head & 0xfc) == 0xa0) depth++;                 /* COLLECTION */
++        else if ((head & 0xfc) == 0xc0)                     /* END_COLLECTION */
++        {
++            if (!depth) return len;                         /* unbalanced */
++            if (--depth == 0) close = i;
++        }
++        i += 1 + size;
++    }
++    if (i != len || depth) return len;                      /* truncated or unbalanced */
++    return close;
++}
++
++/* The little device: one application collection with a token input report and
++ * the two haptics collections. Everything about it is the smallest thing that
++ * a client will still open and drive. */
++static unsigned int haptics_endpoint_head(unsigned char *out, unsigned int out_size,
++                                          unsigned char input_id)
++{
++    const unsigned char head[] =
++    {
++        USAGE_PAGE(1, HID_USAGE_PAGE_GENERIC),
++        /* A multi-axis controller, not a gamepad, and the difference is
++         * measured rather than aesthetic.
++         *
++         * xinput's try_add_device accepts a gamepad, a joystick OR a multi-axis
++         * controller, so any of the three would let it open this device. A game
++         * enumerating pads of its own looks for the first two: declared a
++         * gamepad, this device is counted as a second controller and given
++         * per-frame work it can never answer -- Beast lost half its frame rate
++         * to it, 2026-09-09. Declared a multi-axis controller it is invisible to
++         * that enumeration and unchanged to xinput. */
++        USAGE(1, HID_USAGE_GENERIC_MULTI_AXIS_CONTROLLER),
++        COLLECTION(1, Application),
++            REPORT_ID(1, input_id),
++            /* A byte of nothing, on the vendor page so that no client mistakes
++             * it for an axis: check_value_caps in xinput skips every usage that
++             * is not on the generic desktop page. It is here so the device has
++             * an input report to be read from at all. */
++            USAGE_PAGE(2, HID_USAGE_PAGE_VENDOR_DEFINED_BEGIN),
++            USAGE(1, 0x20),
++            LOGICAL_MINIMUM(1, 0),
++            LOGICAL_MAXIMUM(2, 0x00ff),
++            REPORT_SIZE(1, 8),
++            REPORT_COUNT(1, 1),
++            INPUT(1, Data|Var|Abs),
++            /* And one button that is never pressed, so that the button caps a
++             * client counts are not zero. A count of zero is not a fault in
++             * itself, but xinput allocates from it before it checks it. */
++            USAGE_PAGE(1, HID_USAGE_PAGE_BUTTON),
++            USAGE_MINIMUM(1, 1),
++            USAGE_MAXIMUM(1, 1),
++            LOGICAL_MINIMUM(1, 0),
++            LOGICAL_MAXIMUM(1, 1),
++            REPORT_SIZE(1, 1),
++            REPORT_COUNT(1, 1),
++            INPUT(1, Data|Var|Abs),
++            REPORT_SIZE(1, 7),
++            REPORT_COUNT(1, 1),
++            INPUT(1, Cnst|Var|Abs),
++    };
++
++    if (out_size < sizeof(head)) return 0;
++    memcpy(out, head, sizeof(head));
++    return sizeof(head);
++}
++
++unsigned int dualsense_haptics_endpoint(unsigned char *out, unsigned int out_size,
++                                        const unsigned char *desc, unsigned int len,
++                                        unsigned char feature_id, unsigned char output_id,
++                                        unsigned char input_id)
++{
++    const unsigned char tail[] = { END_COLLECTION };
++    unsigned char block[DUALSENSE_HAPTICS_DESC_MAX];
++    unsigned int head, body, total;
++
++    if (!(head = haptics_endpoint_head(block, sizeof(block), input_id))) return 0;
++    if (!(body = dualsense_haptics_descriptor(block + head, sizeof(block) - head, feature_id, output_id)))
++        return 0;
++    if (head + body + sizeof(tail) > sizeof(block)) return 0;
++    memcpy(block + head + body, tail, sizeof(tail));
++    total = head + body + sizeof(tail);
++
++    if (out_size < len + total) return 0;
++    memcpy(out, desc, len);
++    memcpy(out + len, block, total);
++    return len + total;
++}
++
++unsigned int dualsense_haptics_augment(unsigned char *out, unsigned int out_size,
++                                       const unsigned char *desc, unsigned int len,
++                                       unsigned char feature_id, unsigned char output_id)
++{
++    unsigned char block[DUALSENSE_HAPTICS_DESC_MAX];
++    unsigned int at = last_top_level_end(desc, len), size;
++
++    if (at >= len) return 0;
++    if (!(size = dualsense_haptics_descriptor(block, sizeof(block), feature_id, output_id))) return 0;
++    /* Built aside and measured before anything is written, so a buffer that is
++     * too small leaves the caller's exactly as it was. */
++    if (out_size < len + size) return 0;
++
++    memcpy(out, desc, at);
++    memcpy(out + at, block, size);
++    memcpy(out + at + size, desc + at, len - at);
++    return len + size;
++}
++
++/* The waveform ordinals xinput recognises. They are the values it compares the
++ * feature report against, not descriptor items, which is why they appear here
++ * and not in the collection above. */
++#define HAPTICS_WAVEFORM_BUZZ    0x1004
++#define HAPTICS_WAVEFORM_RUMBLE  0x1005
++
++static void put_u16(unsigned char *out, unsigned int value)
++{
++    out[0] = value & 0xff;
++    out[1] = (value >> 8) & 0xff;
++}
++
++static void put_u32(unsigned char *out, unsigned int value)
++{
++    put_u16(out, value & 0xffff);
++    put_u16(out + 2, value >> 16);
++}
++
++unsigned int dualsense_haptics_feature_report(unsigned char *out, unsigned int out_size,
++                                              unsigned char feature_id)
++{
++    /* Rumble first, buzz second, in the order the collections were written.
++     * Duration 0 means the waveform runs until it is changed -- the same
++     * answer winebus gives for its own pads, and the one xinput's contract
++     * wants, since a vibration set through XInputSetState stays set. */
++    static const unsigned int waveforms[DUALSENSE_HAPTICS_WAVEFORMS] =
++    {
++        HAPTICS_WAVEFORM_RUMBLE,
++        HAPTICS_WAVEFORM_BUZZ,
++    };
++    unsigned int i;
++
++    if (out_size < DUALSENSE_HAPTICS_FEATURE_LEN) return 0;
++    memset(out, 0, DUALSENSE_HAPTICS_FEATURE_LEN);
++    out[0] = feature_id;
++    for (i = 0; i < DUALSENSE_HAPTICS_WAVEFORMS; ++i)
++    {
++        unsigned char *entry = out + 1 + i * DUALSENSE_HAPTICS_WAVEFORM_ENTRY;
++        put_u16(entry, waveforms[i]);                   /* waveform  */
++        put_u16(entry + 2, 0);                          /* duration  */
++        put_u32(entry + 4, DUALSENSE_HAPTICS_CUTOFF_MS); /* cutoff   */
++    }
++    return DUALSENSE_HAPTICS_FEATURE_LEN;
++}
++
++/* MGVF mgvf-0010, second half: the Bluetooth input report, described.
++ *
++ * The middle of this is Sony's own declaration of report 0x01 on a cable, taken
++ * byte for byte out of the pad's USB report descriptor: six 8-bit axes, the
++ * vendor counter byte, the hat with its null state, fifteen buttons, thirteen
++ * more vendor bits, and then the rest of the report as a vendor block. It is
++ * copied rather than written because the pad is the authority on how its own
++ * bytes are laid out, and because the two reports carry the SAME payload -- the
++ * Bluetooth one simply puts one extra byte in front of it.
++ *
++ * So one byte of padding goes in front, and the trailing vendor block is
++ * widened by the difference: 63 bytes of USB payload become 77 of Bluetooth. */
++#define BT31_LEAD_PAD        1     /* the sequence/tag byte Bluetooth adds  */
++#define BT31_PAYLOAD         77    /* bytes after the report id             */
++#define BT31_NAMED           11    /* axes, counter, hat and buttons        */
++#define BT31_TRAILING_VENDOR (BT31_PAYLOAD - BT31_LEAD_PAD - BT31_NAMED)
++
++static const unsigned char bt31_fields[] =
++{
++    /* the byte Bluetooth puts in front, declared as vendor padding so that
++     * nothing tries to read it as an axis */
++    0x06, 0x00, 0xff,             /* USAGE_PAGE (vendor 0xff00)             */
++    0x09, 0x20,                   /* USAGE (0x20)                           */
++    0x75, 0x08,                   /* REPORT_SIZE (8)                        */
++    0x95, BT31_LEAD_PAD,          /* REPORT_COUNT (1)                       */
++    0x81, 0x02,                   /* INPUT (Data,Var,Abs)                   */
++
++    /* --- from here, Sony's own words for report 0x01 on a cable --- */
++    0x05, 0x01,                   /* USAGE_PAGE (Generic Desktop)           */
++    0x09, 0x30,                   /* USAGE (X)                              */
++    0x09, 0x31,                   /* USAGE (Y)                              */
++    0x09, 0x32,                   /* USAGE (Z)   -- the right stick, not a trigger */
++    0x09, 0x35,                   /* USAGE (Rz)  -- the right stick         */
++    0x09, 0x33,                   /* USAGE (Rx)  -- L2                      */
++    0x09, 0x34,                   /* USAGE (Ry)  -- R2                      */
++    0x15, 0x00,                   /* LOGICAL_MINIMUM (0)                    */
++    0x26, 0xff, 0x00,             /* LOGICAL_MAXIMUM (255)                  */
++    0x75, 0x08,                   /* REPORT_SIZE (8)                        */
++    0x95, 0x06,                   /* REPORT_COUNT (6)                       */
++    0x81, 0x02,                   /* INPUT (Data,Var,Abs)                   */
++    0x06, 0x00, 0xff,             /* USAGE_PAGE (vendor 0xff00)             */
++    0x09, 0x20,                   /* USAGE (0x20) -- the pad's own counter  */
++    0x95, 0x01,                   /* REPORT_COUNT (1)                       */
++    0x81, 0x02,                   /* INPUT (Data,Var,Abs)                   */
++    0x05, 0x01,                   /* USAGE_PAGE (Generic Desktop)           */
++    0x09, 0x39,                   /* USAGE (Hat switch)                     */
++    0x15, 0x00,                   /* LOGICAL_MINIMUM (0)                    */
++    0x25, 0x07,                   /* LOGICAL_MAXIMUM (7)                    */
++    0x35, 0x00,                   /* PHYSICAL_MINIMUM (0)                   */
++    0x46, 0x3b, 0x01,             /* PHYSICAL_MAXIMUM (315)                 */
++    0x65, 0x14,                   /* UNIT (degrees)                         */
++    0x75, 0x04,                   /* REPORT_SIZE (4)                        */
++    0x95, 0x01,                   /* REPORT_COUNT (1)                       */
++    0x81, 0x42,                   /* INPUT (Data,Var,Abs,Null)              */
++    0x65, 0x00,                   /* UNIT (None)                            */
++    0x05, 0x09,                   /* USAGE_PAGE (Button)                    */
++    0x19, 0x01,                   /* USAGE_MINIMUM (1)                      */
++    0x29, 0x0f,                   /* USAGE_MAXIMUM (15)                     */
++    0x15, 0x00,                   /* LOGICAL_MINIMUM (0)                    */
++    0x25, 0x01,                   /* LOGICAL_MAXIMUM (1)                    */
++    0x75, 0x01,                   /* REPORT_SIZE (1)                        */
++    0x95, 0x0f,                   /* REPORT_COUNT (15)                      */
++    0x81, 0x02,                   /* INPUT (Data,Var,Abs)                   */
++    0x06, 0x00, 0xff,             /* USAGE_PAGE (vendor 0xff00)             */
++    0x09, 0x21,                   /* USAGE (0x21)                           */
++    0x95, 0x0d,                   /* REPORT_COUNT (13 bits)                 */
++    0x81, 0x02,                   /* INPUT (Data,Var,Abs)                   */
++    /* --- end of Sony's own words --- */
++
++    /* the rest of the Bluetooth report, as one vendor block again, and the
++     * globals left as the descriptor had them so that whatever follows this
++     * report is declared against the same state as before */
++    0x06, 0x00, 0xff,             /* USAGE_PAGE (vendor 0xff00)             */
++    0x09, 0x22,                   /* USAGE (0x22)                           */
++    0x15, 0x00,                   /* LOGICAL_MINIMUM (0)                    */
++    0x26, 0xff, 0x00,             /* LOGICAL_MAXIMUM (255)                  */
++    0x75, 0x08,                   /* REPORT_SIZE (8)                        */
++    0x95, BT31_TRAILING_VENDOR,   /* REPORT_COUNT (65)                      */
++    0x81, 0x02,                   /* INPUT (Data,Var,Abs)                   */
++};
++
++/* The byte range of the input declaration of report `id`: from the USAGE that
++ * introduces it to the end of its INPUT item. Returns 0 when there is none. */
++static unsigned int bt_input_span(const unsigned char *desc, unsigned int len,
++                                  unsigned char id, unsigned int *start)
++{
++    unsigned int i = 0, usage_at = 0;
++    unsigned char report = 0;
++
++    while (i < len)
++    {
++        unsigned char head = desc[i];
++        unsigned int size = head & 0x03;
++
++        if (size == 3) size = 4;
++        if ((head & 0xfc) == 0x84)                             /* REPORT_ID    */
++        {
++            report = desc[i + 1];
++            usage_at = 0;
++        }
++        else if ((head & 0xfc) == 0x08) usage_at = i;          /* USAGE, local */
++        else if ((head & 0xfc) == 0x80)                        /* INPUT        */
++        {
++            if (report == id && usage_at) { *start = usage_at; return i + 1 + size - usage_at; }
++            usage_at = 0;
++        }
++        /* Any other main item consumes the local usages too, so a USAGE left
++         * over from an OUTPUT or a COLLECTION can never be mistaken for the one
++         * that introduces the input this is looking for. */
++        else if ((head & 0xfc) == 0x90 || (head & 0xfc) == 0xb0
++                 || (head & 0xfc) == 0xa0 || (head & 0xfc) == 0xc0) usage_at = 0;
++        i += 1 + size;
++    }
++    return 0;
++}
++
++static unsigned int splice(unsigned char *out, unsigned int out_size,
++                           const unsigned char *desc, unsigned int len,
++                           unsigned int at, unsigned int span,
++                           const unsigned char *block, unsigned int block_len)
++{
++    unsigned int grown = len - span + block_len;
++
++    if (out_size < grown) return 0;
++    memcpy(out, desc, at);
++    memcpy(out + at, block, block_len);
++    memcpy(out + at + block_len, desc + at + span, len - at - span);
++    return grown;
++}
++
++unsigned int dualsense_bt_input_describe(unsigned char *out, unsigned int out_size,
++                                         const unsigned char *desc, unsigned int len)
++{
++    unsigned char named[DUALSENSE_DESCRIPTOR_MAX];
++    unsigned int at = 0, span, grown;
++
++    if (!(span = bt_input_span(desc, len, DUALSENSE_BT_INPUT_REPORT_ID, &at))) return 0;
++    if (!(grown = splice(named, sizeof(named), desc, len, at, span, bt31_fields, sizeof(bt31_fields))))
++        return 0;
++
++    /* The short report keeps its own declaration, and that is deliberate.
++     *
++     * It was blanked here for a while: with 0x31 described, two reports claimed
++     * to carry the device's state and dinput said so -- "multiple device state
++     * reports found!" -- so silencing the one the pad supposedly stops sending
++     * looked like tidying up. It was not. Measured 2026-09-09: the pad does
++     * send 0x31, winebus processes 570 of them in twenty seconds, and what
++     * reaches the client is still a ten-byte 0x01. Declared opaque, that report
++     * is unreadable, and xinput failed to find every axis in it 255 times.
++     *
++     * Whatever decides which of the two a client is handed, it is not this
++     * descriptor, and taking the axes off a report that is still being
++     * delivered only makes it unreadable. The complaint from dinput is worth
++     * living with until that is understood. */
++    if (out_size < grown) return 0;
++    memcpy(out, named, grown);
++    return grown;
++}
++
++/* The pad's output report, as dualsense_usb.h documents it: byte 0 is the id,
++ * and the common block follows, with the two validity-flag bytes first and the
++ * motors right after them. Only the legacy-vibration bit is set: it is the one
++ * that drives the two rumble motors, which is all xinput asks for. */
++#define HAPTICS_OUT_FLAG0        1
++#define HAPTICS_OUT_FLAG1        2
++#define HAPTICS_OUT_MOTOR_RIGHT  3
++#define HAPTICS_OUT_MOTOR_LEFT   4
++/* Both bits, not just the first.
++ *
++ * 0x01 is the one that drives the two rumble motors the legacy way -- the
++ * mode the pad's owner measured as the strongest of the three on a six-pulse
++ * ladder, which is why mgvf-0009 exists. 0x02 is "disable audio haptics", and
++ * dualsense_usb.c records that SDL sets it on BOTH of its paths and that every
++ * one of the 6493 output reports in the measured session carried it. Sent
++ * without it, the request is accepted and nothing is felt: the pad has the
++ * effect but not through the motors. */
++#define HAPTICS_OUT_LEGACY_BIT   (0x01 | 0x02)
++
++/* A percentage over one motor byte, saturating rather than wrapping: asking for
++ * twice full power is asking for full power, not for none. */
++static unsigned char haptics_scale(unsigned int motor, unsigned int gain)
++{
++    unsigned int scaled;
++
++    if (gain == 100 || !motor) return (unsigned char)motor;
++    scaled = (motor * gain) / 100;
++    return (unsigned char)(scaled > 255 ? 255 : scaled);
++}
++
++unsigned int dualsense_haptics_motor_report(unsigned char *out, unsigned int out_size,
++                                            unsigned int length,
++                                            unsigned int rumble, unsigned int buzz,
++                                            unsigned int gain)
++{
++    if (length <= HAPTICS_OUT_MOTOR_LEFT) return 0;
++    if (out_size < length) return 0;
++
++    memset(out, 0, length);
++    out[0] = DUALSENSE_HAPTICS_MOTOR_REPORT_ID;
++    out[HAPTICS_OUT_FLAG0] = HAPTICS_OUT_LEGACY_BIT;
++    out[HAPTICS_OUT_FLAG1] = 0;
++    out[HAPTICS_OUT_MOTOR_RIGHT] = haptics_scale(buzz >> 8, gain);
++    out[HAPTICS_OUT_MOTOR_LEFT] = haptics_scale(rumble >> 8, gain);
++    return length;
++}
++
++int dualsense_haptics_output_levels(const unsigned char *report, unsigned int len,
++                                    unsigned char output_id,
++                                    unsigned int *rumble, unsigned int *buzz)
++{
++    if (len < DUALSENSE_HAPTICS_OUTPUT_LEN) return 0;
++    if (report[0] != output_id) return 0;
++
++    *rumble = report[1] | (report[2] << 8);
++    *buzz = report[3] | (report[4] << 8);
++    return 1;
++}

@@ -1,0 +1,126 @@
+hidclass: let xinput drive a pad that keeps its own identity.
+
+wine's xinput finds its devices by enumerating one private interface, and until
+now only winexinput's &XI_ child carried it. Reaching that child costs the pad
+everything that makes it itself: winexinput claims the devnode, and what the
+rest of the system is offered instead is an Xbox-shaped, input-only device --
+no adaptive triggers, no touchpad, no PlayStation glyphs, and Sony's own
+library cannot open it at all.
+
+None of that is necessary. The interface is only how xinput FINDS a device; it
+opens whatever it finds and drives it through the haptics collection. So a
+gamepad that has one is offered under that interface as well as its own,
+exactly the way this file already offers a mouse and a keyboard under theirs.
+The device is not replaced, wrapped or hidden: it keeps GUID_DEVINTERFACE_HID
+and every client that reads it today reads the same bytes tomorrow.
+
+The condition is not a list of product ids but a question about the descriptor
+-- does it carry a haptics collection -- which is exactly "can xinput rumble
+this". Devices that already carry the private class, winexinput's own children,
+are left alone, so an Xbox pad behaves as before.
+
+Signed-off-by: MacGameVideoFix
+---
+--- a/dlls/hidclass.sys/hid.h
++++ b/dlls/hidclass.sys/hid.h
+@@ -90,6 +90,10 @@
+     UNICODE_STRING mouse_link_name;
+     BOOL is_keyboard;
+     UNICODE_STRING keyboard_link_name;
++    /* MGVF mgvf-0011: a pad that carries a HID haptics collection is also
++     * offered under the private interface xinput looks for. See pnp.c. */
++    BOOL is_xinput_haptics;
++    UNICODE_STRING xinput_link_name;
+ };
+ 
+ static inline struct phys_device *pdo_from_DEVICE_OBJECT( DEVICE_OBJECT *device )
+--- a/dlls/hidclass.sys/pnp.c
++++ b/dlls/hidclass.sys/pnp.c
+@@ -189,6 +189,33 @@
+     return STATUS_SUCCESS;
+ }
+ 
++/* MGVF mgvf-0011: does this device carry a HID haptics collection?
++ *
++ * wine's own xinput drives a pad's motors through one, and through nothing
++ * else: it walks the link collections for a Haptics Simple Controller, reads
++ * which waveform each one drives, and writes an intensity beside it. So the
++ * presence of that collection is exactly the question "can xinput rumble this
++ * device", asked of the descriptor rather than of a list of product ids. */
++static BOOL has_haptics_collection( HIDP_COLLECTION_DESC *desc )
++{
++    HIDP_LINK_COLLECTION_NODE *nodes;
++    ULONG count = 0, i;
++    BOOL found = FALSE;
++    HIDP_CAPS caps;
++
++    if (HidP_GetCaps( desc->PreparsedData, &caps ) != HIDP_STATUS_SUCCESS) return FALSE;
++    if (!(count = caps.NumberLinkCollectionNodes)) return FALSE;
++    if (!(nodes = malloc( count * sizeof(*nodes) ))) return FALSE;
++
++    if (HidP_GetLinkCollectionNodes( nodes, &count, desc->PreparsedData ) == HIDP_STATUS_SUCCESS)
++        for (i = 0; i < count && !found; ++i)
++            found = nodes[i].LinkUsagePage == HID_USAGE_PAGE_HAPTICS &&
++                    nodes[i].LinkUsage == HID_USAGE_HAPTICS_SIMPLE_CONTROLLER;
++
++    free( nodes );
++    return found;
++}
++
+ static NTSTATUS get_hid_device_desc( minidriver *minidriver, DEVICE_OBJECT *device, HIDP_DEVICE_DESC *desc )
+ {
+     HID_DESCRIPTOR descriptor = {0};
+@@ -581,11 +608,45 @@
+             {
+                 if (!IoRegisterDeviceInterface( device, &GUID_DEVINTERFACE_KEYBOARD, NULL, &pdo->keyboard_link_name ))
+                     pdo->is_keyboard = TRUE;
++            }
++
++            /* MGVF mgvf-0011: let xinput drive a pad that keeps its own identity.
++             *
++             * wine's xinput finds its devices by enumerating one private
++             * interface, and until now only winexinput's &XI_ child carried
++             * it. Reaching that child costs the pad everything that makes it
++             * itself: winexinput claims the devnode, and what the rest of the
++             * system is then offered is an Xbox-shaped, input-only device --
++             * no adaptive triggers, no touchpad, no PlayStation glyphs, and
++             * Sony's own library cannot open it at all.
++             *
++             * None of that is necessary. The interface is only how xinput
++             * FINDS a device; it opens whatever it finds and drives it through
++             * the haptics collection. So a gamepad that has one is offered
++             * under that interface as well as its own, exactly the way this
++             * function already offers a mouse and a keyboard under theirs. The
++             * device is not replaced, wrapped or hidden: it keeps
++             * GUID_DEVINTERFACE_HID and every client that reads it today reads
++             * the same bytes tomorrow.
++             *
++             * Devices that already carry the private class -- winexinput's own
++             * children -- are left alone, so an Xbox pad behaves as before. */
++            if (desc->UsagePage == HID_USAGE_PAGE_GENERIC &&
++                (desc->Usage == HID_USAGE_GENERIC_GAMEPAD || desc->Usage == HID_USAGE_GENERIC_JOYSTICK ||
++                 desc->Usage == HID_USAGE_GENERIC_MULTI_AXIS_CONTROLLER) &&
++                IsEqualGUID( pdo->base.class_guid, &GUID_DEVINTERFACE_HID ) &&
++                has_haptics_collection( desc ))
++            {
++                if (!IoRegisterDeviceInterface( device, &GUID_DEVINTERFACE_WINEXINPUT, NULL, &pdo->xinput_link_name ))
++                    pdo->is_xinput_haptics = TRUE;
++                else
++                    ERR( "Failed to register the xinput interface for %s.\n", debugstr_w(pdo->base.device_id) );
+             }
+ 
+             IoSetDeviceInterfaceState( &pdo->link_name, TRUE );
+             if (pdo->is_mouse) IoSetDeviceInterfaceState( &pdo->mouse_link_name, TRUE );
+             if (pdo->is_keyboard) IoSetDeviceInterfaceState( &pdo->keyboard_link_name, TRUE );
++            if (pdo->is_xinput_haptics) IoSetDeviceInterfaceState( &pdo->xinput_link_name, TRUE );
+ 
+             pdo->removed = FALSE;
+             status = STATUS_SUCCESS;
+@@ -597,6 +658,7 @@
+             IoSetDeviceInterfaceState( &pdo->link_name, FALSE );
+             if (pdo->is_mouse) IoSetDeviceInterfaceState( &pdo->mouse_link_name, FALSE );
+             if (pdo->is_keyboard) IoSetDeviceInterfaceState( &pdo->keyboard_link_name, FALSE );
++            if (pdo->is_xinput_haptics) IoSetDeviceInterfaceState( &pdo->xinput_link_name, FALSE ); /* MGVF mgvf-0011 */
+ 
+             KeAcquireSpinLock( &pdo->lock, &irql );
+             LIST_FOR_EACH_ENTRY_SAFE( queue, next, &pdo->queues, struct hid_queue, entry )

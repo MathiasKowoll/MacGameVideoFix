@@ -138,12 +138,14 @@ done
 # reading engine-built-for*.json and engine-winegstreamer*, and this set must
 # never be taken for one of those.
 #
-# The glob is deliberately extension-blind. The set is FOUR files now, not
-# three: winebus.sys, setupapi.dll and ntoskrnl.exe are PE, and
-# engine-controller-winebus.so is the unix half of winebus, which the installer
-# writes to lib/wine/x86_64-unix/ rather than to lib/wine/x86_64-windows/ with
-# the others. Narrowing this to *.dll or *.sys would drop it, and the set would
-# install as three files that no longer match their own unix half.
+# The glob is deliberately extension-blind, and the set keeps growing: ten files
+# now. Nine are PE -- winebus.sys, setupapi.dll, ntoskrnl.exe, hidclass.sys and
+# five xinput DLLs -- and engine-controller-winebus.so is the unix half of
+# winebus, which the installer writes to lib/wine/x86_64-unix/ rather than to
+# lib/wine/x86_64-windows/ with the others. Narrowing this to *.dll or *.sys
+# would drop the unix half, and the set would install as PE files that no longer
+# match it. Listing them by name would be worse: the list has changed three
+# times and every copy of it is another place to forget.
 cp "$ROOT/runtime/install-engine-controller.sh" "$RES/"
 for f in "$ROOT"/runtime/engine-controller-*; do
   [ -f "$f" ] && cp "$f" "$RES/"

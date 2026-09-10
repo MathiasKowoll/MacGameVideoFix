@@ -18,23 +18,23 @@ MACOS="$APP/Contents/MacOS"
 RES="$APP/Contents/Resources"
 CACHE="${TMPDIR:-/tmp}/mgpf-swift-cache"
 
-# The six files this app exists to carry, all from runtime/ and none of them
-# rebuilt here. install-engine-controller.sh resolves its payload as
-# $HERE/<name>, so a flat Resources directory is exactly the layout it wants.
+# The files this app exists to carry, all from runtime/ and none of them rebuilt
+# here. install-engine-controller.sh resolves its payload as $HERE/<name>, so a
+# flat Resources directory is exactly the layout it wants.
 #
-# The set is FOUR engine files, not three: winebus.sys, setupapi.dll and
-# ntoskrnl.exe are PE, and engine-controller-winebus.so is the unix half of
-# winebus, which the installer writes to lib/wine/x86_64-unix/ rather than
-# beside the others. It arrived with mgvf-0006 and this list did not follow it
-# then; the check below is what said so.
-PAYLOAD=(
-  install-engine-controller.sh
-  engine-controller-winebus.sys
-  engine-controller-setupapi.dll
-  engine-controller-ntoskrnl.exe
-  engine-controller-winebus.so
-  engine-controller-built-for.json
-)
+# GATHERED, NOT LISTED. This was a written-out list of four engine files, and
+# the set has grown twice since: the unix half of winebus with mgvf-0006, and
+# then hidclass.sys and five xinput DLLs with mgvf-0011 and mgvf-0012. Both
+# times the list stayed behind and the app shipped a payload its own installer
+# could not use -- the second time it built cleanly and then said
+# "engine-controller-hidclass.sys is not beside this script" at install.
+#
+# So it is taken from runtime/ by prefix. Everything named engine-controller-*
+# belongs to this set by construction, the prefix is what the media installers
+# are careful NOT to use, and a set that grows again arrives here on its own.
+PAYLOAD=(install-engine-controller.sh)
+while IFS= read -r f; do PAYLOAD+=("$(basename "$f")"); done < <(
+  find "$ROOT/runtime" -maxdepth 1 -name 'engine-controller-*' | sort)
 
 # Checked before anything is compiled. An app that builds and then cannot do the
 # one thing it is for is worse than a build that stops here, and "the payload is
@@ -45,6 +45,17 @@ for f in "${PAYLOAD[@]}"; do
     echo "error: runtime/$f is missing, and this app is nothing without it" >&2
     missing=1
   fi
+done
+[ "$missing" = 0 ] || exit 1
+
+# And the set the prefix stands for, named by the installer's own PE_NAMES: one
+# file here for every name it will install, or the app builds and then cannot do
+# the one thing it is for.
+for n in $(sed -n '/^PE_NAMES=/,/"$/p' "$RES/install-engine-controller.sh" \
+             | tr -d '\\\\' | sed 's/PE_NAMES=//; s/"//g'); do
+  [ -e "$RES/engine-controller-$n" ] || {
+    echo "error: the installer installs $n, and engine-controller-$n is not in the bundle" >&2
+    missing=1; }
 done
 [ "$missing" = 0 ] || exit 1
 
@@ -116,9 +127,16 @@ echo "built: $APP"
 # $HERE/<name> in the script is a promise that <name> is beside it, and the one
 # time that promise was broken in the other app, two working fixes reported as
 # impossible.
+#
+# One name in that script is BUILT rather than written -- pe_src() composes
+# "engine-controller-$1" from a list -- so the grep below sees the bare prefix.
+# A prefix is not a promise about one file: it is a promise about a set, and the
+# set is checked on the next line instead, by counting what the installer says
+# it installs against what is here.
 missing=0
 for want in $(grep -oE '\$HERE/[A-Za-z0-9._-]+' "$RES/install-engine-controller.sh" \
                 | sed 's|\$HERE/||' | sort -u); do
+  [ "$want" = "engine-controller-" ] && continue
   [ -e "$RES/$want" ] || { echo "error: the installer wants $want, which is not in the bundle" >&2
                            missing=1; }
 done

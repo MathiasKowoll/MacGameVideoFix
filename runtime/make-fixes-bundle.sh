@@ -386,13 +386,20 @@ my $sets_block = @sets ? sprintf(qq(\n  "engineSets": [%s],), join(",", @sets)) 
 # not here, which reads the way it always did. Schema stays 3 for the reason
 # given above "engine": an added key whose absence is a valid reading is a
 # compatible change.
+# The PE half of the controller set. It grew from three files to nine with
+# mgvf-0011 and mgvf-0012: hidclass.sys, so that a pad carrying a haptics
+# collection is offered to xinput as well as to everything else, and five xinput
+# DLLs, because wine builds xinput1_1, 1_2, 1_4 and xinputuap from xinput1_3's
+# sources and a game links whichever it was built against. xinput9_1_0 is left
+# out on purpose: it forwards to xinput1_4.dll, which is in.
+my @controller_pe = qw(winebus.sys setupapi.dll ntoskrnl.exe hidclass.sys
+                       xinput1_1.dll xinput1_2.dll xinput1_3.dll xinput1_4.dll xinputuap.dll);
+
 my $optional_block = "";
 {
   my $cbf = "$repo/runtime/engine-controller-built-for.json";
   if (-f "$repo/runtime/install-engine-controller.sh" && -f $cbf
-      && -f "$repo/runtime/engine-controller-winebus.sys"
-      && -f "$repo/runtime/engine-controller-setupapi.dll"
-      && -f "$repo/runtime/engine-controller-ntoskrnl.exe"
+      && !grep { !-f "$repo/runtime/engine-controller-$_" } @controller_pe
       && -f "$repo/runtime/engine-controller-winebus.so") {
     open my $cf, '<', $cbf or die;
     my $j = do { local $/; <$cf> };
@@ -402,18 +409,17 @@ my $optional_block = "";
     my ($pt) = $j =~ /"patches":\s*"([^"]*)"/;
     $optional_block = sprintf(
       qq(\n  "engineOptional": [{"id":"controller","script":"install-engine-controller.sh","scope":"engine","optional":true,)
-      . qq("files":["engine-controller-winebus.sys","engine-controller-setupapi.dll","engine-controller-ntoskrnl.exe","engine-controller-winebus.so","engine-controller-built-for.json"],)
-      # The fourth destination is a DIFFERENT directory. Three PE files go to
+      . sprintf(qq("files":[%s,"engine-controller-winebus.so","engine-controller-built-for.json"],),
+                join(",", map { qq("engine-controller-$_") } @controller_pe))
+      # The LAST destination is a DIFFERENT directory. Every PE file goes to
       # lib/wine/x86_64-windows/ and the unix half of winebus to
       # lib/wine/x86_64-unix/; a launcher that copies by this list rather than
       # by the file name gets it right, and one that assumes the directory from
-      # the other three overwrites a PE file with a Mach-O.
-      . qq("install":[{"file":"engine-controller-winebus.sys","dest":"lib/wine/x86_64-windows/winebus.sys"},)
-      . qq({"file":"engine-controller-setupapi.dll","dest":"lib/wine/x86_64-windows/setupapi.dll"},)
-      . qq({"file":"engine-controller-ntoskrnl.exe","dest":"lib/wine/x86_64-windows/ntoskrnl.exe"},)
-      . qq({"file":"engine-controller-winebus.so","dest":"lib/wine/x86_64-unix/winebus.so"}],)
+      # the others overwrites a PE file with a Mach-O.
+      . sprintf(qq("install":[%s,{"file":"engine-controller-winebus.so","dest":"lib/wine/x86_64-unix/winebus.so"}],),
+                join(",", map { qq({"file":"engine-controller-$_","dest":"lib/wine/x86_64-windows/$_"}) } @controller_pe))
       . qq("builtFor":{"app":"%s","version":"%s","wine":"%s"},"patches":"%s",)
-      . qq("why":"Lets a Windows client learn that a controller is on Bluetooth: winebus names the bus in its compatible ids, setupapi answers CM_Get_Parent for HID children, and ntoskrnl refreshes a device's ids on every enumeration. A DualSense on Bluetooth then rumbles, and its PS button and touchpad work, as over USB; trigger effects ride in the same report. The fourth file, the unix half of winebus, also makes wine SEIZE a DualSense that arrived over Bluetooth, because macOS drives the pad itself and two writers on its single Bluetooth output pipe made macOS's writes time out until the link dropped mid-game. That costs what it says: while a bottle holds the pad, macOS and its own applications cannot use it, and it comes back when the bottle shuts down. An improvement, not a fix: no title needs it, every one runs without it, the originals are kept as .mgvf-stock and --restore puts them back. Offered as a switch, on by default in RaccoonBot for an engine it was built for; off puts the originals back. The engine name is checked against the app, then against copied_from in the engine's mgvf-origin.json, then the version; the installer refuses anything else and refuses while a bottle is running."}],),
+      . qq("why":"Lets a Windows client learn that a controller is on Bluetooth: winebus names the bus in its compatible ids, setupapi answers CM_Get_Parent for HID children, and ntoskrnl refreshes a device's ids on every enumeration. A DualSense on Bluetooth then rumbles, and its PS button and touchpad work, as over USB; trigger effects ride in the same report. The fourth file, the unix half of winebus, also makes wine SEIZE a DualSense that arrived over Bluetooth, because macOS drives the pad itself and two writers on its single Bluetooth output pipe made macOS's writes time out until the link dropped mid-game. That costs what it says: while a bottle holds the pad, macOS and its own applications cannot use it, and it comes back when the bottle shuts down. The set also lets a game that reads XInput rumble a DualSense WITHOUT losing the pad: winebus offers the motors as a small device of their own beside the pad, hidclass publishes that device under the interface xinput looks for, and the five xinput DLLs learn the second of the two conventions a HID gamepad may follow -- a Sony pad puts its right stick on Z and Rz, its triggers on Rx and Ry, numbers its buttons in the order they sit on the face, and counts its hat from zero. The pad itself is not replaced, wrapped or hidden, so its adaptive triggers, touchpad and PlayStation glyphs are exactly as they were, and Sony's own library can still open it. Off unless a device key asks for it, pointless in a game that rumbles on its own, and it costs a few percent of a frame in one that does not. An improvement, not a fix: no title needs it, every one runs without it, the originals are kept as .mgvf-stock and --restore puts them back. Offered as a switch, on by default in RaccoonBot for an engine it was built for; off puts the originals back. The engine name is checked against the app, then against copied_from in the engine's mgvf-origin.json, then the version; the installer refuses anything else and refuses while a bottle is running."}],),
       $ea // "", $ev // "", $wb // "", $pt // "");
   }
 }

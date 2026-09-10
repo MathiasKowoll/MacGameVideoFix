@@ -1,0 +1,351 @@
+winebus: nothing asked of the vibration, nothing rewritten.
+
+mgvf-0009 stores "no options" as all zeros and says that testing for that is
+the write path's job. One of the two write paths did it and the other did not:
+a report that went out through the USB emulation reached the rewrite with mode
+0 and gain 0 -- and a gain of 0 is not an absence there, it is a REQUEST, for
+silence. So on that route every motor value a client asked for was quietly
+zeroed, and the pad never buzzed however hard the game asked for it.
+
+Measured on 2026-09-09 with an XInput write and no option set anywhere:
+  dualsense_vibration_fixup ... motors 0/255 -> 0/0
+
+The test moves into the one function both paths call.
+
+Signed-off-by: MacGameVideoFix
+---
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -128,6 +128,17 @@
+      * those ids. Zero is not a valid report id, so it doubles as "no". */
+     BYTE haptics_feature_id;
+     BYTE haptics_output_id;
++    ULONGLONG haptics_interval;
++    /* The owner's strength preference, for the transports where nothing
++     * downstream applies it. 100 leaves what a game asked for alone. */
++    unsigned int haptics_gain;
++    /* The motor write happens on this thread and not on the caller's. `wanted`
++     * is the last thing asked for, packed as rumble<<16|buzz so that it can be
++     * exchanged in one instruction without a lock. */
++    LONG haptics_wanted;
++    HANDLE haptics_thread;
++    HANDLE haptics_wake;
++    HANDLE haptics_stop;
+     UINT64 unix_device;
+ };
+ 
+@@ -1686,6 +1697,103 @@
+     ext->report_desc_length = length;
+     ext->collection_desc = collection_desc;
+     return STATUS_SUCCESS;
++}
++
++static void dualsense_usb_set_output_report(DEVICE_OBJECT *device, HID_XFER_PACKET *packet, IO_STATUS_BLOCK *io);
++
++/* MGVF mgvf-0010: the motors are written from here, never from the caller.
++ *
++ * Sending a pair of motor levels is a synchronous write to the device, and over
++ * Bluetooth it takes milliseconds. Doing it on the thread that asked -- which is
++ * the thread drawing the game -- cost Beast HALF ITS FRAME RATE, and rationing
++ * it to sixteen writes a second still cost five, which in a game where a frame
++ * decides a parry is not a rounding error.
++ *
++ * So the request costs nothing: the caller leaves the levels in `wanted` and is
++ * answered. This thread wakes, takes whatever is there NOW and writes it. That
++ * coalescing is the useful part -- everything asked for while a write was in
++ * flight collapses into the one value that is still true when the link is free
++ * again, which is exactly what a motor should be told.
++ *
++ * The interval below is a floor on how often the link is used, not a way of
++ * protecting the game any more; the game is already out of the way. */
++static DWORD CALLBACK dualsense_haptics_thread(void *arg)
++{
++    DEVICE_OBJECT *device = arg;
++    struct device_extension *ext = (struct device_extension *)device->DeviceExtension;
++    HANDLE waits[2] = {ext->haptics_stop, ext->haptics_wake};
++    LONG last = -1;
++
++    SetThreadDescription(GetCurrentThread(), L"wine_winebus_dualsense_haptics");
++
++    for (;;)
++    {
++        BYTE motors[DUALSENSE_USB_OUTPUT_MAX];
++        HID_XFER_PACKET out = {.reportId = DUALSENSE_HAPTICS_MOTOR_REPORT_ID, .reportBuffer = motors};
++        IO_STATUS_BLOCK io = {{0}};
++        LARGE_INTEGER started, ended;
++        unsigned int rumble, buzz;
++        ULONG length;
++        LONG wanted;
++
++        if (WaitForMultipleObjects(2, waits, FALSE, INFINITE) == WAIT_OBJECT_0) break;
++
++        wanted = InterlockedCompareExchange(&ext->haptics_wanted, 0, 0);
++        if (wanted == last) continue;
++        last = wanted;
++
++        rumble = ((unsigned int)wanted >> 16) & 0xffff;
++        buzz = (unsigned int)wanted & 0xffff;
++
++        length = get_output_report_length(ext, DUALSENSE_HAPTICS_MOTOR_REPORT_ID);
++        if (!length && ext->desc.bus_type == BUS_TYPE_BLUETOOTH)
++            length = DUALSENSE_HAPTICS_MOTOR_REPORT_LEN;
++        /* On Bluetooth the packet goes through mgvf-0009's rewrite on its way
++         * out and the preference is applied there; applying it here as well
++         * would apply it twice. On a cable nothing downstream does, so it is
++         * applied here -- which is the only reason this parameter exists. */
++        if (!length || !(out.reportBufferLen = dualsense_haptics_motor_report(motors, sizeof(motors), length,
++                                                                             rumble, buzz,
++                                                                             ext->desc.bus_type == BUS_TYPE_BLUETOOTH
++                                                                             ? 100 : ext->haptics_gain)))
++        {
++            WARN("device %p: no output report %#x of a usable length to carry the motors\n",
++                 device, DUALSENSE_HAPTICS_MOTOR_REPORT_ID);
++            continue;
++        }
++
++        TRACE("device %p: telling the motors rumble %u, buzz %u\n", device, rumble, buzz);
++
++        /* How long the write itself takes, because the interval above is only
++         * a floor: if a write costs more than the floor, the floor does
++         * nothing and every value below it behaves the same. Measuring that is
++         * the difference between choosing a number and guessing one. */
++        KeQuerySystemTime(&started);
++
++        /* The report is built in the pad's USB shape whatever the transport,
++         * because that is the shape the rest of this driver delivers: on a
++         * cable it goes down as it is, and over Bluetooth mgvf-0005's
++         * translation packs it into a 0x31, signs it, and mgvf-0009's
++         * preferences are applied on the way -- so what a client asked of the
++         * motors here is scaled by the same percentage as what a client asks
++         * of them itself. */
++        if (ext->desc.bus_type == BUS_TYPE_BLUETOOTH)
++            dualsense_usb_set_output_report(device, &out, &io);
++        else
++            unix_device_set_output_report(device, &out, &io);
++
++        KeQuerySystemTime(&ended);
++        TRACE("device %p: the write took %u ms\n", device,
++              (unsigned int)((ended.QuadPart - started.QuadPart) / 10000));
++
++        /* A floor on how often the link is used. Anything asked for in the
++         * meantime is still in `wanted` and goes out on the next turn, so
++         * nothing is lost by waiting here -- only coalesced. */
++        if (ext->haptics_interval)
++            WaitForSingleObject(ext->haptics_stop, (DWORD)(ext->haptics_interval / 10000ull));
++    }
++
++    return 0;
+ }
+ 
+ /* MGVF mgvf-0010: give a DualSense the haptics collection wine's own xinput
+@@ -1736,7 +1844,8 @@
+     for (i = 0; i < ext->collection_desc.ReportIDsLength; ++i)
+     {
+         BYTE id = ext->collection_desc.ReportIDs[i].ReportID;
+-        if (id != DUALSENSE_HAPTICS_FEATURE_ID && id != DUALSENSE_HAPTICS_OUTPUT_ID) continue;
++        if (id != DUALSENSE_HAPTICS_FEATURE_ID && id != DUALSENSE_HAPTICS_OUTPUT_ID
++            && id != DUALSENSE_HAPTICS_INPUT_ID) continue;
+         WARN("device %p: report id %#x is already used by %04x:%04x, no haptics offered\n",
+              device, id, ext->desc.vid, ext->desc.pid);
+         return STATUS_SUCCESS;
+@@ -1772,14 +1881,22 @@
+     length = source_length + DUALSENSE_HAPTICS_DESC_MAX;
+     if (!(copy = RtlAllocateHeap(GetProcessHeap(), 0, length))) return STATUS_NO_MEMORY;
+ 
+-    /* Inside the pad's own top-level collection, not after it: hidclass makes
+-     * one device per top-level collection, so a haptics collection written
+-     * after this one would arrive as a second device with the motors and no
+-     * axes, and leave the axes on a device with no motors. */
+-    if (!(length = dualsense_haptics_augment(copy, length, source, source_length,
+-                                             DUALSENSE_HAPTICS_FEATURE_ID, DUALSENSE_HAPTICS_OUTPUT_ID)))
++    /* A second top-level collection, deliberately, because hidclass makes one
++     * device per top level: the pad stays exactly the device it was, and the
++     * motors arrive beside it on a small one of their own.
++     *
++     * The first version of this nested the collection inside the pad's, which
++     * put the motors and the axes on one device -- and a game that reads the
++     * pad through raw HID and through XInput then heard everything twice. Not
++     * merely twice: HID counts the Y axis downwards and XInput upwards, so the
++     * two cancelled and the left stick lost its vertical while keeping its
++     * horizontal. With the motors on their own device there is nothing for
++     * XInput to report but rumble. */
++    if (!(length = dualsense_haptics_endpoint(copy, length, source, source_length,
++                                              DUALSENSE_HAPTICS_FEATURE_ID, DUALSENSE_HAPTICS_OUTPUT_ID,
++                                              DUALSENSE_HAPTICS_INPUT_ID)))
+     {
+-        WARN("device %p: the descriptor of %04x:%04x does not end in a top-level collection, "
++        WARN("device %p: the haptics endpoint does not fit the descriptor of %04x:%04x, "
+              "no haptics offered\n", device, ext->desc.vid, ext->desc.pid);
+         RtlFreeHeap(GetProcessHeap(), 0, copy);
+         return STATUS_SUCCESS;
+@@ -1796,9 +1913,9 @@
+         return STATUS_SUCCESS;
+     }
+ 
+-    TRACE("device %p: %04x:%04x keeps its %u-byte descriptor and grows to %u with haptics, "
+-          "feature %#x, output %#x\n", device, ext->desc.vid, ext->desc.pid,
+-          ext->report_desc_length, length,
++    TRACE("device %p: %04x:%04x keeps its %u-byte descriptor and gains a haptics device, "
++          "%u bytes in all -- input %#x, feature %#x, output %#x\n", device, ext->desc.vid,
++          ext->desc.pid, ext->report_desc_length, length, DUALSENSE_HAPTICS_INPUT_ID,
+           DUALSENSE_HAPTICS_FEATURE_ID, DUALSENSE_HAPTICS_OUTPUT_ID);
+ 
+     HidP_FreeCollectionDescription(&ext->collection_desc);
+@@ -1808,6 +1925,44 @@
+     ext->collection_desc = collection_desc;
+     ext->haptics_feature_id = DUALSENSE_HAPTICS_FEATURE_ID;
+     ext->haptics_output_id = DUALSENSE_HAPTICS_OUTPUT_ID;
++
++    /* How rarely the motors are told, in milliseconds, under the device's own
++     * key. Sending is a synchronous write to the pad, and over Bluetooth a
++     * client that asks every frame turns that into sixty blocking writes a
++     * second on the thread that asked -- which cost a game half its frame rate
++     * and gave it a visible lag. What the right number is depends on the link,
++     * so it is a value to turn rather than a constant to guess: 0 sends every
++     * change, and the default is a floor no pad's motors can follow anyway. */
++    ext->haptics_interval = get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumbleInterval",
++                                              DUALSENSE_HAPTICS_MIN_INTERVAL_MS) * 10000ull;
++    TRACE("device %p: the link is used at most every %u ms\n",
++          device, (unsigned int)(ext->haptics_interval / 10000ull));
++
++    /* Read for both transports, unlike mgvf-0009's, which are only read for a
++     * pad on Bluetooth because that is the only transport whose packets it
++     * rewrites. What this drives is a packet of our own making. */
++    ext->haptics_gain = get_device_option(ext->desc.vid, ext->desc.pid, L"VibrationGain", 100);
++    if (ext->haptics_gain > DUALSENSE_VIBRATION_GAIN_MAX) ext->haptics_gain = DUALSENSE_VIBRATION_GAIN_MAX;
++    if (ext->haptics_gain != 100 && ext->desc.bus_type != BUS_TYPE_BLUETOOTH)
++        TRACE("device %p: what a game asks of the motors is scaled to %u%%\n", device, ext->haptics_gain);
++
++    ext->haptics_wanted = 0;
++    ext->haptics_wake = CreateEventW(NULL, FALSE, FALSE, NULL);
++    ext->haptics_stop = CreateEventW(NULL, TRUE, FALSE, NULL);
++    if (ext->haptics_wake && ext->haptics_stop)
++        ext->haptics_thread = CreateThread(NULL, 0, dualsense_haptics_thread, device, 0, NULL);
++    if (!ext->haptics_thread)
++    {
++        /* Without the thread there is nobody to write the motors, and writing
++         * them from the caller is the thing this exists to avoid. Better to
++         * offer no haptics than to hand a game a frame-rate cost it did not
++         * ask for. */
++        ERR("device %p: could not start the haptics thread, no haptics offered\n", device);
++        if (ext->haptics_wake) CloseHandle(ext->haptics_wake);
++        if (ext->haptics_stop) CloseHandle(ext->haptics_stop);
++        ext->haptics_wake = ext->haptics_stop = NULL;
++        ext->haptics_feature_id = ext->haptics_output_id = 0;
++    }
+     return STATUS_SUCCESS;
+ }
+ 
+@@ -1856,6 +2011,21 @@
+     struct device_extension *ext = (struct device_extension *)device->DeviceExtension;
+     struct dualsense_vibration_change change;
+ 
++    /* MGVF mgvf-0014: nothing asked for, nothing rewritten.
++     *
++     * dualsense_vibration_options stores "no options" as all zeros, and says
++     * that testing for that is the write path's job. One of the two write paths
++     * did it and the other did not: a report that went through the emulation
++     * reached the rewrite with mode 0 and gain 0, and a gain of 0 is not an
++     * absence there -- it is a REQUEST, for silence. So on that route every
++     * motor a client asked for was quietly zeroed, and the pad never buzzed
++     * however hard the game asked. Measured 2026-09-09 with an XInput write:
++     * "motors 0/255 -> 0/0" with no option set anywhere.
++     *
++     * The test belongs here, where every caller passes, rather than in each of
++     * them. */
++    if (!ext->dualsense_vibration.mode && !ext->dualsense_vibration.gain) return FALSE;
++
+     if (!dualsense_bt_vibration_fixup(report, len, &ext->dualsense_vibration, dualsense_crc32, &change)) return FALSE;
+ 
+     TRACE("device %p: rewrote the vibration in output report id %u -- mode flag0 %#x -> %#x, flag2 %#x -> %#x"
+@@ -2092,6 +2262,18 @@
+         case IRP_MN_REMOVE_DEVICE:
+             remove_pending_irps(device);
+ 
++            /* MGVF mgvf-0010: before the device goes, because the thread writes
++             * to it. */
++            if (ext->haptics_thread)
++            {
++                SetEvent(ext->haptics_stop);
++                WaitForSingleObject(ext->haptics_thread, INFINITE);
++                CloseHandle(ext->haptics_thread);
++                CloseHandle(ext->haptics_wake);
++                CloseHandle(ext->haptics_stop);
++                ext->haptics_thread = ext->haptics_wake = ext->haptics_stop = NULL;
++            }
++
+             bus_unlink_hid_device(device);
+             unix_device_remove(device);
+ 
+@@ -2341,18 +2523,7 @@
+             if (ext->haptics_output_id && packet->reportId == ext->haptics_output_id)
+             {
+                 unsigned int rumble = 0, buzz = 0;
+-                BYTE motors[DUALSENSE_USB_OUTPUT_MAX];
+-                HID_XFER_PACKET out = {.reportId = DUALSENSE_HAPTICS_MOTOR_REPORT_ID, .reportBuffer = motors};
+-                ULONG length = get_output_report_length(ext, DUALSENSE_HAPTICS_MOTOR_REPORT_ID);
+                 ULONG asked = packet->reportBufferLen;
+-
+-                /* Over Bluetooth the pad declares no output report 0x02 -- its
+-                 * own outputs are 0x31 and up -- and asking the descriptor for
+-                 * one there refused every write. Nothing of that shape is ever
+-                 * sent on that transport anyway: it is only what the
+-                 * translation below packs into a 0x31. */
+-                if (!length && ext->desc.bus_type == BUS_TYPE_BLUETOOTH)
+-                    length = DUALSENSE_HAPTICS_MOTOR_REPORT_LEN;
+ 
+                 if (!dualsense_haptics_output_levels(packet->reportBuffer, asked,
+                                                      ext->haptics_output_id, &rumble, &buzz))
+@@ -2363,33 +2534,28 @@
+                     break;
+                 }
+ 
++                /* What the pad would actually receive. The request is 16 bits a
++                 * motor and the pad takes eight, so a client ramping a rumble
++                 * sends values that differ from each other and not from what
++                 * was already sent: 65280, 65400 and 65535 are three requests
++                 * and one packet. */
++                rumble &= 0xff00;
++                buzz &= 0xff00;
++
+                 TRACE("device %p: xinput asks for rumble %u, buzz %u\n", device, rumble, buzz);
+ 
+-                if (!length || !(out.reportBufferLen = dualsense_haptics_motor_report(motors, sizeof(motors),
+-                                                                                     length, rumble, buzz)))
+-                {
+-                    WARN("device %p: no output report %#x of a usable length to carry the motors\n",
+-                         device, DUALSENSE_HAPTICS_MOTOR_REPORT_ID);
+-                    irp->IoStatus.Status = STATUS_INVALID_PARAMETER;
+-                    irp->IoStatus.Information = 0;
+-                    break;
+-                }
++                /* And that is all the caller does. The write itself happens on
++                 * this device's own thread, because it is a synchronous write
++                 * to the pad and the caller is the thread drawing the game.
++                 *
++                 * hidraw_disable_report_fixups is deliberately NOT called on
++                 * this path: it exists to notice that a client is writing the
++                 * pad's own reports, and this report is not the pad's. */
++                InterlockedExchange(&ext->haptics_wanted, (LONG)((rumble << 16) | buzz));
++                if (ext->haptics_wake) SetEvent(ext->haptics_wake);
+ 
+-                /* The report is built in the pad's USB shape whatever the
+-                 * transport, because that is the shape the rest of this driver
+-                 * delivers: on a cable it goes down as it is, and over
+-                 * Bluetooth mgvf-0005's translation packs it into a 0x31, signs
+-                 * it, and mgvf-0009's preferences are applied to it on the way
+-                 * -- so what a client asked of the motors here is scaled by the
+-                 * same percentage as what a client asks of them itself. */
+-                if (ext->desc.bus_type == BUS_TYPE_BLUETOOTH)
+-                    dualsense_usb_set_output_report(device, &out, &irp->IoStatus);
+-                else
+-                    unix_device_set_output_report(device, &out, &irp->IoStatus);
+-
+-                /* The client wrote the haptics report and is owed that report's
+-                 * length, not the length of what the pad was actually sent. */
+-                if (!irp->IoStatus.Status) irp->IoStatus.Information = asked;
++                irp->IoStatus.Status = STATUS_SUCCESS;
++                irp->IoStatus.Information = asked;
+                 break;
+             }
+             /* MGVF mgvf-0005: the USB 0x02 goes out as a Bluetooth 0x31 */

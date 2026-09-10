@@ -51,8 +51,16 @@ READOBJ="$MINGW_BIN/llvm-readobj"; [ -x "$READOBJ" ] || READOBJ="$(command -v ll
 OBJDUMP="$MINGW_BIN/llvm-objdump"; [ -x "$OBJDUMP" ] || OBJDUMP="$(command -v llvm-objdump 2>/dev/null || true)"
 [ -n "$READOBJ" ] && [ -n "$OBJDUMP" ] || die "no llvm-readobj / llvm-objdump -- set MINGW_BIN, or install llvm-mingw"
 
+# Every PE file of the set. hidclass.sys and the five xinput DLLs joined it with
+# mgvf-0011 and mgvf-0012: wine builds xinput1_1, 1_2, 1_4 and xinputuap from
+# xinput1_3's sources, so one patch makes five binaries and a game links
+# whichever it was built against. xinput9_1_0 is not among them on purpose -- it
+# forwards to xinput1_4.dll, which is.
+PE_FILES="winebus.sys setupapi.dll ntoskrnl.exe hidclass.sys \
+          xinput1_1.dll xinput1_2.dll xinput1_3.dll xinput1_4.dll xinputuap.dll"
+
 echo "[1/4] what the build produced"
-for f in controller-built-for.json winebus.sys setupapi.dll ntoskrnl.exe winebus.so; do
+for f in controller-built-for.json $PE_FILES winebus.so; do
   [ -f "$BUILD/$f" ] || die "no $f in $BUILD -- run scripts/build-controller-bus.sh first"
 done
 app="$(json_field "$BUILD/controller-built-for.json" engine_app)"
@@ -64,7 +72,7 @@ say "patches   : $pat"
 
 # Stripped, or it does not go in. build-controller-bus.sh strips and proves it;
 # this is the check that a hand copy of the wrong file cannot get past.
-for f in winebus.sys setupapi.dll ntoskrnl.exe; do
+for f in $PE_FILES; do
   if "$OBJDUMP" -h "$BUILD/$f" | /usr/bin/grep -q '\.debug_'; then
     die "$f in $BUILD carries .debug_ sections; it is the unstripped file. Rebuild with scripts/build-controller-bus.sh"
   fi
@@ -94,7 +102,7 @@ for j in "$RUNTIME"/engine-built-for*.json; do
        The two sets must agree about the supported engine. Rebuild against it."
 done
 say "engine    : $ver, the same as every engine-built-for*.json"
-say "flat      : runtime/engine-controller-{winebus.sys,setupapi.dll,ntoskrnl.exe,winebus.so,built-for.json}"
+say "flat      : runtime/engine-controller-{$(echo $PE_FILES | tr ' ' ','),winebus.so,built-for.json}"
 say "mirror    : runtime/engine-payload-controller/wine/x86_64-windows/, wine/x86_64-unix/ and built-for.json"
 
 echo "[3/4] copying"
@@ -102,9 +110,7 @@ if [ "$CHECK" = 1 ]; then
   say "--check: nothing was copied."
   exit 0
 fi
-cp "$BUILD/winebus.sys"  "$RUNTIME/engine-controller-winebus.sys"
-cp "$BUILD/setupapi.dll" "$RUNTIME/engine-controller-setupapi.dll"
-cp "$BUILD/ntoskrnl.exe" "$RUNTIME/engine-controller-ntoskrnl.exe"
+for f in $PE_FILES; do cp "$BUILD/$f" "$RUNTIME/engine-controller-$f"; done
 # The unix half. It goes under a DIFFERENT directory inside an engine than the
 # three PE files do -- lib/wine/x86_64-unix/, not lib/wine/x86_64-windows/ --
 # which is why the mirror below has a second directory and why the flat name
@@ -113,9 +119,7 @@ cp "$BUILD/winebus.so"   "$RUNTIME/engine-controller-winebus.so"
 cp "$BUILD/controller-built-for.json" "$RUNTIME/engine-controller-built-for.json"
 say "runtime/engine-controller-* refreshed"
 mkdir -p "$MIRROR/wine/x86_64-windows" "$MIRROR/wine/x86_64-unix"
-cp "$BUILD/winebus.sys"  "$MIRROR/wine/x86_64-windows/winebus.sys"
-cp "$BUILD/setupapi.dll" "$MIRROR/wine/x86_64-windows/setupapi.dll"
-cp "$BUILD/ntoskrnl.exe" "$MIRROR/wine/x86_64-windows/ntoskrnl.exe"
+for f in $PE_FILES; do cp "$BUILD/$f" "$MIRROR/wine/x86_64-windows/$f"; done
 cp "$BUILD/winebus.so"   "$MIRROR/wine/x86_64-unix/winebus.so"
 cp "$BUILD/controller-built-for.json" "$MIRROR/built-for.json"
 say "runtime/engine-payload-controller/ refreshed to match"

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # Install (or remove) the controller-bus set this project builds, into a
-# CrossOver engine: winebus.sys, setupapi.dll, ntoskrnl.exe and winebus.so.
+# CrossOver engine: winebus.sys, setupapi.dll, ntoskrnl.exe, hidclass.sys, the
+# five xinput DLLs, and winebus.so.
 #
 #   install-engine-controller.sh <engine app>            install
 #   install-engine-controller.sh <engine app> --restore  remove
@@ -73,16 +74,24 @@ if [ "${MGVF_STATUS_ONLY:-0}" = 1 ]; then ACTION=--status; fi
 # Named literally so make-fixes-bundle.sh collects them. One set, no suffix:
 # nothing in these three files links against the engine, so one build serves
 # every engine of the name and version the stamp records.
-SYS="$HERE/engine-controller-winebus.sys"
-DLL="$HERE/engine-controller-setupapi.dll"
-KRN="$HERE/engine-controller-ntoskrnl.exe"
+# The PE half of the set, and where each file goes inside an engine. Named once,
+# as a list of "file" pairs, because the set grew from three to nine with
+# mgvf-0011 and mgvf-0012 and every loop below has to walk the same nine.
+#
+# hidclass.sys is there so that a pad carrying a haptics collection is offered
+# to xinput as well as to everything else. The five xinput DLLs are one patch
+# and five binaries: wine builds xinput1_1, 1_2, 1_4 and xinputuap from
+# xinput1_3's sources, and a game links whichever it was built against.
+# xinput9_1_0 is deliberately not among them -- it is a forwarder that loads its
+# functions from xinput1_4.dll, which is.
+PE_NAMES="winebus.sys setupapi.dll ntoskrnl.exe hidclass.sys \
+          xinput1_1.dll xinput1_2.dll xinput1_3.dll xinput1_4.dll xinputuap.dll"
 USO="$HERE/engine-controller-winebus.so"
 BUILTFOR="$HERE/engine-controller-built-for.json"
 
 CX="$APP/Contents/SharedSupport/CrossOver"
-SYS_DEST="$CX/lib/wine/x86_64-windows/winebus.sys"
-DLL_DEST="$CX/lib/wine/x86_64-windows/setupapi.dll"
-KRN_DEST="$CX/lib/wine/x86_64-windows/ntoskrnl.exe"
+pe_src()  { echo "$HERE/engine-controller-$1"; }
+pe_dest() { echo "$CX/lib/wine/x86_64-windows/$1"; }
 # x86_64-UNIX, not -windows. The unix half of winebus is not a PE file and does
 # not live with them.
 USO_DEST="$CX/lib/wine/x86_64-unix/winebus.so"
@@ -90,17 +99,20 @@ USO_DEST="$CX/lib/wine/x86_64-unix/winebus.so"
 [ -d "$CX" ] || { echo "error: not a CrossOver app: $APP" >&2; exit 1; }
 
 status() {
-  if [ -f "$SYS_DEST.mgvf-stock" ] && [ -f "$DLL_DEST.mgvf-stock" ] \
-     && [ -f "$KRN_DEST.mgvf-stock" ] && [ -f "$USO_DEST.mgvf-stock" ]; then
+  have=0; want=0
+  for f in $PE_NAMES; do want=$((want+1)); [ -f "$(pe_dest "$f").mgvf-stock" ] && have=$((have+1)); done
+  want=$((want+1)); [ -f "$USO_DEST.mgvf-stock" ] && have=$((have+1))
+  if [ "$have" = "$want" ]; then
     echo installed
-  elif [ -f "$SYS_DEST.mgvf-stock" ] || [ -f "$DLL_DEST.mgvf-stock" ] \
-     || [ -f "$KRN_DEST.mgvf-stock" ] || [ -f "$USO_DEST.mgvf-stock" ]; then
-    # Some but not all. The first three only work together -- mgvf-0004 exists
-    # because mgvf-0002 and mgvf-0003 alone still read the record of the first
-    # boot -- and the two halves of winebus are built from one source tree and
-    # share a struct, so a mixed pair is not a supported combination either.
-    # An engine still carrying an earlier three-file install reads as broken
-    # here, and it is: install puts the fourth file in and it is whole again.
+  elif [ "$have" != 0 ]; then
+    # Some but not all, and none of the parts stands alone. The first three
+    # only work together -- mgvf-0004 exists because mgvf-0002 and mgvf-0003
+    # alone still read the record of the first boot -- the two halves of winebus
+    # are built from one tree and share a struct, and hidclass.sys offers a pad
+    # to an xinput that only knows how to read it because of the xinput DLLs
+    # beside it. An engine carrying an earlier, smaller install of this set
+    # reads as broken here, and it is: install puts the missing files in and it
+    # is whole again.
     echo broken
   else
     echo absent
@@ -134,7 +146,7 @@ case "$ACTION" in
   --restore)
       refuse_if_bottle_up
       n=0
-      for d in "$SYS_DEST" "$DLL_DEST" "$KRN_DEST" "$USO_DEST"; do
+      for d in $(for f in $PE_NAMES; do pe_dest "$f"; done) "$USO_DEST"; do
         if [ -f "$d.mgvf-stock" ]; then mv -f "$d.mgvf-stock" "$d"; n=$((n+1)); fi
       done
       if [ "$n" -gt 0 ]; then
@@ -148,7 +160,7 @@ case "$ACTION" in
   *) usage ;;
 esac
 
-for f in "$SYS" "$DLL" "$KRN" "$USO" "$BUILTFOR"; do
+for f in $(for n in $PE_NAMES; do pe_src "$n"; done) "$USO" "$BUILTFOR"; do
   [ -f "$f" ] || { echo "error: $(basename "$f") is not beside this script" >&2; exit 1; }
 done
 
@@ -225,9 +237,7 @@ install_one() {
   cp "$src" "$dest.mgvf-new" && mv -f "$dest.mgvf-new" "$dest"
   echo "  $(basename "$dest")  <- $(basename "$src")"
 }
-install_one "$SYS" "$SYS_DEST"
-install_one "$DLL" "$DLL_DEST"
-install_one "$KRN" "$KRN_DEST"
+for f in $PE_NAMES; do install_one "$(pe_src "$f")" "$(pe_dest "$f")"; done
 install_one "$USO" "$USO_DEST"
 reseal
 echo "installed into $(basename "$APP") ($have_engine)"

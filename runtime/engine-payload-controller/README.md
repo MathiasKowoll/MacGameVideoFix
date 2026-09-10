@@ -358,10 +358,48 @@ runs after the engine copy exists with no signing step after it.
 
 | file | bytes | exports | imported symbols |
 | --- | --- | --- | --- |
-| `wine/x86_64-windows/winebus.sys` | 61,440 | 0 | 70 |
+| `wine/x86_64-windows/winebus.sys` | 69,632 | 0 | 72 |
 | `wine/x86_64-windows/setupapi.dll` | 462,848 | 617 | 210 |
 | `wine/x86_64-windows/ntoskrnl.exe` | 393,216 | 1,667 | 678 |
-| `wine/x86_64-unix/winebus.so` | 45,576 | 2 | 5 |
+| `wine/x86_64-windows/hidclass.sys` | 53,248 | 1 | 63 |
+| `wine/x86_64-windows/xinput1_1.dll` | 57,344 | 5 | 78 |
+| `wine/x86_64-windows/xinput1_2.dll` | 57,344 | 5 | 78 |
+| `wine/x86_64-windows/xinput1_3.dll` | 57,344 | 100 | 78 |
+| `wine/x86_64-windows/xinput1_4.dll` | 61,440 | 108 | 79 |
+| `wine/x86_64-windows/xinputuap.dll` | 61,440 | 8 | 79 |
+| `wine/x86_64-unix/winebus.so` | 62,448 | 2 | 5 |
+
+The last six rows arrived with `mgvf-0011` and `mgvf-0012`, which let a game
+that reads XInput rumble a DualSense without the pad losing anything.
+`hidclass.sys` publishes a pad that carries a haptics collection under the
+interface xinput looks for, beside its own; the xinput DLLs learn the second of
+the two conventions a HID gamepad may follow. Five of them for one patch:
+wine builds `xinput1_1`, `xinput1_2`, `xinput1_4` and `xinputuap` from
+`xinput1_3`'s sources, and a game links whichever it was built against.
+`xinput9_1_0` is deliberately absent -- it is a 20 KB forwarder that loads its
+functions from `xinput1_4.dll`, which is here.
+
+Their export counts differ by design and are worth reading rather than
+smoothing: `xinput1_3` exports 100 and `xinput1_4` 108 because those two carry
+the ordinal-only entry points their versions defined, while `xinput1_1` and
+`xinput1_2` export five and `xinputuap` eight. A build that made them all alike
+would be a build that got something wrong.
+
+Two of those numbers moved on 2026-09-09 and both are worth naming, because
+this table exists so that a binary cannot quietly change shape.
+
+`winebus.so` grew from 45,576 bytes because it is built **with SDL** now.
+It had been configured `--without-sdl`, so wine's SDL joystick bus was compiled
+out of it entirely — and since this set replaces the engine's copy, installing
+it removed that bus from the engine. It is still five linked libraries: SDL is
+opened by name at run time, not linked.
+
+`winebus.sys` gained two imported symbols and both are about the same thing.
+`CreateThread` is there because the pad's motors are written from a thread of
+the device's own: a client asking for a new pair of levels every frame became a
+synchronous Bluetooth write every frame, on the thread drawing the game, which
+cost it half its frame rate. `KeQuerySystemTime` times those writes, so that how
+often they are worth making is a measurement rather than a guess.
 
 The last row is the Mach-O and its two numbers mean something else, which is
 said under the table rather than in a fifth column nothing else would fill.
