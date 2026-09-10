@@ -456,6 +456,28 @@ capture shows a wired title doing. `mgvf-0010`'s haptics thread keeps its own
 gain rather than borrowing this one: it never passes the dispatch this lives in,
 and it works on a report of five bytes where this one insists on forty.
 
+### mgvf-0018 — a motor step nobody can feel is not worth a slot on the link *(ours)*
+
+`mgvf-0010` writes the motors whenever the value a client asks for changes. On a
+cable that is free; over Bluetooth the link carries about 65 reports a second and
+that ceiling moves for no API. Measured over one session, 1951 motor packets:
+**49% moved a motor by one step of 255**, 69% by two or fewer, 76% by four or
+fewer. A step is 0.4% of the range. Half of what the driver spends the link on
+is dithering along a ramp.
+
+`XInputRumbleDeadband` is the smallest change worth a packet, in steps of 255,
+off by default. At four — 1.6% of the range — 73% of those writes would not have
+been made.
+
+**It is not the interval by another name.** `XInputRumbleInterval` drops changes
+by *time*, and time cannot tell a hammer blow from a tremble, which is why
+raising it to 60 ms made the rumble feel dead. This drops changes by *size*:
+every transition a hand can notice goes out at once. Two rules make it correct —
+the comparison is against the last pair the **pad was given**, so a ramp creeping
+one step at a time accumulates and arrives rather than being dropped for ever;
+and **zero is exempt** in both directions, because a pad still buzzing after the
+game stopped asking is a defect and not a saving.
+
 ### mgvf-0017 — build the motors and do not write them, on request *(ours, and an INSTRUMENT)*
 
 The second thing in this series that is an experiment rather than a change, after

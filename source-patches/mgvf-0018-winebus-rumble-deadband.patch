@@ -1,0 +1,132 @@
+winebus: a motor step nobody can feel is not worth a slot on the link.
+
+mgvf-0010 writes the motors whenever the value a client asks for changes. On a
+cable that is free. Over Bluetooth it is not: bluetoothd negotiates a 15 ms
+sniff interval for a game controller, so the link carries about 65 reports a
+second each way, and that ceiling does not move for any API -- synchronous or
+asynchronous, one write in flight or sixteen, 12 bytes of payload or 78.
+
+WHAT THOSE PACKETS ACTUALLY SAY. Measured over a Bluetooth session of an Unreal
+title driving the pad through wine's xinput, 1951 motor packets:
+
+    49% moved a motor by ONE step of 255
+    69% by two or fewer
+    76% by four or fewer
+
+A step is 0.4% of the motor's range. Nobody's hand resolves one. Half of what
+this driver spends the link on is dithering along a ramp.
+
+XInputRumbleDeadband is the smallest change worth a packet, in steps of 255, and
+it is OFF by default. At four -- 1.6% of the range -- 73% of the writes above
+would not have been made.
+
+AND IT IS NOT THE INTERVAL BY ANOTHER NAME. XInputRumbleInterval drops changes
+by TIME, and time cannot tell a hammer blow from a tremble: raising it to 60 ms
+made the rumble feel dead because the transitions went out with everything else.
+This drops changes by SIZE. Every transition a hand can notice is sent at once;
+what is held back is the part that says nothing. The interval goes back to being
+what it should always have been -- a ceiling on how hard the link is worked --
+rather than the control that decides how the rumble feels.
+
+TWO RULES MAKE IT CORRECT, and both were got right on purpose.
+
+The comparison is against the last pair the PAD WAS GIVEN, never against the
+last pair a client asked for. A ramp creeping one step at a time accumulates
+against what was sent, crosses the band, and goes out; measured against the last
+request it would be dropped for ever and a slow build-up would never arrive.
+
+Zero is exempt in both directions. A pad that goes on buzzing because the stop
+was under the band is a defect and not a saving.
+
+WHAT IS NOT ESTABLISHED. Whether four is the right number: 49%, 69% and 76% say
+where the packets are, not where the threshold belongs, and only a hand on the
+pad can say that. The value is per device and off by default for exactly that
+reason. Nor is it established that this removes the frame cost -- what is known
+is that the cost is the write (mgvf-0017 removed the write and nothing else, and
+the game ran perfectly), and that fewer writes is the only lever anyone has
+found. Whether 16 writes a second is under the knee where 60 was over it is the
+next thing to measure, not a claim made here.
+
+Signed-off-by: MacGameVideoFix
+---
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -136,6 +136,9 @@
+     /* MGVF mgvf-0017: an INSTRUMENT, not a feature. Non-zero makes the haptics
+      * thread do everything it does except reach the radio. */
+     unsigned int haptics_dry_run;
++    /* MGVF mgvf-0018: how many steps of 255 a motor must move before the link
++     * is used, and the last pair actually sent. */
++    unsigned int haptics_deadband;
+     /* The motor write happens on this thread and not on the caller's. `wanted`
+      * is the last thing asked for, packed as rumble<<16|buzz so that it can be
+      * exchanged in one instruction without a lock. */
+@@ -1757,6 +1760,12 @@
+     DEVICE_OBJECT *device = arg;
+     struct device_extension *ext = (struct device_extension *)device->DeviceExtension;
+     HANDLE waits[2] = {ext->haptics_stop, ext->haptics_wake};
++    /* MGVF mgvf-0018: the last pair the PAD was actually given, not the last one
++     * a client asked for. Comparing against what was sent is what lets a slow
++     * ramp accumulate: creeping by one step a packet, it crosses the band and
++     * goes out, so nothing is lost -- only gathered. Comparing against the last
++     * REQUEST would drop such a ramp on the floor for ever. */
++    int last_right = -1, last_left = -1;
+     LONG last = -1;
+ 
+     SetThreadDescription(GetCurrentThread(), L"wine_winebus_dualsense_haptics");
+@@ -1834,6 +1843,30 @@
+          * Bluetooth because the preference is applied further down, on the
+          * translated packet, and the number here would otherwise read as "the
+          * setting was ignored". */
++        /* MGVF mgvf-0018: is this packet worth a slot on the link?
++         *
++         * A stop is always worth one. A motor that has reached zero and is still
++         * being asked for zero would be held back by any band, and a pad that
++         * goes on buzzing after the game stopped asking is a defect, not a
++         * saving -- so zero is exempt in both directions. */
++        if (ext->haptics_deadband && last_right >= 0)
++        {
++            unsigned char r = motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_MOTOR_RIGHT];
++            unsigned char l = motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_MOTOR_LEFT];
++            BOOL stopping = (!r && last_right) || (!l && last_left);
++            unsigned int moved_r = r > last_right ? r - last_right : last_right - r;
++            unsigned int moved_l = l > last_left ? l - last_left : last_left - l;
++
++            if (!stopping && moved_r < ext->haptics_deadband && moved_l < ext->haptics_deadband)
++            {
++                TRACE("device %p: motors %u/%u moved %u/%u of 255, under the band of %u -- not sent\n",
++                      device, r, l, moved_r, moved_l, ext->haptics_deadband);
++                continue;
++            }
++        }
++        last_right = motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_MOTOR_RIGHT];
++        last_left = motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_MOTOR_LEFT];
++
+         TRACE("device %p: the packet carries motors %u/%u, flag0 %#x, %u bytes, at gain %u%%\n", device,
+               motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_MOTOR_RIGHT],
+               motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_MOTOR_LEFT],
+@@ -2064,6 +2097,24 @@
+      * IOCTL still takes the device lock, the event still round-trips wineserver,
+      * this thread still wakes, still coalesces, still builds the packet. Only
+      * the last step does not happen. */
++    /* MGVF mgvf-0018: the smallest change worth a packet.
++     *
++     * Measured on a Bluetooth session of an Unreal title, 1951 motor packets:
++     * 49% of them moved a motor by ONE step of 255, and 76% by four or fewer.
++     * A step is 0.4% of the motor's range. Nobody feels one; every one of them
++     * costs a slot on a link that carries about 65 reports a second.
++     *
++     * This is not the interval by another name, and the difference is the whole
++     * point. The interval drops changes by TIME and cannot tell a hammer blow
++     * from a tremble, which is why raising it makes rumble feel dead. This drops
++     * changes by SIZE: every transition a hand can notice goes out at once, and
++     * what is held back is dithering. */
++    ext->haptics_deadband = get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumbleDeadband", 0);
++    if (ext->haptics_deadband > 255) ext->haptics_deadband = 255;
++    if (ext->haptics_deadband)
++        TRACE("device %p: a motor must move %u of 255 before the link is used\n",
++              device, ext->haptics_deadband);
++
+     ext->haptics_dry_run = get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumbleDryRun", 0);
+     if (ext->haptics_dry_run)
+         ERR("device %p: XInputRumbleDryRun is set -- the motors will be built and NOT written. "
