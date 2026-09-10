@@ -68,8 +68,9 @@ def classify(t):
     if "sdl" in t or "ships:sdl" in t: return "SDL"
     if "raw-hid-write" in t: return "raw-hid"
     if "dinput" in t or "ships:dinput" in t: return "dinput-only"
+    if "not-installed" in t: return "-   not-installed"
     if "engine:unity" in t: return "unity-unmarked"
-    return "?   unmarked"
+    return "?   unreadable"
 
 def scan_file(path, found):
     try:
@@ -82,6 +83,11 @@ def scan_file(path, found):
 
 def scan_game(gdir):
     found, exes, dlls = set(), [], []
+    # A folder Steam left behind after an uninstall has no executable worth the
+    # name. Calling that "unmarked" made a first run report 51 unreadable titles
+    # when 46 of them were simply not there: say so, and keep the real unknowns
+    # -- packed executables, half-finished installs -- as their own small bucket.
+    total = 0
     for dp, dn, fn in os.walk(gdir):
         if dp.count(os.sep) - gdir.count(os.sep) > 6: dn[:] = []; continue
         for n in fn:
@@ -91,7 +97,11 @@ def scan_game(gdir):
                     if low.startswith(m): found.add(tag)
                 if not SKIP.search(n): dlls.append(p)
             elif low.endswith(".exe") and not SKIP.search(n): exes.append(p)
+            try: total += os.path.getsize(p)
+            except OSError: pass
     size = lambda p: os.path.getsize(p) if os.path.exists(p) else 0
+    if total < 200_000_000 and not any(size(e) > 1_000_000 for e in exes):
+        found.add("not-installed"); return found
     # The executables, and the largest DLLs beside them: a packed or thin .exe
     # says nothing, and the engine that actually reads the pad is usually a DLL.
     for p in sorted(exes, key=size, reverse=True)[:4]: scan_file(p, found)
