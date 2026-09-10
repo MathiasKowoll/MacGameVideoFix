@@ -1,0 +1,103 @@
+winebus: build the motors and do not write them, on request.
+
+AN INSTRUMENT, NOT A FEATURE, and marked as one wherever it is named -- the
+second in this series after mgvf-0008. It is OFF by default and a build
+installed with nothing under the pad's key behaves exactly as before.
+
+WHAT IT IS FOR. A DualSense on Bluetooth costs an Unreal title 3 to 5 frames a
+second and drops its audio while the motors are being driven; the same pad on a
+cable costs nothing. Five sessions of measurement have eliminated every
+mechanism proposed for it. Not CPU: bluetoothd goes from 1.8% of a core to at
+most 2.9% while the game runs at 200-420%, and winedevice.exe does not move.
+Not the pad's input stream: delivery to the client is unchanged in the median
+and rises only in the tail. Not a control-channel handshake: an output write on
+an idle link costs 0.19 to 0.57 ms, where a real control transaction on the same
+link costs 25 to 48 ms. Not Bluetooth audio: the system's output is the built-in
+speakers and the pad is not an audio endpoint. Not sniff: 34,672 lines of
+bluetoothd logging across a session carry no mode transition at all.
+
+WHAT WAS NEVER SEPARATED. Turning the rumble off removes the write to the radio
+AND the whole path the request takes through the guest to reach it: the game's
+XInputSetState, hidclass's dispatch, the IOCTL that takes the device lock, the
+event that round-trips wineserver, all of it on the game's own thread and all of
+it under Rosetta. Every experiment so far has removed both at once and concluded
+about one of them. This removes exactly one.
+
+With XInputRumbleDryRun set, everything happens except the last step. The pad
+does not buzz -- that is the point, and an ERR line says so at device arrival so
+that a log cannot be misread later as a pad that failed.
+
+WHAT IT ALSO SKIPS, because a measurement has to declare its own edges: on
+Bluetooth the skipped branch would have translated the packet into a 0x31 and
+signed it, so those go too. That is a few microseconds of arithmetic on the
+haptics thread and nothing at all on the game's, so it cannot be what a frame
+rate notices -- but it is skipped, and saying so is cheaper than someone
+discovering it while distrusting the result.
+
+HOW TO READ THE OUTCOME. If the frame rate and the audio recover, the cost is
+the write, and what remains is choosing an interval against a link that carries
+about 65 reports a second. If they do not, the radio was never the cause, the
+guest-side path is, and a good deal of what has been proposed for this -- an
+asynchronous write, a different transport, handing the pad to SDL -- would have
+been work spent on the wrong half.
+
+Signed-off-by: MacGameVideoFix
+---
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -133,6 +133,9 @@
+     /* The owner's strength preference, for the transports where nothing
+      * downstream applies it. 100 leaves what a game asked for alone. */
+     unsigned int haptics_gain;
++    /* MGVF mgvf-0017: an INSTRUMENT, not a feature. Non-zero makes the haptics
++     * thread do everything it does except reach the radio. */
++    unsigned int haptics_dry_run;
+     /* The motor write happens on this thread and not on the caller's. `wanted`
+      * is the last thing asked for, packed as rumble<<16|buzz so that it can be
+      * exchanged in one instruction without a lock. */
+@@ -1864,7 +1867,21 @@
+          * preferences are applied on the way -- so what a client asked of the
+          * motors here is scaled by the same percentage as what a client asks
+          * of them itself. */
+-        if (ext->desc.bus_type == BUS_TYPE_BLUETOOTH)
++        /* MGVF mgvf-0017: and here is the one step the dry run skips.
++         *
++         * WHAT IT ALSO SKIPS, said plainly so the result is read correctly: on
++         * Bluetooth this branch would first translate the packet into a 0x31 and
++         * sign it, so a dry run spares those too. That is a few microseconds of
++         * arithmetic on THIS thread and nothing on the game's, so it cannot be
++         * what a frame rate notices -- but it is skipped, and a reader deserves
++         * to know rather than assume. Everything on the game's own thread is
++         * untouched. */
++        if (ext->haptics_dry_run)
++        {
++            io.Status = STATUS_SUCCESS;
++            io.Information = out.reportBufferLen;
++        }
++        else if (ext->desc.bus_type == BUS_TYPE_BLUETOOTH)
+             dualsense_usb_set_output_report(device, &out, &io);
+         else
+             unix_device_set_output_report(device, &out, &io);
+@@ -2036,6 +2053,22 @@
+     if (ext->haptics_gain != 100 && ext->desc.bus_type != BUS_TYPE_BLUETOOTH)
+         TRACE("device %p: what a game asks of the motors is scaled to %u%%\n", device, ext->haptics_gain);
+ 
++    /* MGVF mgvf-0017: the dry run. OFF unless asked for, and it exists to answer
++     * one question that five sessions of measurement could not: whether the cost
++     * a game pays for rumble on this pad is the WRITE TO THE RADIO or the path
++     * the request takes through the guest before it ever gets here.
++     *
++     * Turning XInputRumble off does not answer it, because that removes both at
++     * once -- which is what made the owner's control run inconclusive. With this
++     * set, the game still calls XInputSetState, hidclass still dispatches, the
++     * IOCTL still takes the device lock, the event still round-trips wineserver,
++     * this thread still wakes, still coalesces, still builds the packet. Only
++     * the last step does not happen. */
++    ext->haptics_dry_run = get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumbleDryRun", 0);
++    if (ext->haptics_dry_run)
++        ERR("device %p: XInputRumbleDryRun is set -- the motors will be built and NOT written. "
++            "This is a measurement, and the pad will not buzz.\n", device);
++
+     ext->haptics_wanted = 0;
+     ext->haptics_wake = CreateEventW(NULL, FALSE, FALSE, NULL);
+     ext->haptics_stop = CreateEventW(NULL, TRUE, FALSE, NULL);

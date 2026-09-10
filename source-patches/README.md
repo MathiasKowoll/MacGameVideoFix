@@ -456,6 +456,29 @@ capture shows a wired title doing. `mgvf-0010`'s haptics thread keeps its own
 gain rather than borrowing this one: it never passes the dispatch this lives in,
 and it works on a report of five bytes where this one insists on forty.
 
+### mgvf-0017 — build the motors and do not write them, on request *(ours, and an INSTRUMENT)*
+
+The second thing in this series that is an experiment rather than a change, after
+`mgvf-0008`, and marked as one wherever it is named. It is **off** by default.
+
+A DualSense on Bluetooth costs an Unreal title 3–5 fps and drops its audio while
+the motors are being driven; the same pad on a cable costs nothing. Every
+mechanism proposed for that has been eliminated by measurement — not CPU, not
+the pad's input stream, not a control-channel handshake, not Bluetooth audio,
+not sniff mode. What was never separated is the **write to the radio** from the
+**path the request takes through the guest to reach it**: `XInputSetState`,
+hidclass's dispatch, the IOCTL that takes the device lock, the event that
+round-trips wineserver — all on the game's own thread and all under Rosetta.
+Turning the rumble off removes both at once, which is what made every control
+run so far inconclusive.
+
+`XInputRumbleDryRun` removes exactly one. Everything happens except the last
+step; the pad does not buzz, and an `ERR` at device arrival says so, so that a
+log cannot later be misread as a pad that failed. Its header states its own
+edges: on Bluetooth the skipped branch would also have packed and signed the
+`0x31`, which is a few microseconds on the haptics thread and nothing on the
+game's.
+
 > **`mgvf-0010`, `mgvf-0011`, `mgvf-0012` and `mgvf-0014` are in the set and are
 > not written up here yet.** They are the XInput rumble work of 2026-09-09 —
 > a haptics collection on the pad's own descriptor, `hidclass` offering such a
