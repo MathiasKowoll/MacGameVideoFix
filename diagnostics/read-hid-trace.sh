@@ -123,6 +123,41 @@ print("  and the frame cost is somewhere else. If p95 and max blow up on the")
 print("  first row, that is the mechanism.")
 PY2
 
+say "what the title wrote ITSELF over Bluetooth  (report 0x31, the native path)"
+python3 - "$L" <<'PY3'
+import sys, re, collections
+rows=[]; cur=None
+for line in open(sys.argv[1], errors='replace'):
+    m=re.match(r'(\d+\.\d+):', line)
+    if not m: continue
+    t=float(m.group(1))
+    if 'write output report id 49' in line: cur=(t,{}); rows.append(cur); continue
+    if cur is not None:
+        h=re.search(r'hid_internal_dispatch (\d{8})  ((?:[0-9a-f]{2} ?)+)', line)
+        if h:
+            off=int(h.group(1),16)
+            for i,v in enumerate(h.group(2).split()): cur[1][off+i]=int(v,16)
+        else: cur=None
+if not rows:
+    print("  none -- either the pad is wired, or the title drives it through XInput")
+else:
+    span=rows[-1][0]-rows[0][0] or 1
+    mot=[(t,b) for t,b in rows if b.get(5,0) or b.get(6,0)]
+    print(f"  {len(rows)} writes over {span:.0f} s = {len(rows)/span:.1f}/s average; {len(mot)} carry a motor")
+    if len(mot) > 2:
+        ts=[t for t,_ in mot]
+        g=sorted(round((ts[i+1]-ts[i])*1000) for i in range(len(ts)-1) if 0<(ts[i+1]-ts[i])*1000<5000)
+        peak=max(sum(1 for x in ts if t<=x<t+1) for t in ts)
+        print(f"  gap between motor writes: median {g[len(g)//2]} ms, p10 {g[len(g)//10]} ms")
+        print(f"  PEAK: {peak} motor writes in one second  (the link carries about 65)")
+        d=[max(abs(mot[i+1][1].get(5,0)-mot[i][1].get(5,0)), abs(mot[i+1][1].get(6,0)-mot[i][1].get(6,0))) for i in range(len(mot)-1)]
+        if d:
+            tiny=sum(1 for x in d if 0<x<4)
+            print(f"  of its own changes, {100*tiny//len(d)}% move a motor by fewer than 4 of 255")
+            print("  (ours was 76% -- if a native title is far below that, it is writing")
+            print("   deliberately where we are writing on every twitch)")
+PY3
+
 say "what the title actually wrote to the pad"
 /usr/bin/grep -c "write output report id 2 " "$L"
 python3 - "$L" <<'PY'
