@@ -456,6 +456,33 @@ capture shows a wired title doing. `mgvf-0010`'s haptics thread keeps its own
 gain rather than borrowing this one: it never passes the dispatch this lives in,
 and it works on a report of five bytes where this one insists on forty.
 
+### mgvf-0020 — the motors ride the game's own packet instead of costing the link one *(ours, OFF by default)*
+
+The mechanism behind the frame cost, measured twice from the same two traces by
+analysts told to refute each other: the pad's Bluetooth output pipe drains
+**~65 reports a second**, and a title that rumbles through XInput *still* writes
+the pad's own `0x31` once a frame — 16,995 of Beast's 18,149 in one session,
+every flag zero, a packet that tells the pad to do nothing. That leaves ~5 slots
+a second for anyone else; `mgvf-0010`'s thread offered 30; a shallow queue
+filled and **every writer paid ~21 ms a packet, the game's own synchronous write
+included.** Dose-response in the trace: at 0/8/16/24/32 of our writes a second,
+the game's writes over 10 ms went 3.9% → 16% → 41% → 66% → 95%. The positive
+control is in the *native* title's trace: in the 1.44% of moments Mortal Shell's
+own rate exceeds 64/s it suffers 82.8% of every slow write it makes.
+
+Sony's library never pays because it carries the motors **inside** the heartbeat.
+So does this: with `XInputRumbleRide`, a motor change is stamped into the game's
+next inert `0x31` — two flag bits, two motor bytes, a fresh CRC — and the haptics
+thread writes a packet of its own only after 100 ms of client silence. Zero added
+packets. The deadband of `mgvf-0018` moves into the extension so both writers
+consult one record; `mgvf-0016`'s gain is applied after the stamp by the same
+function that scales the thread's packets.
+
+**Off until felt.** What is measured is the mechanism and the arithmetic; whether
+a stamped heartbeat feels like the thread's packets is for a hand on the pad.
+Not covered: the `mgvf-0005` emulation route, whose translated `0x02` is not told
+apart from the thread's own packet.
+
 ### mgvf-0019 — which descriptor the guest got is not which radio the bytes leave by *(ours)*
 
 `ext->desc.bus_type` answers two different questions in this file, and three

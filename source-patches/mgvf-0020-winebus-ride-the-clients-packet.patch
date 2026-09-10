@@ -1,0 +1,514 @@
+winebus: the motors ride the game's own packet instead of costing the link one.
+
+WHAT WAS WRONG, measured twice from the same two traces by analysts told to
+refute each other. The pad's Bluetooth output pipe drains about 65 reports a
+second. A title that rumbles through XInput STILL writes the pad's own 0x31 once
+a frame: 16,995 of Beast's 18,149 in one session, every valid flag zero, both
+motors zero -- a packet that tells the pad to do nothing, sixty times a second.
+That leaves roughly five slots a second for anybody else. mgvf-0010's thread
+offered thirty. A shallow queue filled within a handful of our writes, and from
+then on EVERY writer paid about 21 ms a packet -- the game's own synchronous
+write included, on a thread running at frame cadence, holding the device lock
+on the one thread wine dispatches every IRP through.
+
+The dose-response is in the trace: with 0, 8, 16, 24 and 32 of our writes a
+second, the share of the game's own writes taking over 10 ms was 3.9%, 16%,
+41%, 66% and 95%, and the marginal cost per packet of ours stayed at 25-30 ms
+across every band. The queue drains over ~200 ms after our last write. That is
+a queue and not a lock. And the positive control is in the NATIVE title's own
+trace: in the 1.44% of moments Mortal Shell's own rate exceeds 64 a second, it
+suffers 82.8% of every slow write it ever makes, with nothing of ours involved.
+
+WHAT WAS NOT WRONG, and the day was spent proving it: CPU (bluetoothd 1.8% to
+2.9% of a core), the pad's input stream, a control-channel handshake, Bluetooth
+audio, sniff mode, Wi-Fi coexistence, which thread makes the write, its QoS,
+the device lock, wineserver round trips, the packet's content, its sequence
+tag. Each is refuted with a number in the notes that accompany this series.
+The first six were mine, and each died because the experiment that killed it
+moved two variables and concluded about one.
+
+WHY SONY DOES NOT PAY. Its library carries the motors INSIDE the heartbeat: 283
+of Mortal Shell's 8,608 packets have byte 5 set, and rumble costs it zero
+additional packets. So the packet has to be free -- not rare, free -- and the
+game's inert one already is.
+
+WHAT THIS DOES. With XInputRumbleRide set, every client 0x31 passes through a
+copy on its way out, as it already did for mgvf-0009. If the packet asks the
+pad for nothing, the wanted motor pair is stamped into it: the two bits the
+legacy motors need, the two motor bytes, and a CRC over the result. The
+haptics thread notes that the client is writing and stays silent; it writes a
+packet of its own only after a hundred milliseconds without one -- a title that
+stopped, or one that never wrote and owns the whole budget. The stop rides the
+same way, because the thread that used to carry it is the one now silent. A
+packet with any flag set is the game driving lights, triggers or its own
+motors and is never touched.
+
+The deadband of mgvf-0018 moves into the extension so that both writers consult
+one record of what the pad was last given, and mgvf-0016's gain is applied
+after the stamp by the same function that applies it to the thread's packets,
+so the two writers cannot drift apart on either.
+
+THREE THINGS A REVIEW CAUGHT BEFORE THIS SHIPPED, kept here because each is a
+stuck motor. The thread's private "last value I sent" was blind to what the
+ride had sent, so a stop asked while the client was silent could compare equal
+to a stale record and be dropped -- the pad buzzing through a loading screen;
+the record is shared now and the pair the pad already has is never worth a
+packet, whichever writer gave it. The client's tick was stamped before the
+inert test, so a game writing a flagged packet every frame silenced the thread
+for ever; only an inert packet silences it now, and such a game is served the
+old way at the old cost. And the record was noted after the write, so the two
+writers could cross and leave the record behind the pad -- and claiming it
+before the write did not close the mirror ordering, where the ride notes first
+and its packet lands last. So the overlap is forbidden outright: while the
+thread is on the wire the ride does not stamp, and if the client reappeared
+during that write the thread judges its value again at the gate.
+
+OFF BY DEFAULT, because it has not been felt yet. What has been measured is the
+mechanism and the arithmetic; whether a stamped heartbeat feels like the
+thread's packets did is for a hand on the pad. The reader in diagnostics/
+counts "rode the client's 0x31" against "telling the motors" so the trace says
+which writer carried what.
+
+WHAT IS NOT COVERED. A pad mgvf-0005 presents as wired has its client's 0x02
+translated in dualsense_usb_set_output_report, and the ride does not reach into
+that route: the thread's own packet passes through the same function and the
+two are not told apart there. The silence window is a constant, not measured
+against any title's cadence beyond one at sixty a frame. And the frame cost was
+never read off a frame counter -- the game's own 60/s stream stood in for it,
+and it is that stream this removes the pressure from.
+
+Signed-off-by: MacGameVideoFix
+---
+--- a/dlls/winebus.sys/dualsense_usb.h
++++ b/dlls/winebus.sys/dualsense_usb.h
+@@ -126,6 +126,11 @@
+ #define DUALSENSE_COMMON_FLAG2           38
+ #define DUALSENSE_FLAG0_LEGACY_VIBRATION 0x01
+ #define DUALSENSE_FLAG2_HAPTIC_VIBRATION 0x04
++/* MGVF mgvf-0020: named because a packet that carries the legacy motors has to
++ * carry this too -- measured in mgvf-0010's notes: with 0x01 alone the write is
++ * accepted and nothing is felt. SDL calls it "Disable audio haptics". */
++#define DUALSENSE_FLAG0_DISABLE_AUDIO_HAPTICS 0x02
++#define DUALSENSE_COMMON_FLAG1           1
+ 
+ /* MGVF mgvf-0016: the shortest output report that carries the whole of what
+  * the rewrite reads. flag2 is the last of the four bytes and it is common byte
+@@ -256,6 +261,35 @@
+ unsigned int dualsense_usb_vibration_fixup(unsigned char *report, unsigned int len,
+                                            const struct dualsense_vibration *vib,
+                                            struct dualsense_vibration_change *change);
++
++/* MGVF mgvf-0020: ride the client's own 0x31 instead of adding one.
++ *
++ * WHY. The pad's Bluetooth output pipe drains about 65 reports a second, and a
++ * title that drives the pad through XInput STILL writes its own 0x31 once per
++ * frame -- 16,995 of Beast's 18,149 in one session, every valid flag zero, a
++ * packet that tells the pad to do nothing. That leaves ~5 slots a second for
++ * anyone else. mgvf-0010's thread offered 30, a shallow queue filled within a
++ * handful of writes, and from then on EVERY writer paid ~21 ms per packet --
++ * the game's own synchronous write included, on a thread running at frame
++ * cadence. That is the 3-5 fps, measured twice from the same traces. Sony's
++ * own library never pays it because it carries its motors INSIDE the heartbeat:
++ * 283 of Mortal Shell's 8,608 packets have byte 5 set and cost it nothing.
++ *
++ * So the packet has to be free, and the game's inert one already is.
++ *
++ * dualsense_bt_output_is_inert says whether a 0x31 asks the pad for anything:
++ * flag0, flag1 and flag2 all zero and both motors zero. A packet with any flag
++ * set is the game's business -- it is driving lights, triggers or its own
++ * motors -- and is never touched.
++ *
++ * dualsense_bt_stamp_motors writes right/left into the common block of an
++ * inert 0x31, sets the two bits the legacy motors need, and signs the packet
++ * again. Returns len, or 0 for anything that is not a 78-byte 0x31. It does not
++ * check inertness itself: the caller decides, and says why in its own line. */
++int dualsense_bt_output_is_inert(const unsigned char *report, unsigned int len);
++unsigned int dualsense_bt_stamp_motors(unsigned char *report, unsigned int len,
++                                       unsigned char right, unsigned char left,
++                                       dualsense_crc32_fn crc32);
+ 
+ /* In place. Each returns len when the report was changed and 0 when it was
+  * left as it was: too short to carry a CRC tail at all, or, for the read, the
+--- a/dlls/winebus.sys/dualsense_usb.c
++++ b/dlls/winebus.sys/dualsense_usb.c
+@@ -553,8 +553,41 @@
+     if (vib->mode == DUALSENSE_VIBRATION_MODE_CLIENT && vib->gain == 100) return 0;
+     if (!dualsense_vibration_rewrite(report + DUALSENSE_USB_COMMON, vib, change)) return 0;
+     return len;
++}
++
++/* MGVF mgvf-0020: see the header. Two small functions and no policy: the
++ * policy -- when to ride and when to write our own -- lives in main.c beside
++ * the thread it replaces, because it depends on timing this file cannot see. */
++int dualsense_bt_output_is_inert(const unsigned char *report, unsigned int len)
++{
++    const unsigned char *common = report + DUALSENSE_BT_COMMON;
++
++    if (len != DUALSENSE_BT_REPORT_LEN || report[0] != DUALSENSE_BT_REPORT_ID) return 0;
++    return !common[DUALSENSE_COMMON_FLAG0] && !common[DUALSENSE_COMMON_FLAG1]
++        && !common[DUALSENSE_COMMON_FLAG2]
++        && !common[DUALSENSE_COMMON_MOTOR_RIGHT] && !common[DUALSENSE_COMMON_MOTOR_LEFT];
+ }
+ 
++unsigned int dualsense_bt_stamp_motors(unsigned char *report, unsigned int len,
++                                       unsigned char right, unsigned char left,
++                                       dualsense_crc32_fn crc32)
++{
++    static const unsigned char seed = DUALSENSE_CRC_SEED_OUTPUT;
++    unsigned char *common = report + DUALSENSE_BT_COMMON;
++    unsigned int crc;
++
++    if (len != DUALSENSE_BT_REPORT_LEN || report[0] != DUALSENSE_BT_REPORT_ID) return 0;
++
++    common[DUALSENSE_COMMON_FLAG0] |= DUALSENSE_FLAG0_LEGACY_VIBRATION | DUALSENSE_FLAG0_DISABLE_AUDIO_HAPTICS;
++    common[DUALSENSE_COMMON_MOTOR_RIGHT] = right;
++    common[DUALSENSE_COMMON_MOTOR_LEFT] = left;
++
++    crc = crc32(0, &seed, 1);
++    crc = crc32(crc, report, DUALSENSE_BT_REPORT_LEN - DUALSENSE_CRC_TAIL);
++    dualsense_store_crc(report + DUALSENSE_BT_REPORT_LEN - DUALSENSE_CRC_TAIL, crc);
++    return len;
++}
++
+ /* A feature report written over Bluetooth ends in a CRC-32 the pad checks,
+  * seed byte 0x53, over everything before it. The reports that exist in both
+  * descriptors have the same length in both, so the tail of the USB-length
+--- a/dlls/winebus.sys/dualsense_haptics.h
++++ b/dlls/winebus.sys/dualsense_haptics.h
+@@ -111,6 +111,13 @@
+  * that had been complaining about it. */
+ #define DUALSENSE_HAPTICS_BT_DEADBAND      4
+ 
++/* MGVF mgvf-0020: how long the client has to be silent before the haptics
++ * thread writes a packet of its own. A title writing its own 0x31 does so once
++ * a frame, so a hundred milliseconds of silence is six missed frames: the
++ * title has stopped, or never wrote. Until then every motor change rides the
++ * client's next packet and costs the link nothing. */
++#define DUALSENSE_HAPTICS_RIDE_SILENCE_MS  100
++
+ /* An upper bound on what the collection adds to a descriptor, for the caller
+  * to size its buffer with. The real figure is returned by the builder. */
+ #define DUALSENSE_HAPTICS_DESC_MAX         320
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -139,6 +139,16 @@
+     /* MGVF mgvf-0018: how many steps of 255 a motor must move before the link
+      * is used, and the last pair actually sent. */
+     unsigned int haptics_deadband;
++    /* MGVF mgvf-0020: XInputRumbleRide. When set, a motor change is stamped into
++     * the client's own next inert 0x31 instead of costing the link a packet of
++     * ours; the thread below writes only after the client has been silent.
++     * haptics_sent is the last pair the pad was given (right << 8 | left, -1
++     * for none), shared by both writers so one deadband governs both, and
++     * haptics_client_seen is the tick of the client's last 0x31. */
++    unsigned int haptics_ride;
++    LONG haptics_sent;
++    LONG haptics_client_seen; /* GetTickCount, 32 bits: wine's PE build declares no 64-bit interlocked exchange, and a 100 ms window survives a wrap */
++    LONG haptics_thread_writing; /* non-zero while the thread is inside its write; the ride does not stamp meanwhile */
+     /* The motor write happens on this thread and not on the caller's. `wanted`
+      * is the last thing asked for, packed as rumble<<16|buzz so that it can be
+      * exchanged in one instruction without a lock. */
+@@ -1780,6 +1790,44 @@
+  *
+  * The interval below is a floor on how often the link is used, not a way of
+  * protecting the game any more; the game is already out of the way. */
++/* MGVF mgvf-0020: one deadband for two writers.
++ *
++ * mgvf-0018 kept "the last pair the pad was given" on the thread's own stack.
++ * The ride below gives the pad pairs too, so the record moves into the
++ * extension and both consult it: a change the ride already carried is not
++ * worth a packet from the thread, and the other way round. Zero is exempt in
++ * both directions for the reason mgvf-0018 gives -- a pad still buzzing after
++ * the game stopped asking is a defect, not a saving. */
++static BOOL dualsense_haptics_worth_sending(struct device_extension *ext, unsigned char r, unsigned char l,
++                                            unsigned int *moved_r, unsigned int *moved_l)
++{
++    LONG sent = InterlockedCompareExchange(&ext->haptics_sent, 0, 0);
++    int last_right, last_left;
++    BOOL stopping;
++
++    *moved_r = *moved_l = 0;
++    if (sent < 0) return TRUE;
++    /* The pair the pad already has is never worth a packet, whichever writer
++     * gave it -- this is the dedup that used to be the thread's private `last`,
++     * and being private was the defect: a stop the ride had carried was
++     * re-asked by the thread, and a stop the thread had to carry after the
++     * ride's last start compared equal to the thread's own stale record and
++     * was dropped, leaving the pad buzzing through a loading screen. */
++    if ((((LONG)r << 8) | l) == sent) return FALSE;
++    if (!ext->haptics_deadband) return TRUE;
++    last_right = (sent >> 8) & 0xff;
++    last_left = sent & 0xff;
++    stopping = (!r && last_right) || (!l && last_left);
++    *moved_r = r > last_right ? r - last_right : last_right - r;
++    *moved_l = l > last_left ? l - last_left : last_left - l;
++    return stopping || *moved_r >= ext->haptics_deadband || *moved_l >= ext->haptics_deadband;
++}
++
++static void dualsense_haptics_note_sent(struct device_extension *ext, unsigned char r, unsigned char l)
++{
++    InterlockedExchange(&ext->haptics_sent, ((LONG)r << 8) | l);
++}
++
+ static DWORD CALLBACK dualsense_haptics_thread(void *arg)
+ {
+     DEVICE_OBJECT *device = arg;
+@@ -1790,8 +1838,9 @@
+      * ramp accumulate: creeping by one step a packet, it crosses the band and
+      * goes out, so nothing is lost -- only gathered. Comparing against the last
+      * REQUEST would drop such a ramp on the floor for ever. */
+-    int last_right = -1, last_left = -1;
+-    LONG last = -1;
++    /* MGVF mgvf-0020: a value this thread was told to leave to the ride, and
++     * must come back to if the client falls silent before another arrives. */
++    BOOL pending = FALSE;
+ 
+     SetThreadDescription(GetCurrentThread(), L"wine_winebus_dualsense_haptics");
+ 
+@@ -1805,12 +1854,39 @@
+         ULONG length;
+         LONG wanted;
+ 
+-        if (WaitForMultipleObjects(2, waits, FALSE, INFINITE) == WAIT_OBJECT_0) break;
++        {
++            DWORD wait = INFINITE;
++            if (pending)
++            {
++                /* The remainder of the client's silence window, not a fresh
++                 * one: a stop asked as the client went quiet should reach the
++                 * pad when the window closes, not a window later. */
++                LONG seen = InterlockedCompareExchange(&ext->haptics_client_seen, 0, 0);
++                DWORD since = (DWORD)(GetTickCount() - (DWORD)seen);
++                wait = since >= DUALSENSE_HAPTICS_RIDE_SILENCE_MS ? 1 : DUALSENSE_HAPTICS_RIDE_SILENCE_MS - since;
++            }
++            if (WaitForMultipleObjects(2, waits, FALSE, wait) == WAIT_OBJECT_0) break;
++        }
+ 
+         wanted = InterlockedCompareExchange(&ext->haptics_wanted, 0, 0);
+-        if (wanted == last) continue;
+-        last = wanted;
+ 
++        /* MGVF mgvf-0020: while the client is writing its own 0x31 once a frame,
++         * the ride carries the motors and a packet from here would only be the
++         * one that does not fit. The value is not dropped: `pending` turns the
++         * wait above into a timed one, and this comes back to it when the
++         * client has been silent for the window -- a title that stopped
++         * writing, or one that never did and owns the whole link budget. */
++        if (ext->haptics_ride)
++        {
++            LONG seen = InterlockedCompareExchange(&ext->haptics_client_seen, 0, 0);
++            if (seen && (DWORD)(GetTickCount() - (DWORD)seen) < DUALSENSE_HAPTICS_RIDE_SILENCE_MS)
++            {
++                pending = TRUE;
++                continue;
++            }
++        }
++        pending = FALSE;
++
+         rumble = ((unsigned int)wanted >> 16) & 0xffff;
+         buzz = (unsigned int)wanted & 0xffff;
+ 
+@@ -1874,23 +1950,18 @@
+          * being asked for zero would be held back by any band, and a pad that
+          * goes on buzzing after the game stopped asking is a defect, not a
+          * saving -- so zero is exempt in both directions. */
+-        if (ext->haptics_deadband && last_right >= 0)
+         {
+             unsigned char r = motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_MOTOR_RIGHT];
+             unsigned char l = motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_MOTOR_LEFT];
+-            BOOL stopping = (!r && last_right) || (!l && last_left);
+-            unsigned int moved_r = r > last_right ? r - last_right : last_right - r;
+-            unsigned int moved_l = l > last_left ? l - last_left : last_left - l;
++            unsigned int moved_r, moved_l;
+ 
+-            if (!stopping && moved_r < ext->haptics_deadband && moved_l < ext->haptics_deadband)
++            if (!dualsense_haptics_worth_sending(ext, r, l, &moved_r, &moved_l))
+             {
+                 TRACE("device %p: motors %u/%u moved %u/%u of 255, under the band of %u -- not sent\n",
+                       device, r, l, moved_r, moved_l, ext->haptics_deadband);
+                 continue;
+             }
+         }
+-        last_right = motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_MOTOR_RIGHT];
+-        last_left = motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_MOTOR_LEFT];
+ 
+         TRACE("device %p: the packet carries motors %u/%u, flag0 %#x, %u bytes, at gain %u%%\n", device,
+               motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_MOTOR_RIGHT],
+@@ -1934,15 +2005,45 @@
+          * what a frame rate notices -- but it is skipped, and a reader deserves
+          * to know rather than assume. Everything on the game's own thread is
+          * untouched. */
+-        if (ext->haptics_dry_run)
+         {
+-            io.Status = STATUS_SUCCESS;
+-            io.Information = out.reportBufferLen;
++            /* MGVF mgvf-0020: the two writers never overlap on the wire.
++             *
++             * Noting the record after the write let them cross: this thread
++             * mid-write with 0/0 while the ride stamped 150 and noted it, then
++             * this returned and noted 0 -- pad at 150, record at 0, the next
++             * stop refused by both, a buzz with no end. Claiming the record
++             * before the write did not close it either: the mirror ordering,
++             * where the ride notes first and its packet lands last, left the
++             * same pad and the same record. So the overlap itself is
++             * forbidden. haptics_thread_writing is up for the duration of
++             * this write and the ride declines to stamp while it is -- the
++             * client's inert packet goes out as written, which changes
++             * nothing on the pad -- and if the client reappeared during the
++             * write, `pending` sends this loop back to the gate so the value
++             * is judged again against what the ride may do next. A lock
++             * across a 21 ms Bluetooth write on the game's path would also
++             * close it, and would put the cost back where mgvf-0010 took it
++             * from, so no. */
++            LONG seen_before = InterlockedCompareExchange(&ext->haptics_client_seen, 0, 0);
++            LONG before;
++            InterlockedExchange(&ext->haptics_thread_writing, 1);
++            before = InterlockedExchange(&ext->haptics_sent,
++                                              ((LONG)motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_MOTOR_RIGHT] << 8)
++                                              | motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_MOTOR_LEFT]);
++            if (ext->haptics_dry_run)
++            {
++                io.Status = STATUS_SUCCESS;
++                io.Information = out.reportBufferLen;
++            }
++            else if (dualsense_speaks_bluetooth(ext))
++                dualsense_usb_set_output_report(device, &out, &io);
++            else
++                unix_device_set_output_report(device, &out, &io);
++            if (io.Status) InterlockedExchange(&ext->haptics_sent, before);
++            InterlockedExchange(&ext->haptics_thread_writing, 0);
++            if (InterlockedCompareExchange(&ext->haptics_client_seen, 0, 0) != seen_before)
++                pending = TRUE; /* the client came back mid-write: judge this value again at the gate */
+         }
+-        else if (dualsense_speaks_bluetooth(ext))
+-            dualsense_usb_set_output_report(device, &out, &io);
+-        else
+-            unix_device_set_output_report(device, &out, &io);
+ 
+         QueryPerformanceCounter(&ended);
+         if (QueryPerformanceFrequency(&freq) && freq.QuadPart)
+@@ -2140,6 +2241,21 @@
+     if (ext->haptics_deadband)
+         TRACE("device %p: a motor must move %u of 255 before the link is used\n",
+               device, ext->haptics_deadband);
++
++    /* MGVF mgvf-0020: ride the client's packet. OFF until it is measured; the
++     * header of dualsense_usb.h says what it is for and why the packet has to
++     * be free rather than merely rare. */
++    ext->haptics_ride = get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumbleRide", 0);
++    ext->haptics_sent = -1;
++    ext->haptics_client_seen = 0;
++    ext->haptics_thread_writing = 0;
++    if (ext->haptics_ride && dualsense_speaks_bluetooth(ext) && !(ext->report_fixups & HIDRAW_FIXUP_DUALSENSE_USB))
++        TRACE("device %p: motor changes ride the client's own 0x31; this thread writes only after %u ms of"
++              " client silence\n", device, DUALSENSE_HAPTICS_RIDE_SILENCE_MS);
++    else if (ext->haptics_ride)
++        WARN("device %p: XInputRumbleRide is set but this pad is %s, where no client 0x31 exists to ride --"
++             " the motors are written by this thread as before\n", device,
++             dualsense_speaks_bluetooth(ext) ? "being presented as wired (mgvf-0005)" : "on a cable");
+ 
+     ext->haptics_dry_run = get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumbleDryRun", 0);
+     if (ext->haptics_dry_run)
+@@ -2269,14 +2385,90 @@
+  * wants, and all that happens is the rewrite, in a copy, because the client's
+  * buffer is not ours to change. A packet the options have nothing to say about
+  * is forwarded as the client wrote it, from the client's own buffer. */
++/* MGVF mgvf-0020: the motors ride the client's own packet.
++ *
++ * Called on every client 0x31, on a copy. It notes that the client is writing
++ * -- which is what silences the thread -- and then, only if the packet asks the
++ * pad for nothing, puts the wanted pair into it. A packet with any flag set is
++ * the game driving lights, triggers or its own motors and is never touched;
++ * a flagged packet does not refresh the thread's silence window, so a game that
++ * writes flagged packets every frame is served by the thread in the old way,
++ * at the old cost.
++ *
++ * Nothing wanted and nothing sent means the inert packet goes exactly as the
++ * client wrote it. Nothing wanted after something was sent is the STOP, and it
++ * is carried here for the same reason everything else is: the thread that used
++ * to carry it is silent while the client writes.
++ *
++ * Returns TRUE when a byte of the copy changed. The gain is not applied here:
++ * dualsense_vibration_fixup runs on the copy afterwards and scales the stamped
++ * pair exactly as it scales the thread's Bluetooth packets, so the two writers
++ * cannot drift apart on that either. */
++static BOOL dualsense_bt_ride(DEVICE_OBJECT *device, BYTE *report)
++{
++    struct device_extension *ext = (struct device_extension *)device->DeviceExtension;
++    unsigned int moved_r, moved_l;
++    unsigned char r, l;
++    LONG wanted, sent;
++
++    if (!ext->haptics_ride || !ext->haptics_output_id) return FALSE;
++    /* Only an INERT packet silences the thread. Stamping the tick before this
++     * test made a game that writes a flagged 0x31 every frame -- a lightbar
++     * fade, a trigger effect -- refresh the window on every packet, so the
++     * thread never wrote and the ride never stamped: rumble frozen at its last
++     * pair for the length of the run, a stop included. A per-frame flagged
++     * writer now gets the thread's packets exactly as before mgvf-0020, which
++     * costs what it cost and no more. */
++    if (!dualsense_bt_output_is_inert(report, DUALSENSE_BT_REPORT_LEN)) return FALSE;
++    InterlockedExchange(&ext->haptics_client_seen, (LONG)(GetTickCount() | 1)); /* | 1: never the 0 that means "never" */
++    if (InterlockedCompareExchange(&ext->haptics_thread_writing, 0, 0))
++    {
++        /* The thread is on the wire this instant. Its packet and a stamp here
++         * could land in either order, and the record could not say which; the
++         * client's packet goes as written and the next one carries the change. */
++        TRACE("device %p: the thread is writing -- the client's 0x31 goes as written this once\n", device);
++        return FALSE;
++    }
++
++    /* The same mapping the thread uses: the right motor is xinput's buzz, the
++     * left its rumble, and the pad takes the top byte of each. */
++    wanted = InterlockedCompareExchange(&ext->haptics_wanted, 0, 0);
++    r = ((unsigned int)wanted & 0xffff) >> 8;
++    l = (((unsigned int)wanted >> 16) & 0xffff) >> 8;
++    sent = InterlockedCompareExchange(&ext->haptics_sent, 0, 0);
++
++    if (!r && !l && sent <= 0) return FALSE;
++    if (!dualsense_haptics_worth_sending(ext, r, l, &moved_r, &moved_l))
++    {
++        TRACE("device %p: motors %u/%u moved %u/%u of 255, under the band of %u -- the client's packet goes as written\n",
++              device, r, l, moved_r, moved_l, ext->haptics_deadband);
++        return FALSE;
++    }
++    if (ext->haptics_dry_run)
++    {
++        dualsense_haptics_note_sent(ext, r, l); /* as the thread does: the dry run pretends, consistently */
++        TRACE("device %p: would have ridden the client's 0x31 with motors %u/%u -- dry run, not stamped\n", device, r, l);
++        return FALSE;
++    }
++    if (!dualsense_bt_stamp_motors(report, DUALSENSE_BT_REPORT_LEN, r, l, dualsense_crc32)) return FALSE;
++    dualsense_haptics_note_sent(ext, r, l);
++    TRACE("device %p: rode the client's 0x31 with motors %u/%u -- no packet of ours on the link\n", device, r, l);
++    return TRUE;
++}
++
+ static void dualsense_bt_set_output_report(DEVICE_OBJECT *device, HID_XFER_PACKET *packet, IO_STATUS_BLOCK *io)
+ {
+     BYTE buffer[DUALSENSE_BT_REPORT_LEN];
+     HID_XFER_PACKET bt = {.reportId = packet->reportId, .reportBuffer = buffer,
+                           .reportBufferLen = DUALSENSE_BT_REPORT_LEN};
++    BOOL changed;
+ 
+     memcpy(buffer, packet->reportBuffer, DUALSENSE_BT_REPORT_LEN);
+-    if (dualsense_vibration_fixup(device, buffer, DUALSENSE_BT_REPORT_LEN))
++    /* MGVF mgvf-0020: the ride first, the preference after, so that a stamped
++     * pair is scaled like any other and the CRC covers the final bytes. */
++    changed = dualsense_bt_ride(device, buffer);
++    changed = dualsense_vibration_fixup(device, buffer, DUALSENSE_BT_REPORT_LEN) || changed;
++    if (changed)
+         unix_device_set_output_report(device, &bt, io);
+     else
+         unix_device_set_output_report(device, packet, io);
+@@ -2831,7 +3023,9 @@
+              * The options are all zero unless this is a hidraw DualSense whose
+              * key asks for something, so every other device takes the last
+              * branch below exactly as before. */
+-            else if ((ext->dualsense_vibration.mode || ext->dualsense_vibration.gain)
++            else if (((ext->dualsense_vibration.mode || ext->dualsense_vibration.gain)
++                      /* MGVF mgvf-0020: or the motors are riding this packet */
++                      || (ext->haptics_ride && ext->haptics_output_id))
+                      && packet->reportId == DUALSENSE_BT_REPORT_ID
+                      && packet->reportBufferLen == DUALSENSE_BT_REPORT_LEN)
+                 dualsense_bt_set_output_report(device, packet, &irp->IoStatus);

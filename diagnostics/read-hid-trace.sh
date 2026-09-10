@@ -57,6 +57,15 @@ say "is the title rumbling through XInput instead?"
 /usr/bin/grep -c "telling the motors rumble" "$L"
 /usr/bin/grep "telling the motors rumble" "$L" | head -3
 
+say "who carried the motors  (mgvf-0020: a change may ride the client's own packet)"
+printf '  rode the client 0x31 : '; /usr/bin/grep -ac "rode the client's 0x31" "$L"
+printf '  thread wrote its own : '; /usr/bin/grep -ac "telling the motors rumble" "$L"
+printf '  held under the band  : '; /usr/bin/grep -ac "under the band of" "$L"
+printf '  dry run, not stamped : '; /usr/bin/grep -ac "would have ridden" "$L"
+echo "  (with XInputRumbleRide on and a title writing its own 0x31, the first line"
+echo "   should carry nearly everything and the second nearly nothing: no packet"
+echo "   of ours on the link is the whole point)"
+
 say "what XInput actually sent to the motors  (asked -> carried, after the gain)"
 paste -d'|' <(/usr/bin/grep -o "telling the motors rumble [0-9]*, buzz [0-9]*" "$L") \
             <(/usr/bin/grep -o "the packet carries motors [0-9]*/[0-9]*, flag0 [^,]*, [0-9]* bytes, at gain [0-9]*%" "$L") \

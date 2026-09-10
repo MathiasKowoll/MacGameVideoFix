@@ -9,7 +9,7 @@
 # has a story worth carrying. Values winebus reads under a pad's own key:
 # Hidraw, SeizeDevice, UsbEmulation, ProductId, ForwardFeatureWrites,
 # VibrationMode, VibrationGain, XInputRumble, XInputRumbleInterval,
-# XInputRumbleDryRun.
+# XInputRumbleDryRun, XInputRumbleDeadband, XInputRumbleRide.
 #
 # The launcher rewrites six of those per title and never touches the others, so
 # anything set here that is not one of its six outlives every launch -- which is
