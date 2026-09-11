@@ -175,11 +175,11 @@ import sys, re, collections
 ride = collections.Counter(); thread = collections.Counter(); native = []
 cur=None
 for line in open(sys.argv[1], errors='replace'):
-    m = re.search(r"rode the client's 0x31 with motors (\d+)/(\d+), flag0 (0x[0-9a-f]+), flag1 (0x[0-9a-f]+), flag2 (0x[0-9a-f]+), power (0x[0-9a-f]+)", line)
+    m = re.search(r"rode the client's 0x31 with motors (\d+)/(\d+), flag0 (0x[0-9a-f]+|0), flag1 (0x[0-9a-f]+|0), flag2 (0x[0-9a-f]+|0), power (0x[0-9a-f]+|0)", line)
     if m:
         ride[(m.group(3), m.group(4), m.group(5), m.group(6))] += 1
         continue
-    m = re.search(r"the packet carries motors \d+/\d+, flag0 (0x[0-9a-f]+), flag1 (0x[0-9a-f]+), power (0x[0-9a-f]+)", line)
+    m = re.search(r"the packet carries motors \d+/\d+, flag0 (0x[0-9a-f]+|0), flag1 (0x[0-9a-f]+|0), power (0x[0-9a-f]+|0)", line)
     if m:
         thread[(m.group(1), m.group(2), m.group(3))] += 1
         continue
