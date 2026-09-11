@@ -113,7 +113,7 @@ done
 # and mgvf-0005's own reversal then says what it always meant. Nothing is
 # written to the tree by the test; the tree is only ever forward-applied to,
 # and in order.
-PATCHSET="mgvf-0002 mgvf-0003 mgvf-0004 mgvf-0005 mgvf-0006 mgvf-0007 mgvf-0008 mgvf-0009 mgvf-0010 mgvf-0011 mgvf-0012 mgvf-0014 mgvf-0016 mgvf-0017 mgvf-0018 mgvf-0019 mgvf-0020 mgvf-0021 mgvf-0022 mgvf-0023"
+PATCHSET="mgvf-0002 mgvf-0003 mgvf-0004 mgvf-0005 mgvf-0006 mgvf-0007 mgvf-0008 mgvf-0009 mgvf-0010 mgvf-0011 mgvf-0012 mgvf-0014 mgvf-0016 mgvf-0017 mgvf-0018 mgvf-0019 mgvf-0020 mgvf-0021 mgvf-0022 mgvf-0023 mgvf-0024"
 patch_file() { ls "$OWNPATCHES/$1"-*.patch 2>/dev/null | head -1; }
 for p in $PATCHSET; do
   [ -n "$(patch_file "$p")" ] || { say "no patch numbered $p in $OWNPATCHES"; exit 1; }

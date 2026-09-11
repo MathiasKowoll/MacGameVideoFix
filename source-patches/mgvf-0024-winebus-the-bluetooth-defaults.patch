@@ -1,0 +1,154 @@
+winebus: on Bluetooth, ride the client's packet and take the pad's own path.
+
+Two options become defaults, on Bluetooth only. Neither is new code; both have
+been off since the day they were written, waiting for the thing that would
+decide them.
+
+THE RIDE, mgvf-0020. It stamps the motors into a 0x31 the game is sending
+anyway, so nothing of ours is added to a link that drains about sixty-five
+reports a second. Measured on Beast of Reincarnation: 92-95% of every motor
+change carried inside the client's own packet, no packet of ours on the link,
+and the frame cost that started this whole series gone. A cable keeps it off,
+which is not a preference: the ride stamps a 0x31 and a wired pad is written
+0x02s, so there is nothing there to ride.
+
+THE STOP, WHICH IS THE PART THAT HAD TO BE CHECKED BEFORE THIS COULD SHIP. A
+ride that cannot deliver a zero leaves the pad buzzing in a menu, and that is
+the failure a person would report as "the rumble never stops" rather than as a
+frame rate. Across the three runs of 2026-09-11 -- hid-235325, hid-235541 and
+hid-235817, 700 motor packets between them:
+
+  episodes of non-zero rumble                  105
+  of those, ended in a zero                    105
+  delay from the last non-zero packet          median 17 ms, worst 100 ms
+  traces ending with the pad silenced          3 of 3
+
+mgvf-0018 exempts zero from the deadband in both directions, which is why a
+stop is never the thing that gets held back.
+
+WHAT IS STILL UNTESTED IN THE FIELD, and it is named rather than left implied:
+the fallback for a client that stops writing in the middle of a rumble. That
+title writes its own 0x31 about forty-five times a second without a pause,
+menus included, so the ride always had a carrier and the thread's 100 ms
+silence rule never once had to fire. The path exists and the host tests cover
+its logic. No trace has ever exercised it.
+
+THE HAPTIC PATH, mgvf-0021. It sent legacy because a six-pulse ladder by hand
+had preferred legacy, and that ladder was run when this driver could deliver
+about sixteen updates a second. At the sixty a second the ride now delivers,
+the same hand preferred the haptic path: finer, and the frames stayed perfect.
+It is also the path Sony's library takes on every packet of every session
+captured here.
+
+AND THE ONE THING THAT COULD HAVE MADE THAT COMPARISON UNFAIR IS NOW RULED OUT.
+mgvf-0023 asked whether an unclaimed motor power field had been quietly
+attenuating one path or both. Measured: claiming it at zero felt identical to
+leaving it alone, and claiming it at 0x77 dropped the rumble to almost nothing.
+The pad honours the field, it only reduces, and it was already at none. Both
+paths were at full power the whole time, so the preference is a preference
+about the paths and not about a hidden setting.
+
+A CABLE KEEPS THE LEGACY PATH. Nothing measured says which is better there, and
+a wired pad has none of the link pressure that made the comparison worth
+re-running. Changing it would be a preference dressed as a finding.
+
+ONE WARN BECOMES A TRACE. Asking for the haptic path while VibrationMode was 1
+used to be asking for two opposite things, because mgvf-0009's rewrite runs
+after the stamp and turns the packet back into the legacy motors. With the path
+now a default, that same pair is the ordinary way to get the harder feel and
+nobody has made a mistake, so the line says what happens instead of complaining
+about it.
+
+Both options still override the default in either direction, and
+XInputRumbleRide 0 puts a Bluetooth pad back on the old behaviour without a
+rebuild.
+
+Signed-off-by: MacGameVideoFix
+---
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -2262,21 +2262,64 @@
+         TRACE("device %p: a motor must move %u of 255 before the link is used\n",
+               device, ext->haptics_deadband);
+ 
+-    /* MGVF mgvf-0020: ride the client's packet. OFF until it is measured; the
+-     * header of dualsense_usb.h says what it is for and why the packet has to
+-     * be free rather than merely rare. */
+-    /* MGVF mgvf-0021: which way the motors are asked to move. The default is
+-     * the legacy path this driver has always used; 1 selects the pad's own
+-     * haptic path, the one Sony's library uses on every packet. */
+-    ext->haptics_path = get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumbleHapticPath", 0)
++    /* MGVF mgvf-0020: ride the client's packet. ON over Bluetooth and off on a
++     * cable, which is not a preference but the shape of the thing: the ride
++     * stamps a 0x31, and a wired pad is written 0x02s, so there is nothing to
++     * ride there.
++     *
++     * MGVF mgvf-0024 TURNED IT ON. It was off until it was measured, and it is
++     * measured: on Beast of Reincarnation over Bluetooth it carried 92-95% of
++     * every motor change inside a packet the game was sending anyway, added no
++     * packet of its own to a link that only drains about sixty-five a second,
++     * and the frame cost that started this whole series went away.
++     *
++     * AND THE STOP IS THE PART THAT HAD TO BE CHECKED, because a ride that
++     * cannot deliver a zero leaves the pad buzzing in a menu. Across the three
++     * runs of 2026-09-11, 105 episodes of non-zero rumble, every one of them
++     * ended in a zero -- median 17 ms after the last non-zero packet, worst
++     * 100 ms -- and all three traces end with the pad silenced. mgvf-0018
++     * exempts zero from the deadband in both directions, which is why.
++     *
++     * WHAT IS STILL UNTESTED IN THE FIELD, said rather than left implied: the
++     * fallback for a client that stops writing mid-rumble. That title writes
++     * its own 0x31 about forty-five times a second without pause, menus
++     * included, so the ride always had a carrier and the thread's 100 ms
++     * silence rule never once had to fire. The path exists and the host tests
++     * cover its logic; no trace has ever exercised it. */
++    /* MGVF mgvf-0021: which way the motors are asked to move.
++     *
++     * MGVF mgvf-0024 MADE THE HAPTIC PATH THE BLUETOOTH DEFAULT. mgvf-0021 sent
++     * legacy because a six-pulse ladder by hand had preferred it, and that
++     * ladder was run when this driver could deliver about sixteen updates a
++     * second. At the sixty a second mgvf-0020 delivers, the same hand preferred
++     * the haptic path: finer, and the frames stayed perfect. It is also the
++     * path Sony's own library takes on every packet of every session captured
++     * here, and mgvf-0023 has since ruled out the one thing that could have
++     * made that comparison unfair -- there was no hidden attenuator, the pad
++     * was at full power in both.
++     *
++     * A CABLE KEEPS THE LEGACY PATH. Nothing measured says which is better
++     * there, and a wired pad has none of the link pressure that made the
++     * comparison worth re-running; changing it would be a preference dressed
++     * as a finding. The option overrides either way. */
++    ext->haptics_path = get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumbleHapticPath",
++                                          dualsense_speaks_bluetooth(ext))
+                         ? DUALSENSE_VIBRATION_PATH_HAPTIC : DUALSENSE_VIBRATION_PATH_LEGACY;
+     if (ext->haptics_path == DUALSENSE_VIBRATION_PATH_HAPTIC)
+     {
+         TRACE("device %p: the motors are asked through the pad's haptic path, not the legacy motors\n", device);
++        /* MGVF mgvf-0024: this was a WARN while the haptic path was something
++         * a person had to ask for, because asking for it alongside a
++         * VibrationMode of 1 was asking for two opposite things. Now that the
++         * path is the Bluetooth default, the same pair is the ordinary way to
++         * get the harder feel: the stamp takes the haptic path and mgvf-0009's
++         * rewrite, which runs after it, turns the packet back into the legacy
++         * motors. Nobody made a mistake, so it says what happens and does not
++         * complain about it. */
+         if (ext->dualsense_vibration.mode == DUALSENSE_VIBRATION_MODE_LEGACY)
+-            WARN("device %p: VibrationMode asks for the legacy motors and XInputRumbleHapticPath asks for the"
+-                 " haptic one; the rewrite runs after the stamp, so the legacy path wins and this option does"
+-                 " nothing. Set the vibration to the game's own choice to compare the two paths.\n", device);
++            TRACE("device %p: VibrationMode 1 rewrites the packet after the stamp, so what reaches the pad is"
++                  " the legacy motors -- which is what that mode is for. Leave the vibration at the game's own"
++                  " choice for the haptic path.\n", device);
+     }
+ 
+     /* MGVF mgvf-0023: the motor power field. The option carries the BYTE and
+@@ -2295,7 +2338,8 @@
+         TRACE("device %p: the motor power field is left unclaimed -- the pad keeps whatever it was last"
+               " told, by us or by anything else\n", device);
+ 
+-    ext->haptics_ride = get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumbleRide", 0);
++    ext->haptics_ride = get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumbleRide",
++                                          dualsense_speaks_bluetooth(ext));
+     ext->haptics_sent = -1;
+     ext->haptics_client_seen = 0;
+     ext->haptics_thread_writing = 0;
