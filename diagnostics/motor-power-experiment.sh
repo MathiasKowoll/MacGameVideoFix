@@ -14,14 +14,20 @@
 # here was made through an attenuator neither path knew about.
 #
 #   a   the field unclaimed          -- what every build before mgvf-0023 sent
-#   b   claimed, written 0x00        -- byte for byte what libScePad sends
-#   c   claimed, written 0x77        -- the control: if the community's reading
-#                                      of the field as power REDUCTION is right,
-#                                      this must be felt as clearly weaker
+#   b   claimed, written 0x00        -- byte for byte what libScePad sends,
+#                                      and what this driver now sends by default
+#   c   claimed, written 0x77        -- the control
 #
-# Run a, then b. If they feel the same, run c: it is the only thing that says
-# whether the field does anything at all, and without it "no difference" and
-# "the driver never reached the pad" are the same sentence.
+# ANSWERED, 2026-09-11, on Beast of Reincarnation over Bluetooth: a and b felt
+# THE SAME, and c dropped the rumble to almost imperceptible. So the pad honours
+# the field, it is a REDUCTION, and it was already at none -- nothing had been
+# attenuating this driver, and there is no second intensity field to find.
+#
+# The script is kept because the three steps are how that was established and
+# how it would be re-established on another pad or another firmware, and because
+# c is the step that tells a silent option apart from a driver that never
+# reached the pad. Without it, "no difference" and "nothing was sent" are the
+# same sentence.
 #
 # WHAT IT REFUSES, because each of these has cost a run in this project at
 # least once: a bottle that is up (wineserver writes its own registry back), an

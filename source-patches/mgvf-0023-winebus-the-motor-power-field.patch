@@ -28,27 +28,37 @@ The last row is the one that matters. Every packet that title sent with a motor
 in it claimed this field and wrote zero into it. The 283rd is a dump the trace
 truncated, not a packet that did something else.
 
-WHAT THE FIELD IS. The community's map reads common byte 36 as two nibbles of
-power REDUCTION -- trigger motors in the low, rumble motors in the high, zero
-meaning no reduction -- which would make that column of zeroes a request for
-full power, repeated sixty times a second. That reading is consistent with the
-disassembly, with the capture, and with the bit being set alongside the two
-vibration fields rather than the audio ones. IT IS NOT PROVED BY ANY OF THEM.
+WHAT THE FIELD DOES, measured rather than read off a wiki. Three runs on
+2026-09-11, on Beast of Reincarnation over Bluetooth, whose packets were
+identical apart from this field -- same haptic path, same ride, same gain, and
+the same 143 of 255 asked for at the peak in all three:
 
-SO THE OPTION CARRIES THE BYTE, NOT A YES OR NO. XInputRumbleMotorPower absent,
-or 256 and up, leaves the field unclaimed: flag1 and common byte 36 go out
-exactly as they came in, which is what this driver has always done and what the
-host test asserts first. A value of 0 to 255 sets the bit and writes that byte.
-0 is what libScePad sends. If the reading above is right then a large value
-must be felt as WEAKER, and that is a test anybody can run with their hand and
-two registry writes, which is worth more than a wiki.
+  A  hid-235325   unclaimed                      the same as B
+  B  hid-235541   claimed, 0x00                  the same as A
+  C  hid-235817   claimed, 0x77                  almost imperceptible
 
-WHY IT MIGHT MATTER AT ALL, said as a question and not as a finding. A field
-nobody claims keeps whatever it was last set to. This driver has never written
-it, so on a pad that some other application reduced -- or that powers on
-reduced -- every measurement of "the haptic path feels weaker than the legacy
-one" was made through an attenuator neither path knew about. That would be a
-confound and not a conclusion, and one registry value now decides it.
+C is the half that proves the pad honours the field, and that it is a
+REDUCTION as the community's map says. A equalling B is the half that matters
+more: the pad was ALREADY at no reduction. Nothing was attenuating this driver,
+so the hypothesis this option was written to test -- that a lingering reduction
+had been capping the haptic path -- is dead, and mgvf-0021's comparison stands
+on its own evidence. Worth keeping and not explained: 0x77 took away far more
+than the "-50% per nibble" that map implies.
+
+AND IT IS AN ATTENUATOR, NEVER A WAY TO GET MORE. That closes the question this
+series has been asking since mgvf-0009. There is no second intensity field on a
+DualSense: the gain scales the two motor bytes and saturates at 255, and this
+one can only take away from what they ask for. The haptic path feels the way it
+feels.
+
+THE DEFAULT IS 0, AND THAT IS A JUDGEMENT. It changed nothing on the pad
+measured, so it could equally have stayed absent. It is kept because an
+unclaimed field carries whatever the pad was last told by anything else on the
+machine, and a pad quietly reduced by some other application would make this
+driver weak for a reason nothing in a trace could show. One bit buys a state
+that is ours, and it is the packet Sony's own library sends. XInputRumbleMotorPower
+still carries the BYTE: 0 to 255 claims it and writes that byte, and 256 or
+above leaves it alone, which is what every build before this one sent.
 
 BOTH WRITERS, as always. The ride stamps it into the game's own 0x31 and the
 haptics thread puts it in its own packet, so the two cannot disagree about how
@@ -69,10 +79,11 @@ Signed-off-by: MacGameVideoFix
 ---
 --- a/dlls/winebus.sys/dualsense_usb.h
 +++ b/dlls/winebus.sys/dualsense_usb.h
-@@ -151,6 +151,40 @@
+@@ -150,6 +150,53 @@
+  * which is what XInputRumbleHapticPath is for. */
  #define DUALSENSE_VIBRATION_PATH_LEGACY 0
  #define DUALSENSE_VIBRATION_PATH_HAPTIC 1
- 
++
 +/* MGVF mgvf-0023: the motor power field, and the bit that says the packet
 + * means it.
 + *
@@ -90,27 +101,39 @@ Signed-off-by: MacGameVideoFix
 + * motor, 282 carry both and the last is a truncated dump. So the library
 + * claims this field on every packet and writes zero into it.
 + *
-+ * WHAT IS NOT ESTABLISHED is the field's own arithmetic. The community's map
-+ * reads it as two nibbles of power REDUCTION -- trigger motors low, rumble
-+ * motors high, zero meaning none -- which would make libScePad's zero a
-+ * request for full power on every packet. That reading is consistent with
-+ * everything above and it is not proved by anything here.
++ * AND WHAT THE FIELD DOES, measured on 2026-09-11 in three runs whose packets
++ * were identical apart from this field. Unclaimed and claimed-with-zero felt
++ * THE SAME. Claimed with 0x77 dropped the rumble to almost imperceptible.
 + *
-+ * WHICH IS WHY THE OPTION CARRIES THE BYTE rather than a yes or no. Absent,
-+ * or anything from 256 up, leaves the field alone: the packet does not claim
-+ * it and the pad keeps whatever it was last told, which is what this driver
-+ * has always done. A value of 0 to 255 sets the bit and writes that byte --
-+ * 0 being exactly what libScePad sends. If the reading above is right, a
-+ * non-zero value should be FELT AS WEAKER, and that is the test which decides
-+ * it without anybody having to trust a wiki. */
++ * So the pad honours the field and it is a REDUCTION, as the community's map
++ * says -- and the pad was already at no reduction, which is the half that
++ * matters. Nothing was attenuating this driver. The hypothesis this option was
++ * written to test, that a lingering reduction had been capping the haptic
++ * path, is dead, and mgvf-0021's comparison stands on its own evidence.
++ *
++ * IT IS AN ATTENUATOR AND NEVER A WAY TO GET MORE. There is no second
++ * intensity field: the gain scales the two motor bytes and saturates at 255,
++ * and this one can only take away from what they ask for. Worth keeping and
++ * not explained: 0x77 took away far more than the "-50% per nibble" that map
++ * implies.
++ *
++ * THE DEFAULT IS 0 AND NOT ABSENCE, which changed nothing on the pad measured
++ * and is still the better packet. A field left unclaimed carries whatever the
++ * pad was last told by anything else on the machine, and a pad quietly
++ * reduced by some other application would make this driver weak for a reason
++ * nothing in a trace could show. Claiming it at zero costs one bit and makes
++ * the state ours. It is what libScePad sends on every packet.
++ *
++ * The option still carries the BYTE rather than a yes or no: 0 to 255 sets the
++ * bit and writes that byte, and anything from 256 up goes back to leaving the
++ * field alone, which is what every build before this one sent. */
 +#define DUALSENSE_COMMON_MOTOR_POWER    36
 +#define DUALSENSE_FLAG1_MOTOR_POWER     0x40
 +#define DUALSENSE_MOTOR_POWER_UNCLAIMED 0x100
-+
+ 
  /* MGVF mgvf-0016: the shortest output report that carries the whole of what
   * the rewrite reads. flag2 is the last of the four bytes and it is common byte
-  * 38, so a USB report has to reach index 39 and therefore be 40 bytes long.
-@@ -329,7 +363,8 @@
+@@ -329,7 +376,8 @@
  int dualsense_bt_output_is_inert(const unsigned char *report, unsigned int len);
  unsigned int dualsense_bt_stamp_motors(unsigned char *report, unsigned int len,
                                         unsigned char right, unsigned char left,
@@ -251,26 +274,30 @@ Signed-off-by: MacGameVideoFix
                (unsigned int)out.reportBufferLen,
                dualsense_speaks_bluetooth(ext) ? 100 : ext->haptics_gain);
  
-@@ -2269,6 +2279,18 @@
+@@ -2269,6 +2279,22 @@
                   " nothing. Set the vibration to the game's own choice to compare the two paths.\n", device);
      }
  
-+    /* MGVF mgvf-0023: the motor power field. The option carries the BYTE, not
-+     * a yes or no: absent -- or anything from 256 up -- leaves the field
-+     * unclaimed, which is what this driver has always sent, and 0 to 255 sets
-+     * the bit and writes that byte. dualsense_usb.h has the evidence and says
-+     * what a non-zero value is expected to do if the community's reading of
-+     * the field is right. */
-+    ext->haptics_power = get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumbleMotorPower",
-+                                           DUALSENSE_MOTOR_POWER_UNCLAIMED);
++    /* MGVF mgvf-0023: the motor power field. The option carries the BYTE and
++     * not a yes or no, and the DEFAULT IS ZERO -- claimed, at no reduction,
++     * which is what Sony's library sends on every packet. Measured to change
++     * nothing against leaving it alone, and kept anyway: an unclaimed field
++     * carries whatever the pad was last told by anything else on this machine,
++     * and a pad somebody else reduced would make this driver weak for a reason
++     * no trace could show. Anything from 256 up leaves it alone again.
++     * dualsense_usb.h carries the evidence and the three runs. */
++    ext->haptics_power = get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumbleMotorPower", 0);
 +    if (ext->haptics_power < DUALSENSE_MOTOR_POWER_UNCLAIMED)
-+        TRACE("device %p: claiming the motor power field and writing %#x into it, as Sony's library does on"
-+              " every packet with 0\n", device, ext->haptics_power);
++        TRACE("device %p: claiming the motor power field and writing %#x into it; 0 is no reduction and is"
++              " what Sony's library sends\n", device, ext->haptics_power);
++    else
++        TRACE("device %p: the motor power field is left unclaimed -- the pad keeps whatever it was last"
++              " told, by us or by anything else\n", device);
 +
      ext->haptics_ride = get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumbleRide", 0);
      ext->haptics_sent = -1;
      ext->haptics_client_seen = 0;
-@@ -2474,10 +2496,19 @@
+@@ -2474,10 +2500,19 @@
          TRACE("device %p: would have ridden the client's 0x31 with motors %u/%u -- dry run, not stamped\n", device, r, l);
          return FALSE;
      }
