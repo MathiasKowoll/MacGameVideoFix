@@ -5,7 +5,7 @@
 `winebus.so` — shipped here with an `engine-controller-` prefix on each name,
 1,336,304 bytes together — are **Wine**, and Wine is **LGPL-2.1-or-later**. They
 are not ours in the sense that matters to the licence: they are somebody else's
-program with seventeen patches of ours applied, and both halves of that sentence
+program with twenty patches of ours applied, and both halves of that sentence
 carry obligations.
 
 The last is the **unix half** of `winebus`: nine of these are PE files that go
@@ -27,7 +27,7 @@ not only in the repository.
 - Source tree: the wine source of **CrossOver 26.3.0.39832**, revision
   **`wine-11.0-8726-g2e2f5fca349`**, which is the build string
   `engine-controller-built-for.json` records beside these files.
-- Patches applied on top, all seventeen of them ours:
+- Patches applied on top, all twenty of them ours:
   - **`mgvf-0002`** — `winebus.sys` names the bus a device is on in its
     compatible ids, so `BTHENUM` is there for a client to find.
   - **`mgvf-0003`** — `setupapi.dll` answers `CM_Get_Parent` for HID children,
@@ -68,11 +68,31 @@ not only in the repository.
   - **`mgvf-0016`** — `mgvf-0009`'s preference reaches a pad on a cable too. It
     was written from a Bluetooth trace and refused a wired pad's own report,
     whose common block starts two bytes earlier and which carries no CRC.
+  - **`mgvf-0017`** — the rumble thread can be asked to do everything except the
+    write itself, so that the cost of a write can be measured by taking it away
+    rather than by reasoning about it.
+  - **`mgvf-0018`** — a motor asked to move by less than a few parts in 255 is
+    not worth a slot on a Bluetooth link that carries about sixty-five of them a
+    second. A stop is always worth one.
+  - **`mgvf-0019`** — a pad presented to Windows as wired may still be speaking
+    over a radio, so the transport is asked of the radio and not of the
+    presentation.
+  - **`mgvf-0020`** — the motors ride the game's own packet. A title rumbling
+    through `xinput` still writes an empty output report every frame, so the
+    motors go out inside that one and no packet of ours is added to the link.
+  - **`mgvf-0021`** — the other way to ask a DualSense to vibrate: the pad's own
+    haptic path, which is the one Sony's library uses, instead of the legacy
+    rotating-mass emulation this driver had always sent.
+  - **`mgvf-0022`** — an absent preference is a neutral request and not a zeroed
+    one, so a gain of zero can go on meaning silence.
+  - **`mgvf-0023`** — the motor power field, and the bit that says the packet
+    means it. Sony's library claims it on every packet and this driver never
+    has, so a pad left reduced by something else stayed reduced.
 - Built by `scripts/build-controller-bus.sh` in the repository below, which also
   strips the binaries and proves that the strip changed nothing a loader reads.
 
-The seventeen patch files are published, in full, as
-`source-patches/mgvf-0002-*.patch` … `mgvf-0020-*.patch` in
+The twenty patch files are published, in full, as
+`source-patches/mgvf-0002-*.patch` … `mgvf-0023-*.patch` in
 
 > **<https://github.com/MathiasKowoll/MacGameVideoFix>**
 
@@ -84,7 +104,7 @@ specific to this project, and anyone carrying a patched Wine is welcome to them.
 The LGPL asks that whoever receives these binaries can get the source they were
 built from. Both halves are public and neither is behind us: Wine's source at
 the revision above is CodeWeavers' published CrossOver source for 26.3.0.39832,
-and the seventeen patches are in the repository named above. Anyone who cannot
+and the twenty patches are in the repository named above. Anyone who cannot
 obtain either should ask through that repository's issues and it will be
 provided.
 
@@ -102,7 +122,7 @@ for.
 
 | file | bytes | sha256 |
 | --- | --- | --- |
-| `engine-controller-winebus.sys` | 69,632 | `124e5d34feba18fd46f7ae55d22485c0790f65f229cf9474256cb5695449ee8f` |
+| `engine-controller-winebus.sys` | 73,728 | `be8a71b5b20c48b9b90b34a002a831803d80178f287de414a8f4dff24c0ad062` |
 | `engine-controller-setupapi.dll` | 462,848 | `9806fae23e1b0ee8effc22212992b115e1896381139c0f4e4be44eade2347a1a` |
 | `engine-controller-ntoskrnl.exe` | 393,216 | `9231cb23bd73e0ccbaca37f1293eb2d75ad42bb34c7b9d139ff76d1c812893a8` |
 | `engine-controller-hidclass.sys` | 53,248 | `6837d6543d3a43d9171acc66c6de182f68c0da77dc7b338d292008e0ff97efaf` |
@@ -112,7 +132,7 @@ for.
 | `engine-controller-xinput1_4.dll` | 61,440 | `1ed9190d847fdab1bcad7feac9f340b3c381494eb1ee496c67391cb2b0ca014e` |
 | `engine-controller-xinputuap.dll` | 61,440 | `94509e1135e154106bfe8f87e25c21453fa3fb0fa9a337ee0ba6d65bd606d5e8` |
 | `engine-controller-winebus.so` | 62,448 | `c84ead102604e01b34bde836c4db6c796dfc7b8d761b35cac51f36d74b022224` |
-| `engine-controller-built-for.json` | 305 | `223054bf4d9ceb08f832d4c379fd36b5d45dc9b8fa6d1a787dec28948af9661c` |
+| `engine-controller-built-for.json` | 335 | `3b831958ba36315cb7f492237112a29a776fcdd87099eeace24343b79eec91f9` |
 
 The same bytes ship in the repository as `runtime/engine-controller-*` and, laid
 out the way an engine is, as `runtime/engine-payload-controller/wine/x86_64-windows/`

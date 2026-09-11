@@ -21,6 +21,8 @@
 #   whether writing disturbs input  -- the two rows must be compared, not read
 #   what the title itself wrote     -- a title whose rumble is XInput writes
 #                                      output reports without a motor in them
+#   the motor power field           -- mgvf-0023; flag1 0x40 on every row or the
+#                                      option never reached the driver at all
 #
 # IT REFUSES AN EMPTY TRACE. A log with no trace:hid lines reads exactly like a
 # pad that did nothing: every count comes out zero and looks like a finding.
@@ -166,6 +168,56 @@ else:
             print("  (ours was 76% -- if a native title is far below that, it is writing")
             print("   deliberately where we are writing on every twitch)")
 PY3
+
+say "mgvf-0023: did the motor power field go out, and with what in it?"
+python3 - "$L" <<'PY4'
+import sys, re, collections
+ride = collections.Counter(); thread = collections.Counter(); native = []
+cur=None
+for line in open(sys.argv[1], errors='replace'):
+    m = re.search(r"rode the client's 0x31 with motors (\d+)/(\d+), flag0 (0x[0-9a-f]+), flag1 (0x[0-9a-f]+), flag2 (0x[0-9a-f]+), power (0x[0-9a-f]+)", line)
+    if m:
+        ride[(m.group(3), m.group(4), m.group(5), m.group(6))] += 1
+        continue
+    m = re.search(r"the packet carries motors \d+/\d+, flag0 (0x[0-9a-f]+), flag1 (0x[0-9a-f]+), power (0x[0-9a-f]+)", line)
+    if m:
+        thread[(m.group(1), m.group(2), m.group(3))] += 1
+        continue
+    if 'write output report id 49' in line: cur={}; native.append(cur); continue
+    if cur is not None:
+        h=re.search(r'hid_internal_dispatch (\d{8})  ((?:[0-9a-f]{2} ?)+)', line)
+        if h:
+            off=int(h.group(1),16)
+            for i,v in enumerate(h.group(2).split()): cur[off+i]=int(v,16)
+        else: cur=None
+
+if not ride and not thread:
+    print("  neither writer named the field -- this trace predates mgvf-0023, or")
+    print("  the pad never rumbled at all. The lines above say which.")
+else:
+    if ride:
+        print(f"  the ride stamped {sum(ride.values())} packets:")
+        for (f0,f1,f2,pw),c in ride.most_common(6):
+            claimed = "CLAIMED" if int(f1,16) & 0x40 else "not claimed"
+            print(f"    flag0 {f0}  flag1 {f1} ({claimed})  flag2 {f2}  power {pw}   x{c}")
+    if thread:
+        print(f"  the thread wrote {sum(thread.values())} of its own:")
+        for (f0,f1,pw),c in thread.most_common(6):
+            claimed = "CLAIMED" if int(f1,16) & 0x40 else "not claimed"
+            print(f"    flag0 {f0}  flag1 {f1} ({claimed})  power {pw}   x{c}")
+    print("  A run with XInputRumbleMotorPower set must show flag1 0x40 on every row.")
+    print("  If it shows 0x00, the option did not reach the driver: check the")
+    print("  options line above, and that the bottle was not running when it was set.")
+
+nat = [b for b in native if b.get(5,0) or b.get(6,0)]
+if nat:
+    c = collections.Counter((b.get(4,-1), b.get(39,-1)) for b in nat)
+    print(f"  and the title's OWN motor packets, for comparison ({len(nat)} of them):")
+    for (f1,pw),n in c.most_common(4):
+        print(f"    flag1 {f1:#04x}  power {pw:#04x}   x{n}")
+    print("  libScePad's session measured here was flag1 0x40 and power 0x00 on all")
+    print("  282 of its motor packets, which is what this option imitates with 0.")
+PY4
 
 say "what the title actually wrote to the pad"
 /usr/bin/grep -c "write output report id 2 " "$L"

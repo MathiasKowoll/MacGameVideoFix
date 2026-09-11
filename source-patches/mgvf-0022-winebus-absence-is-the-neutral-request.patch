@@ -1,0 +1,166 @@
+winebus: an absence is the neutral request, not a zeroed struct.
+
+mgvf-0009 stored "nobody asked anything of this pad" as a zeroed
+struct dualsense_vibration, and the write paths tested for that. It made
+{mode CLIENT, gain 0} -- a gain of zero written on purpose, which is the
+request for SILENCE -- byte-identical to an absence. dualsense_usb.h promised
+the opposite in so many words: "0 is not absence: it silences the motors, which
+is how somebody who does not want the pad to buzz at all turns it off for every
+game at once". That promise was not kept. Silence by gain alone reached no
+motor, and mgvf-0014's guard is what read it as nothing.
+
+IT WAS UNREACHABLE, AND THEN IT WAS NOT. This was found on 2026-09-10 and left
+alone on purpose, because the only thing that writes these values -- this
+project's launcher -- also wrote VibrationMode 1 beside its "Custom strength",
+and {1, 0} is a request the guard lets through. The same day, the launcher
+stopped doing that: a strength and a path turned out to be two questions, and
+tying them meant nobody could ask for the game's own path at a chosen strength,
+which is the combination mgvf-0020 made worth having. The moment "Custom
+strength" wrote mode 0, silence became reachable and broken in the same change.
+
+So the sentinel goes. An absence is {CLIENT, 100} -- keep the client's own mode,
+leave every motor byte alone -- which is a REQUEST that asks for nothing rather
+than a value that means nothing. Both entry points already refuse exactly that
+pair on their own, so no new test is needed anywhere; dualsense_vibration_wanted
+says what the write paths used to spell out, and says it once.
+
+The one thing that had to be got right: a device extension must START from the
+neutral pair. bus_create_hid_device assigns *vib only for a pad that has
+options, and everything else was left as the allocator found it -- zeros. With
+zeros now meaning silence, every device in the prefix would have been asking
+for it. It is initialised explicitly instead, for every device, and the host
+test asserts the neutral pair is the one a fresh device starts from.
+
+Signed-off-by: MacGameVideoFix
+---
+--- a/dlls/winebus.sys/dualsense_usb.h
++++ b/dlls/winebus.sys/dualsense_usb.h
+@@ -174,14 +174,13 @@
+  *         somebody who does not want the pad to buzz at all turns it off for
+  *         every game at once. Clamped to DUALSENSE_VIBRATION_GAIN_MAX.
+  *
+- *         SILENCE BY GAIN ALONE DOES NOT REACH THE PAD, and the paragraph
+- *         above is what this warns about. A gain of 0 with no mode is {0, 0},
+- *         which main.c's dualsense_vibration_options stores for "nothing asked
+- *         for" as well, so mgvf-0014's guard cannot tell them apart and the
+- *         motors are left alone. Asking for silence therefore means writing
+- *         VibrationMode too -- which is what the launcher does. The functions
+- *         below honour a bare gain of 0 correctly; it is the driver that never
+- *         hands them one. */
++ *         SILENCE BY GAIN ALONE REACHES THE PAD since mgvf-0022, and the
++ *         paragraph above was a promise this file could not keep before it. A
++ *         gain of 0 with no mode is {0, 0}, which used to be exactly what
++ *         dualsense_vibration_options stored for "nothing asked for", so the
++ *         write path could not tell a request for silence from an absence and
++ *         left the motors alone. The absence is the neutral request now --
++ *         {CLIENT, 100} -- and a bare 0 is a request like any other. */
+ #define DUALSENSE_VIBRATION_MODE_CLIENT 0
+ #define DUALSENSE_VIBRATION_MODE_LEGACY 1
+ #define DUALSENSE_VIBRATION_GAIN_MAX    1000
+@@ -191,6 +190,28 @@
+     unsigned int mode;
+     unsigned int gain;
+ };
++/* MGVF mgvf-0022: what "nothing was asked for" looks like, and why it is not
++ * all zeros.
++ *
++ * It used to be. mgvf-0009 zeroed the struct for a pad with no options and the
++ * write paths tested for that, which made {mode CLIENT, gain 0} -- a gain of
++ * zero written on purpose, the request for SILENCE -- byte-identical to an
++ * absence. The comments in this file promised the opposite and were wrong for a
++ * day: silence by gain alone reached no motor. It was unreachable from the
++ * launcher only because its "Custom strength" also wrote mode 1, and it stopped
++ * being unreachable the moment a strength stopped dragging a path with it.
++ *
++ * So the absence is the neutral REQUEST instead: keep the client's own mode and
++ * leave every motor byte alone. Both entry points already refuse exactly that
++ * pair on their own, so it needs no separate test -- and {CLIENT, 0} is now a
++ * request like any other. Every device extension must start here rather than at
++ * zero, or a pad nobody asked anything of would read as a request for
++ * silence. */
++#define DUALSENSE_VIBRATION_NONE { DUALSENSE_VIBRATION_MODE_CLIENT, 100 }
++static inline int dualsense_vibration_wanted(const struct dualsense_vibration *vib)
++{
++    return vib->mode != DUALSENSE_VIBRATION_MODE_CLIENT || vib->gain != 100;
++}
+ 
+ /* MGVF mgvf-0009: what a rewrite did, for the caller to trace. Every field is
+  * filled in whenever a change pointer is passed, changed or not, so that a
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -482,7 +482,13 @@
+     ext->desc               = *desc;
+     ext->index              = get_device_index(desc, &before);
+     ext->unix_device        = unix_device;
+-    if (vib) ext->dualsense_vibration = *vib;
++    {
++        /* MGVF mgvf-0022: the neutral request, never all zeros -- a zeroed
++         * struct now means "silence every motor", which is not what a device
++         * nobody asked anything of should be given. */
++        struct dualsense_vibration none = DUALSENSE_VIBRATION_NONE;
++        ext->dualsense_vibration = vib ? *vib : none;
++    }
+     list_init(&ext->reports);
+ 
+     if (report_fixups & HIDRAW_FIXUP_DUALSENSE_USB)
+@@ -732,7 +738,9 @@
+  */
+ static void dualsense_vibration_options(const struct device_desc *desc, struct dualsense_vibration *vib)
+ {
+-    memset(vib, 0, sizeof(*vib));
++    struct dualsense_vibration none = DUALSENSE_VIBRATION_NONE;
++
++    *vib = none;
+ 
+     if (!desc->is_hidraw) return;
+     if (!is_dualsense_gamepad(desc->vid, desc->pid)) return;
+@@ -758,9 +766,9 @@
+      * in passing: the fix is to stop using all-zeros as the sentinel and store
+      * {CLIENT, 100} instead, which changes every device created with no options
+      * at all, and that deserves its own patch and its own test. */
+-    if (vib->mode == DUALSENSE_VIBRATION_MODE_CLIENT && vib->gain == 100)
++    if (!dualsense_vibration_wanted(vib))
+     {
+-        memset(vib, 0, sizeof(*vib));
++        *vib = none;
+         return;
+     }
+ 
+@@ -2346,8 +2354,8 @@
+ 
+     /* MGVF mgvf-0014: nothing asked for, nothing rewritten.
+      *
+-     * dualsense_vibration_options stores "no options" as all zeros, and says
+-     * that testing for that is the write path's job. One of the two write paths
++     * dualsense_vibration_options stores "no options" as the neutral request
++     * since mgvf-0022, and says that testing for it is the write path's job. One of the two write paths
+      * did it and the other did not: a report that went through the emulation
+      * reached the rewrite with mode 0 and gain 0, and a gain of 0 is not an
+      * absence there -- it is a REQUEST, for silence. So on that route every
+@@ -2357,7 +2365,7 @@
+      *
+      * The test belongs here, where every caller passes, rather than in each of
+      * them. */
+-    if (!ext->dualsense_vibration.mode && !ext->dualsense_vibration.gain) return FALSE;
++    if (!dualsense_vibration_wanted(&ext->dualsense_vibration)) return FALSE;
+     if (!len) return FALSE;
+ 
+     /* MGVF mgvf-0016: BOTH ARE OFFERED THE BUFFER AND EACH DECIDES FOR ITSELF.
+@@ -3040,7 +3048,7 @@
+              * The options are all zero unless this is a hidraw DualSense whose
+              * key asks for something, so every other device takes the last
+              * branch below exactly as before. */
+-            else if (((ext->dualsense_vibration.mode || ext->dualsense_vibration.gain)
++            else if ((dualsense_vibration_wanted(&ext->dualsense_vibration)
+                       /* MGVF mgvf-0020: or the motors are riding this packet */
+                       || (ext->haptics_ride && ext->haptics_output_id))
+                      && packet->reportId == DUALSENSE_BT_REPORT_ID
+@@ -3051,7 +3059,7 @@
+              * whole of what keeps the two apart: an emulated pad's 0x02 has to
+              * become a 0x31, and only a pad nobody is lying about reaches here
+              * with one. */
+-            else if ((ext->dualsense_vibration.mode || ext->dualsense_vibration.gain)
++            else if (dualsense_vibration_wanted(&ext->dualsense_vibration)
+                      && packet->reportId == DUALSENSE_USB_OUTPUT_ID)
+                 dualsense_usb_native_set_output_report(device, packet, &irp->IoStatus);
+             else

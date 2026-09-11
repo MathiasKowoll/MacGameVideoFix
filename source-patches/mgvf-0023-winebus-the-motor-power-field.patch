@@ -1,0 +1,294 @@
+winebus: the field Sony's library claims on every packet, and we never have.
+
+There is one byte-level difference left between what libScePad sends a
+DualSense and what this driver sends it, and it is not the motors and not the
+path. It is bit 0x40 of the second flag byte, and the byte that bit governs.
+
+WHAT WAS ALREADY WRITTEN DOWN HERE. mgvf-0007's header, from the disassembly of
+libScePad 1.0.4.1 at image base 0x180000000: the library sets that bit in its
+own send path at 0x1800072e2, "on every DualSense output report it sends",
+together with report byte 37 -- written at 0x18000737b -- and bit 0x04 of report
+byte 39. That last one is flag2's haptic bit, the one mgvf-0021 is about, so
+the three are set together and mgvf-0007 called them "vibration fields". It
+then let all of the second flag byte through untouched, because "nothing on
+this disk says what the other bits of that byte mean". That was the right call
+for a patch about audio. It is the wrong place to leave it for a patch about
+how hard the pad shakes.
+
+AND WHAT THE CAPTURE SAYS, hid-175158.log, a Bluetooth session in which a title
+drives the pad through that library:
+
+  native 0x31 writes                                    10,886
+  with flag1 0x40                                       10,862
+  with common byte 36 = 0x00                            10,860
+  carrying a motor                                         283
+  of those, with flag1 0x40 AND common 36 = 0x00            282
+
+The last row is the one that matters. Every packet that title sent with a motor
+in it claimed this field and wrote zero into it. The 283rd is a dump the trace
+truncated, not a packet that did something else.
+
+WHAT THE FIELD IS. The community's map reads common byte 36 as two nibbles of
+power REDUCTION -- trigger motors in the low, rumble motors in the high, zero
+meaning no reduction -- which would make that column of zeroes a request for
+full power, repeated sixty times a second. That reading is consistent with the
+disassembly, with the capture, and with the bit being set alongside the two
+vibration fields rather than the audio ones. IT IS NOT PROVED BY ANY OF THEM.
+
+SO THE OPTION CARRIES THE BYTE, NOT A YES OR NO. XInputRumbleMotorPower absent,
+or 256 and up, leaves the field unclaimed: flag1 and common byte 36 go out
+exactly as they came in, which is what this driver has always done and what the
+host test asserts first. A value of 0 to 255 sets the bit and writes that byte.
+0 is what libScePad sends. If the reading above is right then a large value
+must be felt as WEAKER, and that is a test anybody can run with their hand and
+two registry writes, which is worth more than a wiki.
+
+WHY IT MIGHT MATTER AT ALL, said as a question and not as a finding. A field
+nobody claims keeps whatever it was last set to. This driver has never written
+it, so on a pad that some other application reduced -- or that powers on
+reduced -- every measurement of "the haptic path feels weaker than the legacy
+one" was made through an attenuator neither path knew about. That would be a
+confound and not a conclusion, and one registry value now decides it.
+
+BOTH WRITERS, as always. The ride stamps it into the game's own 0x31 and the
+haptics thread puts it in its own packet, so the two cannot disagree about how
+hard the pad should be allowed to shake -- except on a report too short to
+reach common byte 36, where the thread simply does not claim it rather than
+writing the byte somewhere else.
+
+AND BOTH TRACE LINES NOW NAME THE TWO BYTES. mgvf-0016's says flag0 and
+mgvf-0020's said only the motors, which was enough while those were the only
+things either writer could get wrong. A field that goes out with the wrong
+value and a field that never goes out at all read exactly alike in a log that
+does not print it, and this patch is nothing but that field, so the ride's line
+now carries flag0, flag1, flag2 and the power byte as the packet leaves. It is
+the only place the ride's bytes can be seen at all: the client's own write was
+dumped before we touched it and nothing dumps it again.
+
+Signed-off-by: MacGameVideoFix
+---
+--- a/dlls/winebus.sys/dualsense_usb.h
++++ b/dlls/winebus.sys/dualsense_usb.h
+@@ -151,6 +151,40 @@
+ #define DUALSENSE_VIBRATION_PATH_LEGACY 0
+ #define DUALSENSE_VIBRATION_PATH_HAPTIC 1
+ 
++/* MGVF mgvf-0023: the motor power field, and the bit that says the packet
++ * means it.
++ *
++ * WHAT IS ESTABLISHED, from the disassembly already written down in
++ * mgvf-0007's header: libScePad sets bit 0x40 of the SECOND flag byte on every
++ * DualSense output report it sends, in its own send path at 0x1800072e2,
++ * together with report byte 37 -- common byte 36 -- written at 0x18000737b,
++ * and bit 0x04 of report byte 39, which is flag2's haptic bit. mgvf-0007 named
++ * those three "vibration fields" and let them through untouched because
++ * nothing on this disk said what they meant.
++ *
++ * AND FROM THE CAPTURE, hid-175158.log, a Bluetooth session of a title driving
++ * the pad through that library: of 10,886 native 0x31 writes, 10,862 carry
++ * flag1 0x40 and 10,860 carry common byte 36 = 0x00; of the 283 that carry a
++ * motor, 282 carry both and the last is a truncated dump. So the library
++ * claims this field on every packet and writes zero into it.
++ *
++ * WHAT IS NOT ESTABLISHED is the field's own arithmetic. The community's map
++ * reads it as two nibbles of power REDUCTION -- trigger motors low, rumble
++ * motors high, zero meaning none -- which would make libScePad's zero a
++ * request for full power on every packet. That reading is consistent with
++ * everything above and it is not proved by anything here.
++ *
++ * WHICH IS WHY THE OPTION CARRIES THE BYTE rather than a yes or no. Absent,
++ * or anything from 256 up, leaves the field alone: the packet does not claim
++ * it and the pad keeps whatever it was last told, which is what this driver
++ * has always done. A value of 0 to 255 sets the bit and writes that byte --
++ * 0 being exactly what libScePad sends. If the reading above is right, a
++ * non-zero value should be FELT AS WEAKER, and that is the test which decides
++ * it without anybody having to trust a wiki. */
++#define DUALSENSE_COMMON_MOTOR_POWER    36
++#define DUALSENSE_FLAG1_MOTOR_POWER     0x40
++#define DUALSENSE_MOTOR_POWER_UNCLAIMED 0x100
++
+ /* MGVF mgvf-0016: the shortest output report that carries the whole of what
+  * the rewrite reads. flag2 is the last of the four bytes and it is common byte
+  * 38, so a USB report has to reach index 39 and therefore be 40 bytes long.
+@@ -329,7 +363,8 @@
+ int dualsense_bt_output_is_inert(const unsigned char *report, unsigned int len);
+ unsigned int dualsense_bt_stamp_motors(unsigned char *report, unsigned int len,
+                                        unsigned char right, unsigned char left,
+-                                       unsigned int path, dualsense_crc32_fn crc32);
++                                       unsigned int path, unsigned int power,
++                                       dualsense_crc32_fn crc32);
+ 
+ /* In place. Each returns len when the report was changed and 0 when it was
+  * left as it was: too short to carry a CRC tail at all, or, for the read, the
+--- a/dlls/winebus.sys/dualsense_usb.c
++++ b/dlls/winebus.sys/dualsense_usb.c
+@@ -570,7 +570,8 @@
+ 
+ unsigned int dualsense_bt_stamp_motors(unsigned char *report, unsigned int len,
+                                        unsigned char right, unsigned char left,
+-                                       unsigned int path, dualsense_crc32_fn crc32)
++                                       unsigned int path, unsigned int power,
++                                       dualsense_crc32_fn crc32)
+ {
+     static const unsigned char seed = DUALSENSE_CRC_SEED_OUTPUT;
+     unsigned char *common = report + DUALSENSE_BT_COMMON;
+@@ -587,6 +588,14 @@
+         common[DUALSENSE_COMMON_FLAG0] |= DUALSENSE_FLAG0_LEGACY_VIBRATION;
+     common[DUALSENSE_COMMON_MOTOR_RIGHT] = right;
+     common[DUALSENSE_COMMON_MOTOR_LEFT] = left;
++    /* MGVF mgvf-0023: claim the motor power field, or leave it to whatever the
++     * pad was last told. A 0x31 is long enough to carry it by definition --
++     * the length was checked above -- so there is no short-report case here. */
++    if (power < DUALSENSE_MOTOR_POWER_UNCLAIMED)
++    {
++        common[DUALSENSE_COMMON_FLAG1] |= DUALSENSE_FLAG1_MOTOR_POWER;
++        common[DUALSENSE_COMMON_MOTOR_POWER] = (unsigned char)power;
++    }
+ 
+     crc = crc32(0, &seed, 1);
+     crc = crc32(crc, report, DUALSENSE_BT_REPORT_LEN - DUALSENSE_CRC_TAIL);
+--- a/dlls/winebus.sys/dualsense_haptics.h
++++ b/dlls/winebus.sys/dualsense_haptics.h
+@@ -118,6 +118,13 @@
+ #define DUALSENSE_VIBRATION_PATH_HAPTIC 1
+ #endif
+ 
++/* MGVF mgvf-0023: mirrored for the same reason -- the sentinel that says the
++ * packet is not claiming the motor power field. dualsense_usb.h carries the
++ * field's own header and the evidence for it. */
++#ifndef DUALSENSE_MOTOR_POWER_UNCLAIMED
++#define DUALSENSE_MOTOR_POWER_UNCLAIMED 0x100
++#endif
++
+ #define DUALSENSE_HAPTICS_BT_DEADBAND      4
+ 
+ /* MGVF mgvf-0020: how long the client has to be silent before the haptics
+@@ -211,7 +218,8 @@
+ unsigned int dualsense_haptics_motor_report(unsigned char *out, unsigned int out_size,
+                                             unsigned int length,
+                                             unsigned int rumble, unsigned int buzz,
+-                                            unsigned int gain, unsigned int path);
++                                            unsigned int gain, unsigned int path,
++                                            unsigned int power);
+ 
+ /* MGVF mgvf-0010, second half: describe the fields of the pad's Bluetooth input report.
+  *
+--- a/dlls/winebus.sys/dualsense_haptics.c
++++ b/dlls/winebus.sys/dualsense_haptics.c
+@@ -461,6 +461,13 @@
+ #define HAPTICS_OUT_AUDIO_BIT    0x02
+ #define HAPTICS_OUT_FLAG2        39
+ #define HAPTICS_OUT_HAPTIC_BIT   0x04
++/* MGVF mgvf-0023: the motor power field in this report's wired offsets --
++ * common byte 36, one past the last byte flag1's own bit governs. Like flag2
++ * it needs a report long enough to hold it, and unlike flag2 a report that is
++ * too short can simply not claim it: the packet is then what it was before
++ * this patch, rather than one that selects nothing. */
++#define HAPTICS_OUT_MOTOR_POWER  37
++#define HAPTICS_OUT_POWER_BIT    0x40
+ 
+ /* A percentage over one motor byte, saturating rather than wrapping: asking for
+  * twice full power is asking for full power, not for none. */
+@@ -476,7 +483,8 @@
+ unsigned int dualsense_haptics_motor_report(unsigned char *out, unsigned int out_size,
+                                             unsigned int length,
+                                             unsigned int rumble, unsigned int buzz,
+-                                            unsigned int gain, unsigned int path)
++                                            unsigned int gain, unsigned int path,
++                                            unsigned int power)
+ {
+     if (length <= HAPTICS_OUT_MOTOR_LEFT) return 0;
+     if (out_size < length) return 0;
+@@ -495,6 +503,11 @@
+     }
+     else out[HAPTICS_OUT_FLAG0] = HAPTICS_OUT_LEGACY_BIT;
+     out[HAPTICS_OUT_FLAG1] = 0;
++    if (power < DUALSENSE_MOTOR_POWER_UNCLAIMED && length > HAPTICS_OUT_MOTOR_POWER)
++    {
++        out[HAPTICS_OUT_FLAG1] |= HAPTICS_OUT_POWER_BIT;
++        out[HAPTICS_OUT_MOTOR_POWER] = (unsigned char)power;
++    }
+     out[HAPTICS_OUT_MOTOR_RIGHT] = haptics_scale(buzz >> 8, gain);
+     out[HAPTICS_OUT_MOTOR_LEFT] = haptics_scale(rumble >> 8, gain);
+     return length;
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -147,6 +147,7 @@
+      * haptics_client_seen is the tick of the client's last 0x31. */
+     unsigned int haptics_ride;
+     unsigned int haptics_path; /* MGVF mgvf-0021: DUALSENSE_VIBRATION_PATH_* */
++    unsigned int haptics_power; /* MGVF mgvf-0023: the byte to write into the motor power field, or DUALSENSE_MOTOR_POWER_UNCLAIMED to leave it alone */
+     LONG haptics_sent;
+     LONG haptics_client_seen; /* GetTickCount, 32 bits: wine's PE build declares no 64-bit interlocked exchange, and a 100 ms window survives a wrap */
+     LONG haptics_thread_writing; /* non-zero while the thread is inside its write; the ride does not stamp meanwhile */
+@@ -1929,7 +1930,8 @@
+                                                                              rumble, buzz,
+                                                                              dualsense_speaks_bluetooth(ext)
+                                                                              ? 100 : ext->haptics_gain,
+-                                                                             ext->haptics_path)))
++                                                                             ext->haptics_path,
++                                                                             ext->haptics_power)))
+         {
+             WARN("device %p: no output report %#x of a usable length to carry the motors\n",
+                  device, DUALSENSE_HAPTICS_MOTOR_REPORT_ID);
+@@ -1973,10 +1975,18 @@
+             }
+         }
+ 
+-        TRACE("device %p: the packet carries motors %u/%u, flag0 %#x, %u bytes, at gain %u%%\n", device,
++        /* MGVF mgvf-0023: flag1 and the power byte are named here for the same
++         * reason flag0 already was -- a field that goes out wrong and a field
++         * that never goes out at all read identically in a log that does not
++         * print it, and this one is the whole of an experiment. */
++        TRACE("device %p: the packet carries motors %u/%u, flag0 %#x, flag1 %#x, power %#x, %u bytes, at gain %u%%\n",
++              device,
+               motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_MOTOR_RIGHT],
+               motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_MOTOR_LEFT],
+               motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_FLAG0],
++              motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_FLAG1],
++              out.reportBufferLen > DUALSENSE_USB_COMMON + DUALSENSE_COMMON_MOTOR_POWER
++              ? motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_MOTOR_POWER] : 0,
+               (unsigned int)out.reportBufferLen,
+               dualsense_speaks_bluetooth(ext) ? 100 : ext->haptics_gain);
+ 
+@@ -2269,6 +2279,18 @@
+                  " nothing. Set the vibration to the game's own choice to compare the two paths.\n", device);
+     }
+ 
++    /* MGVF mgvf-0023: the motor power field. The option carries the BYTE, not
++     * a yes or no: absent -- or anything from 256 up -- leaves the field
++     * unclaimed, which is what this driver has always sent, and 0 to 255 sets
++     * the bit and writes that byte. dualsense_usb.h has the evidence and says
++     * what a non-zero value is expected to do if the community's reading of
++     * the field is right. */
++    ext->haptics_power = get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumbleMotorPower",
++                                           DUALSENSE_MOTOR_POWER_UNCLAIMED);
++    if (ext->haptics_power < DUALSENSE_MOTOR_POWER_UNCLAIMED)
++        TRACE("device %p: claiming the motor power field and writing %#x into it, as Sony's library does on"
++              " every packet with 0\n", device, ext->haptics_power);
++
+     ext->haptics_ride = get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumbleRide", 0);
+     ext->haptics_sent = -1;
+     ext->haptics_client_seen = 0;
+@@ -2474,10 +2496,19 @@
+         TRACE("device %p: would have ridden the client's 0x31 with motors %u/%u -- dry run, not stamped\n", device, r, l);
+         return FALSE;
+     }
+-    if (!dualsense_bt_stamp_motors(report, DUALSENSE_BT_REPORT_LEN, r, l, ext->haptics_path, dualsense_crc32))
++    if (!dualsense_bt_stamp_motors(report, DUALSENSE_BT_REPORT_LEN, r, l, ext->haptics_path,
++                                   ext->haptics_power, dualsense_crc32))
+         return FALSE;
+     dualsense_haptics_note_sent(ext, r, l);
+-    TRACE("device %p: rode the client's 0x31 with motors %u/%u -- no packet of ours on the link\n", device, r, l);
++    /* MGVF mgvf-0023: and what the stamp actually put in the packet. This is
++     * the only place the ride's bytes can be seen: the client's own write was
++     * already dumped before we touched it, and nothing dumps it again. */
++    TRACE("device %p: rode the client's 0x31 with motors %u/%u, flag0 %#x, flag1 %#x, flag2 %#x, power %#x"
++          " -- no packet of ours on the link\n", device, r, l,
++          report[DUALSENSE_BT_COMMON + DUALSENSE_COMMON_FLAG0],
++          report[DUALSENSE_BT_COMMON + DUALSENSE_COMMON_FLAG1],
++          report[DUALSENSE_BT_COMMON + DUALSENSE_COMMON_FLAG2],
++          report[DUALSENSE_BT_COMMON + DUALSENSE_COMMON_MOTOR_POWER]);
+     return TRUE;
+ }
+ 

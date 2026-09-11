@@ -1,0 +1,224 @@
+winebus: ask the motors the way Sony's library asks them, on request.
+
+A DualSense knows two ways to be told to vibrate. LEGACY is flag0 bit 0x01,
+which SDL calls "Enable rumble emulation": the pad drives its voice coils in
+imitation of a pair of rotating-mass motors. HAPTIC is flag2 bit 0x04, SDL's
+"Enable improved rumble emulation", the branch its PS5 driver takes for
+firmware 2.24 and above. Both also set flag0 bit 0x02, which is why that bit is
+named for what it does -- disable audio haptics -- and not for a path.
+
+mgvf-0010 has always sent LEGACY. The reason is in mgvf-0009's header: on a
+six-pulse ladder by hand, legacy at 255 felt clearly stronger than haptic at
+255. That is one person's hand and it is the whole of the evidence, and it was
+gathered when this driver could deliver about sixteen updates a second, because
+anything faster queued behind the game's own writes and cost it frames.
+
+mgvf-0020 removed that limit. The motors now ride the game's own packet at its
+own rate -- sixty a second on the title measured -- so the comparison is worth
+making again under conditions the ladder never had. XInputRumbleHapticPath, off
+by default, is that comparison: one registry value, both writers, no rebuild
+between the two runs.
+
+WHAT SONY'S LIBRARY DOES, since it is the reference. In the Bluetooth session
+captured here it sets flag0 0x02 and flag2 0x04 on all 8,608 of its packets --
+including the 96.5% that carry no motor -- and never once sets bit 0x01. Every
+native title measured here takes the haptic path.
+
+TWO OPTIONS THAT CONTRADICT EACH OTHER, said plainly because the driver cannot
+resolve it. mgvf-0009's VibrationMode 1 exists to rewrite a client's haptic
+choice into the legacy motors, and it runs on the packet AFTER the stamp. So
+asking for both is asking for opposite things and the rewrite wins; a WARN at
+device arrival says so. To compare the paths, leave the vibration at the game's
+own choice.
+
+WHAT IS NOT ESTABLISHED: which path feels better at sixty updates a second.
+That is what the option is for, and no claim is made here about the outcome.
+The thread's own packet takes the same path as the ride, so the two writers
+cannot disagree -- except on a report too short to carry flag2 at byte 39,
+where it keeps the legacy path rather than selecting nothing at all.
+
+Signed-off-by: MacGameVideoFix
+---
+--- a/dlls/winebus.sys/dualsense_usb.h
++++ b/dlls/winebus.sys/dualsense_usb.h
+@@ -132,6 +132,25 @@
+ #define DUALSENSE_FLAG0_DISABLE_AUDIO_HAPTICS 0x02
+ #define DUALSENSE_COMMON_FLAG1           1
+ 
++/* MGVF mgvf-0021: the two ways a packet can ask the motors to move, named
++ * after what the pad does rather than after which is "better".
++ *
++ * LEGACY is flag0 bit 0x01, SDL's "Enable rumble emulation": the pad puts its
++ * voice coils into a mode that imitates a pair of rotating-mass motors.
++ * HAPTIC is flag2 bit 0x04, SDL's "Enable improved rumble emulation", the
++ * branch its PS5 driver takes for firmware 2.24 and above. BOTH also set flag0
++ * bit 0x02 -- SDL sets it on either branch and so does Sony's own library on
++ * all 8,608 packets of the session captured here, which is why that bit is
++ * named for what it is and not for the path it belongs to.
++ *
++ * mgvf-0010 has always sent LEGACY, on the strength of a six-pulse ladder in
++ * which it felt stronger than HAPTIC at the same value. That ladder was run
++ * when this driver could only deliver about sixteen updates a second; at the
++ * sixty a second mgvf-0020 now delivers the comparison is worth making again,
++ * which is what XInputRumbleHapticPath is for. */
++#define DUALSENSE_VIBRATION_PATH_LEGACY 0
++#define DUALSENSE_VIBRATION_PATH_HAPTIC 1
++
+ /* MGVF mgvf-0016: the shortest output report that carries the whole of what
+  * the rewrite reads. flag2 is the last of the four bytes and it is common byte
+  * 38, so a USB report has to reach index 39 and therefore be 40 bytes long.
+@@ -289,7 +308,7 @@
+ int dualsense_bt_output_is_inert(const unsigned char *report, unsigned int len);
+ unsigned int dualsense_bt_stamp_motors(unsigned char *report, unsigned int len,
+                                        unsigned char right, unsigned char left,
+-                                       dualsense_crc32_fn crc32);
++                                       unsigned int path, dualsense_crc32_fn crc32);
+ 
+ /* In place. Each returns len when the report was changed and 0 when it was
+  * left as it was: too short to carry a CRC tail at all, or, for the read, the
+--- a/dlls/winebus.sys/dualsense_usb.c
++++ b/dlls/winebus.sys/dualsense_usb.c
+@@ -570,7 +570,7 @@
+ 
+ unsigned int dualsense_bt_stamp_motors(unsigned char *report, unsigned int len,
+                                        unsigned char right, unsigned char left,
+-                                       dualsense_crc32_fn crc32)
++                                       unsigned int path, dualsense_crc32_fn crc32)
+ {
+     static const unsigned char seed = DUALSENSE_CRC_SEED_OUTPUT;
+     unsigned char *common = report + DUALSENSE_BT_COMMON;
+@@ -578,7 +578,13 @@
+ 
+     if (len != DUALSENSE_BT_REPORT_LEN || report[0] != DUALSENSE_BT_REPORT_ID) return 0;
+ 
+-    common[DUALSENSE_COMMON_FLAG0] |= DUALSENSE_FLAG0_LEGACY_VIBRATION | DUALSENSE_FLAG0_DISABLE_AUDIO_HAPTICS;
++    /* MGVF mgvf-0021: 0x02 on both paths, because SDL sets it on both and so
++     * does Sony's library; only the selecting bit differs. */
++    common[DUALSENSE_COMMON_FLAG0] |= DUALSENSE_FLAG0_DISABLE_AUDIO_HAPTICS;
++    if (path == DUALSENSE_VIBRATION_PATH_HAPTIC)
++        common[DUALSENSE_COMMON_FLAG2] |= DUALSENSE_FLAG2_HAPTIC_VIBRATION;
++    else
++        common[DUALSENSE_COMMON_FLAG0] |= DUALSENSE_FLAG0_LEGACY_VIBRATION;
+     common[DUALSENSE_COMMON_MOTOR_RIGHT] = right;
+     common[DUALSENSE_COMMON_MOTOR_LEFT] = left;
+ 
+--- a/dlls/winebus.sys/dualsense_haptics.h
++++ b/dlls/winebus.sys/dualsense_haptics.h
+@@ -109,6 +109,15 @@
+  * is 1.6% of a motor's range. Measured on Beast of Reincarnation: 3-5 fps and
+  * visible stutter became 2 fps and none, with the rumble unchanged to the hand
+  * that had been complaining about it. */
++/* MGVF mgvf-0021: the motor path, mirrored from dualsense_usb.h so this header
++ * stands on its own whichever order a translation unit includes them in. The
++ * two files are compiled together and a mismatch would be caught at once, but
++ * the definition belongs beside the flag bits it selects, which are there. */
++#ifndef DUALSENSE_VIBRATION_PATH_LEGACY
++#define DUALSENSE_VIBRATION_PATH_LEGACY 0
++#define DUALSENSE_VIBRATION_PATH_HAPTIC 1
++#endif
++
+ #define DUALSENSE_HAPTICS_BT_DEADBAND      4
+ 
+ /* MGVF mgvf-0020: how long the client has to be silent before the haptics
+@@ -202,7 +211,7 @@
+ unsigned int dualsense_haptics_motor_report(unsigned char *out, unsigned int out_size,
+                                             unsigned int length,
+                                             unsigned int rumble, unsigned int buzz,
+-                                            unsigned int gain);
++                                            unsigned int gain, unsigned int path);
+ 
+ /* MGVF mgvf-0010, second half: describe the fields of the pad's Bluetooth input report.
+  *
+--- a/dlls/winebus.sys/dualsense_haptics.c
++++ b/dlls/winebus.sys/dualsense_haptics.c
+@@ -455,6 +455,12 @@
+  * without it, the request is accepted and nothing is felt: the pad has the
+  * effect but not through the motors. */
+ #define HAPTICS_OUT_LEGACY_BIT   (0x01 | 0x02)
++/* MGVF mgvf-0021: the other path. 0x02 stays on either way -- see
++ * dualsense_usb.h -- and the selecting bit moves to flag2, which lives at
++ * common byte 38 and so needs a report long enough to hold it. */
++#define HAPTICS_OUT_AUDIO_BIT    0x02
++#define HAPTICS_OUT_FLAG2        39
++#define HAPTICS_OUT_HAPTIC_BIT   0x04
+ 
+ /* A percentage over one motor byte, saturating rather than wrapping: asking for
+  * twice full power is asking for full power, not for none. */
+@@ -470,14 +476,24 @@
+ unsigned int dualsense_haptics_motor_report(unsigned char *out, unsigned int out_size,
+                                             unsigned int length,
+                                             unsigned int rumble, unsigned int buzz,
+-                                            unsigned int gain)
++                                            unsigned int gain, unsigned int path)
+ {
+     if (length <= HAPTICS_OUT_MOTOR_LEFT) return 0;
+     if (out_size < length) return 0;
++    /* The haptic path's bit is at byte 39; a report too short to carry it
++     * cannot select that path, so it keeps the legacy one rather than sending
++     * a packet that selects nothing and buzzes not at all. */
++    if (path == DUALSENSE_VIBRATION_PATH_HAPTIC && length <= HAPTICS_OUT_FLAG2)
++        path = DUALSENSE_VIBRATION_PATH_LEGACY;
+ 
+     memset(out, 0, length);
+     out[0] = DUALSENSE_HAPTICS_MOTOR_REPORT_ID;
+-    out[HAPTICS_OUT_FLAG0] = HAPTICS_OUT_LEGACY_BIT;
++    if (path == DUALSENSE_VIBRATION_PATH_HAPTIC)
++    {
++        out[HAPTICS_OUT_FLAG0] = HAPTICS_OUT_AUDIO_BIT;
++        out[HAPTICS_OUT_FLAG2] = HAPTICS_OUT_HAPTIC_BIT;
++    }
++    else out[HAPTICS_OUT_FLAG0] = HAPTICS_OUT_LEGACY_BIT;
+     out[HAPTICS_OUT_FLAG1] = 0;
+     out[HAPTICS_OUT_MOTOR_RIGHT] = haptics_scale(buzz >> 8, gain);
+     out[HAPTICS_OUT_MOTOR_LEFT] = haptics_scale(rumble >> 8, gain);
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -146,6 +146,7 @@
+      * for none), shared by both writers so one deadband governs both, and
+      * haptics_client_seen is the tick of the client's last 0x31. */
+     unsigned int haptics_ride;
++    unsigned int haptics_path; /* MGVF mgvf-0021: DUALSENSE_VIBRATION_PATH_* */
+     LONG haptics_sent;
+     LONG haptics_client_seen; /* GetTickCount, 32 bits: wine's PE build declares no 64-bit interlocked exchange, and a 100 ms window survives a wrap */
+     LONG haptics_thread_writing; /* non-zero while the thread is inside its write; the ride does not stamp meanwhile */
+@@ -1919,7 +1920,8 @@
+         if (!length || !(out.reportBufferLen = dualsense_haptics_motor_report(motors, sizeof(motors), length,
+                                                                              rumble, buzz,
+                                                                              dualsense_speaks_bluetooth(ext)
+-                                                                             ? 100 : ext->haptics_gain)))
++                                                                             ? 100 : ext->haptics_gain,
++                                                                             ext->haptics_path)))
+         {
+             WARN("device %p: no output report %#x of a usable length to carry the motors\n",
+                  device, DUALSENSE_HAPTICS_MOTOR_REPORT_ID);
+@@ -2245,6 +2247,20 @@
+     /* MGVF mgvf-0020: ride the client's packet. OFF until it is measured; the
+      * header of dualsense_usb.h says what it is for and why the packet has to
+      * be free rather than merely rare. */
++    /* MGVF mgvf-0021: which way the motors are asked to move. The default is
++     * the legacy path this driver has always used; 1 selects the pad's own
++     * haptic path, the one Sony's library uses on every packet. */
++    ext->haptics_path = get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumbleHapticPath", 0)
++                        ? DUALSENSE_VIBRATION_PATH_HAPTIC : DUALSENSE_VIBRATION_PATH_LEGACY;
++    if (ext->haptics_path == DUALSENSE_VIBRATION_PATH_HAPTIC)
++    {
++        TRACE("device %p: the motors are asked through the pad's haptic path, not the legacy motors\n", device);
++        if (ext->dualsense_vibration.mode == DUALSENSE_VIBRATION_MODE_LEGACY)
++            WARN("device %p: VibrationMode asks for the legacy motors and XInputRumbleHapticPath asks for the"
++                 " haptic one; the rewrite runs after the stamp, so the legacy path wins and this option does"
++                 " nothing. Set the vibration to the game's own choice to compare the two paths.\n", device);
++    }
++
+     ext->haptics_ride = get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumbleRide", 0);
+     ext->haptics_sent = -1;
+     ext->haptics_client_seen = 0;
+@@ -2450,7 +2466,8 @@
+         TRACE("device %p: would have ridden the client's 0x31 with motors %u/%u -- dry run, not stamped\n", device, r, l);
+         return FALSE;
+     }
+-    if (!dualsense_bt_stamp_motors(report, DUALSENSE_BT_REPORT_LEN, r, l, dualsense_crc32)) return FALSE;
++    if (!dualsense_bt_stamp_motors(report, DUALSENSE_BT_REPORT_LEN, r, l, ext->haptics_path, dualsense_crc32))
++        return FALSE;
+     dualsense_haptics_note_sent(ext, r, l);
+     TRACE("device %p: rode the client's 0x31 with motors %u/%u -- no packet of ours on the link\n", device, r, l);
+     return TRUE;

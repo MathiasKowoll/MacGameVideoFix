@@ -9,7 +9,13 @@
 # has a story worth carrying. Values winebus reads under a pad's own key:
 # Hidraw, SeizeDevice, UsbEmulation, ProductId, ForwardFeatureWrites,
 # VibrationMode, VibrationGain, XInputRumble, XInputRumbleInterval,
-# XInputRumbleDryRun, XInputRumbleDeadband, XInputRumbleRide.
+# XInputRumbleDryRun, XInputRumbleDeadband, XInputRumbleRide,
+# XInputRumbleHapticPath, XInputRumbleMotorPower.
+#
+# The last one carries a BYTE and not a switch: 0 to 255 is written into the
+# motor power field with the bit that claims it, and 256 or above -- or the
+# value removed -- leaves the field alone, which is what every build before
+# mgvf-0023 did. 0 is what Sony's own library sends on every packet.
 #
 # The launcher rewrites six of those per title and never touches the others, so
 # anything set here that is not one of its six outlives every launch -- which is
