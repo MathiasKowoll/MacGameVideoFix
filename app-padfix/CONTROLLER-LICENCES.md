@@ -143,7 +143,7 @@ for.
 
 | file | bytes | sha256 |
 | --- | --- | --- |
-| `engine-controller-winebus.sys` | 73,728 | `ad48f01d4ef9d1519b9fbe2e11beb808a21122b2622c1b06e21abf54eab89d8c` |
+| `engine-controller-winebus.sys` | 73,728 | `518680c2d7486ba3f973cc7555752d15bc81cb1928f975794ea2cf1827ee99ee` |
 | `engine-controller-setupapi.dll` | 462,848 | `9806fae23e1b0ee8effc22212992b115e1896381139c0f4e4be44eade2347a1a` |
 | `engine-controller-ntoskrnl.exe` | 393,216 | `9231cb23bd73e0ccbaca37f1293eb2d75ad42bb34c7b9d139ff76d1c812893a8` |
 | `engine-controller-hidclass.sys` | 53,248 | `31876ac61a5d6276abd1af7a89871417032f098840d05b3b665b886ba61c1998` |

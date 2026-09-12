@@ -17,9 +17,10 @@ the exact shape of a held button being cleared.
 That is a candidate and not a diagnosis. The game may equally be doing something
 this driver has nothing to do with, and nothing here has measured it. What this
 patch provides is the one-bit experiment that tells the two apart:
-XInputRumbleStubButton 0 builds the same device with the button gone and a byte
-of padding in its place, so the input report stays one byte and every offset
-downstream is unmoved.
+XInputRumbleStubButton 0 builds the same device with the button gone and eight
+bits of padding in place of its one bit plus the seven that padded it -- so the
+input report is the same two bytes it has always been and nothing downstream
+moves.
 
 WHY IT IS NOT THE DEFAULT, and this is the whole reason it is an option rather
 than a deletion. The reason the button exists has not stopped being true.
@@ -78,16 +79,17 @@ Signed-off-by: MacGameVideoFix
  {
      const unsigned char head[] =
      {
-@@ -186,21 +186,64 @@
+@@ -186,21 +186,65 @@
              REPORT_COUNT(1, 1),
              INPUT(1, Cnst|Var|Abs),
      };
 -    if (out_size < sizeof(head)) return 0;
 -    memcpy(out, head, sizeof(head));
 -    return sizeof(head);
-+    /* MGVF mgvf-0029: the same device with the button taken out, and one byte
-+     * of padding in its place so the input report is still one byte long and
-+     * every offset downstream is unmoved.
++    /* MGVF mgvf-0029: the same device with the button taken out, and eight bits
++     * of padding in place of its one bit plus the seven that padded it -- so
++     * the input report is the same two bytes it has always been and nothing
++     * downstream moves.
 +     *
 +     * WHAT IT IS FOR. The button above is never pressed -- it exists so that a
 +     * client counting button caps does not see zero. A game that polls both the
