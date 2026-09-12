@@ -19,7 +19,11 @@
 # hidapi asks the HID device's parent devnode for its compatible ids and looks
 # for BTHENUM. Under wine CM_Get_Parent was a stub and winebus named no bus at
 # all, so the answer was always "not Bluetooth" -- Steam's log says
-# "bluetooth 0" for a pad that is -- and the pad never rumbled. With the files
+# "bluetooth 0" for a pad that is -- and every client that asks that way then
+# built the wrong report, which the pad ignores in silence. Which is why the
+# symptom was never a flat "no rumble" but a lottery: a title that writes the
+# pad's own report by some other route rumbles, one that trusts the bus answer
+# does not. With the files
 # here the answer is the true one: rumble, the PS button and the touchpad
 # work over Bluetooth, measured on 2026-09-08; trigger effects ride in the same
 # report, and the owner reports them in a title that sends them.

@@ -4397,7 +4397,9 @@ enum EngineControllerSet {
 
     /// mgvf-0002: winebus names the bus in its compatible ids, so a client can
     /// tell a Bluetooth pad from a wired one. The one that matters for
-    /// everybody: without it a DualSense on Bluetooth never rumbles.
+    /// everybody: without it a DualSense on Bluetooth rumbles in some titles
+    /// and not others, and which is which is not something anybody can
+    /// predict -- it depends on which report the title happens to write.
     static func namesTheBus(engine: URL) -> Bool {
         contains("BTHENUM\\{00001124-0000-1000-8000-00805f9b34fb}", inWinebusOf: engine)
     }
@@ -4455,8 +4457,9 @@ struct ControllerSetRow: View {
             } else {
                 Text("not installed").font(.callout).foregroundStyle(.secondary)
                     .help("This CrossOver's winebus is the one it shipped with. A "
-                          + "DualSense on Bluetooth will not rumble. Making an engine "
-                          + "copy installs the set.")
+                          + "DualSense on Bluetooth will rumble in some games and not "
+                          + "others, and its adaptive triggers the same. Making an "
+                          + "engine copy installs the set.")
             }
         }
     }
