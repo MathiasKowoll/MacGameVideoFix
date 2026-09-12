@@ -1,0 +1,249 @@
+winebus: a deadband that measures what the game asked, not what the pad gets.
+
+The band is four of 255 and it was compared against the value the GAME asked
+for. The gain that decides what the pad actually receives is applied afterwards,
+by mgvf-0009's rewrite. So the band meant four of 255 only at a strength of x1,
+and at x10 it meant forty.
+
+MEASURED ON THE TRACES OF 2026-09-11, the same sessions this option has been
+tuned on all week:
+
+                                        at x4          at x10
+  changes held under the band            358            632
+  movement held, median at the pad         4 of 255      10 of 255
+  the largest held, at the pad            12 of 255      30 of 255
+  held changes worth >= 10 at the pad     16%           52%
+  held changes worth >= 25 at the pad      0            106
+
+Raising the strength was making the rumble COARSER instead of stronger. Half of
+everything the band threw away at x10 was a step the hand would have felt, and
+a hundred and six of them were steps of a tenth of the motor's range. The
+control says "strength" and what it was doing past the middle of its travel was
+sanding the texture off. That is what a person holding the pad reported, twice,
+before anybody looked at this line.
+
+So the band compares the movement AT THE PAD now, through the same arithmetic
+the rewrite will do -- which is why dualsense_scale_motor moves into the header.
+Two copies of three lines that have to agree is how they stop agreeing.
+
+AND THE SECOND HALF, WHICH IS THE ONE THAT NEEDS CARE, because the band is the
+reason this driver stopped costing frames and nothing should be taken off it on
+a hunch. mgvf-0018 took Beast of Reincarnation from 3-5 fps lost with visible
+stutter to 2 fps and none, by not spending a slot on a link that drains about
+sixty-five reports a second. Every change it held was a packet of OURS that did
+not go out.
+
+A RIDDEN PACKET IS NOT ONE OF OURS. dualsense_bt_set_output_report forwards the
+client's 0x31 either way: stamped, from our copy; untouched, from the client's
+own buffer. Same packet, same link, same slot, whichever branch runs. The band
+on the ride cannot change how much is offered to the radio. All it can decide is
+whether the motors inside a packet that is leaving anyway are current or stale,
+and it was choosing stale sixty per cent of the time.
+
+What taking it off does add is a CRC over 74 bytes on the packets it no longer
+skips, on the thread carrying the client's write. At the sixty writes a second
+measured that is arithmetic and not I/O, against a write whose median cost was
+362 microseconds -- and what made that thread expensive was back-pressure on the
+radio, which this adds none of.
+
+So the band stays exactly where it earned its place, on the thread's own writes,
+which really are slots. The ride carries everything, at the game's own rate,
+because it is free.
+
+XInputRumbleRideBand PUTS IT BACK. 1 restores the behaviour before this patch on
+ridden packets, without a rebuild and without touching the thread's band, so if
+frames ever regress on some title that is the one value to move -- and moving it
+says which of these two halves was wrong rather than leaving both suspect.
+
+NOT CLAIMED: that this makes the rumble stronger. It cannot. The peak is the
+peak and the gain saturates at 255; what comes back is everything between the
+peaks, which is where a rumble is actually felt.
+
+Signed-off-by: MacGameVideoFix
+---
+--- a/dlls/winebus.sys/dualsense_usb.h
++++ b/dlls/winebus.sys/dualsense_usb.h
+@@ -373,6 +373,21 @@
+  * inert 0x31, sets the two bits the legacy motors need, and signs the packet
+  * again. Returns len, or 0 for anything that is not a 78-byte 0x31. It does not
+  * check inertness itself: the caller decides, and says why in its own line. */
++/* MGVF mgvf-0026: a percentage over one motor byte, saturating rather than
++ * wrapping, moved here from dualsense_usb.c because a second caller needs the
++ * same answer. The deadband has to know what a motor will be WHEN IT REACHES
++ * THE PAD, and the only way to know that is to do the arithmetic the rewrite
++ * will do. Two copies of three lines that must agree is how they stop
++ * agreeing. */
++static inline unsigned char dualsense_scale_motor(unsigned char motor, unsigned int gain)
++{
++    unsigned int scaled;
++
++    if (!motor) return motor;
++    scaled = ((unsigned int)motor * gain) / 100;
++    return scaled > 255 ? 255 : (unsigned char)scaled;
++}
++
+ int dualsense_bt_output_is_inert(const unsigned char *report, unsigned int len);
+ unsigned int dualsense_bt_stamp_motors(unsigned char *report, unsigned int len,
+                                        unsigned char right, unsigned char left,
+--- a/dlls/winebus.sys/dualsense_usb.c
++++ b/dlls/winebus.sys/dualsense_usb.c
+@@ -397,15 +397,6 @@
+  * measures the pad's firmware version either, so which path Sony intended for
+  * it is unknown. And no title has yet been played with the rewrite on: what is
+  * measured is the ladder, by hand, and the corpus the mode came out of. */
+-static unsigned char dualsense_scale_motor(unsigned char motor, unsigned int gain)
+-{
+-    unsigned int scaled;
+-
+-    if (!motor) return motor;
+-    scaled = ((unsigned int)motor * gain) / 100;
+-    return scaled > 255 ? 255 : (unsigned char)scaled;
+-}
+-
+ /* The rewrite itself, over the common block of a packed 0x31. Returns non-zero
+  * when it changed a byte.
+  *
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -148,6 +148,7 @@
+     unsigned int haptics_ride;
+     unsigned int haptics_path; /* MGVF mgvf-0021: DUALSENSE_VIBRATION_PATH_* */
+     unsigned int haptics_power; /* MGVF mgvf-0023: the byte to write into the motor power field, or DUALSENSE_MOTOR_POWER_UNCLAIMED to leave it alone */
++    unsigned int haptics_ride_band; /* MGVF mgvf-0026: hold ridden packets with the band too, as before mgvf-0026 */
+     LONG haptics_sent;
+     LONG haptics_client_seen; /* GetTickCount, 32 bits: wine's PE build declares no 64-bit interlocked exchange, and a 100 ms window survives a wrap */
+     LONG haptics_thread_writing; /* non-zero while the thread is inside its write; the ride does not stamp meanwhile */
+@@ -1808,7 +1809,60 @@
+  * worth a packet from the thread, and the other way round. Zero is exempt in
+  * both directions for the reason mgvf-0018 gives -- a pad still buzzing after
+  * the game stopped asking is a defect, not a saving. */
++/* MGVF mgvf-0026: is this pair worth sending, and the second question is not
++ * the one this function used to ask.
++ *
++ * IT ASKED IT OF THE WRONG NUMBER. The band is four of 255 and it was compared
++ * against what the GAME asked for, while the gain that decides what the pad
++ * actually gets is applied afterwards, by the rewrite. At a strength of ten a
++ * movement of three was held as imperceptible and would have been THIRTY of 255
++ * at the motors. Measured on the traces of 2026-09-11: at x4, 358 changes held,
++ * none of them worth as much as 25 at the pad; at x10, 632 held and 52% of them
++ * worth ten or more, 106 of them worth 25 or more. Raising the strength was
++ * making the rumble COARSER rather than stronger, which is the opposite of what
++ * the control says it does and exactly what the hand holding it reported.
++ *
++ * AND IT ASKED IT OF PACKETS THAT COST NOTHING. mgvf-0018 put the band there to
++ * protect a Bluetooth link that drains about sixty-five reports a second, and
++ * it was right to: every packet was ours and every one of them was a slot. That
++ * was BEFORE mgvf-0020. A change that rides the game's own packet spends no slot
++ * at all, so there is nothing to protect and holding it back buys nothing --
++ * it only throws away the texture the band was never meant to touch.
++ *
++ * So the band now applies to the writer that spends a slot, the thread, and
++ * compares the movement AT THE PAD. The ride carries everything the client
++ * asks, at the client's own rate, because that is free. What both still share
++ * is the line below it: a pair the pad already has is never worth a packet,
++ * whichever writer would send it.
++ *
++ * AND THE BAND IS WHY THIS DRIVER STOPPED COSTING FRAMES, so taking it off
++ * anything needs more than an argument. Here is the argument, and then the way
++ * back.
++ *
++ * mgvf-0018 took Beast of Reincarnation from 3-5 fps lost with visible stutter
++ * to 2 fps and none. It did that by not spending a slot on a link that drains
++ * about sixty-five reports a second: every change it held was a packet of OURS
++ * that did not go out.
++ *
++ * A RIDDEN PACKET IS NOT ONE OF OURS. Read dualsense_bt_set_output_report --
++ * the client's 0x31 is forwarded either way. Stamped, it goes from our copy;
++ * untouched, it goes from the client's own buffer. Same packet, same link, same
++ * slot, whichever branch runs. The band on the ride cannot change how much is
++ * offered to the radio. It can only decide whether the motors inside a packet
++ * that is leaving anyway are current or stale.
++ *
++ * What it does add is a CRC over 74 bytes on the packets it no longer skips,
++ * on the thread carrying the client's write. At the sixty writes a second
++ * measured that is arithmetic and not I/O, against a write whose median cost
++ * was 362 microseconds -- and what made that thread expensive was back-pressure
++ * on the radio, which this adds none of.
++ *
++ * XInputRumbleRideBand PUTS IT BACK, 1 for the behaviour before this patch,
++ * without a rebuild and without touching the thread's band. If frames ever
++ * regress on a title, that is the one value to move, and moving it says which
++ * of this patch's two halves was wrong. */
+ static BOOL dualsense_haptics_worth_sending(struct device_extension *ext, unsigned char r, unsigned char l,
++                                            BOOL costs_a_slot,
+                                             unsigned int *moved_r, unsigned int *moved_l)
+ {
+     LONG sent = InterlockedCompareExchange(&ext->haptics_sent, 0, 0);
+@@ -1824,12 +1878,23 @@
+      * ride's last start compared equal to the thread's own stale record and
+      * was dropped, leaving the pad buzzing through a loading screen. */
+     if ((((LONG)r << 8) | l) == sent) return FALSE;
+-    if (!ext->haptics_deadband) return TRUE;
++    if (!(costs_a_slot || ext->haptics_ride_band) || !ext->haptics_deadband) return TRUE;
+     last_right = (sent >> 8) & 0xff;
+     last_left = sent & 0xff;
+     stopping = (!r && last_right) || (!l && last_left);
+-    *moved_r = r > last_right ? r - last_right : last_right - r;
+-    *moved_l = l > last_left ? l - last_left : last_left - l;
++    /* At the pad, not as asked. The gain is the one this device was given --
++     * both writers end up applying the same number, the thread on a cable and
++     * mgvf-0009's rewrite over Bluetooth -- so the band means four of 255 of
++     * real movement whatever the strength is set to. */
++    {
++        unsigned char now_r = dualsense_scale_motor(r, ext->haptics_gain);
++        unsigned char now_l = dualsense_scale_motor(l, ext->haptics_gain);
++        unsigned char was_r = dualsense_scale_motor((unsigned char)last_right, ext->haptics_gain);
++        unsigned char was_l = dualsense_scale_motor((unsigned char)last_left, ext->haptics_gain);
++
++        *moved_r = now_r > was_r ? now_r - was_r : was_r - now_r;
++        *moved_l = now_l > was_l ? now_l - was_l : was_l - now_l;
++    }
+     return stopping || *moved_r >= ext->haptics_deadband || *moved_l >= ext->haptics_deadband;
+ }
+ 
+@@ -1967,9 +2032,9 @@
+             unsigned char l = motors[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_MOTOR_LEFT];
+             unsigned int moved_r, moved_l;
+ 
+-            if (!dualsense_haptics_worth_sending(ext, r, l, &moved_r, &moved_l))
++            if (!dualsense_haptics_worth_sending(ext, r, l, TRUE, &moved_r, &moved_l))
+             {
+-                TRACE("device %p: motors %u/%u moved %u/%u of 255, under the band of %u -- not sent\n",
++                TRACE("device %p: motors %u/%u moved %u/%u of 255 AT THE PAD, under the band of %u -- not sent\n",
+                       device, r, l, moved_r, moved_l, ext->haptics_deadband);
+                 continue;
+             }
+@@ -2343,6 +2408,15 @@
+         TRACE("device %p: the motor power field is left unclaimed -- the pad keeps whatever it was last"
+               " told, by us or by anything else\n", device);
+ 
++    /* MGVF mgvf-0026: and whether a ridden packet is held by the band as well.
++     * OFF, because a ridden packet leaves either way and holding it back only
++     * makes the motors inside it stale. It is here so that the argument in
++     * dualsense_haptics_worth_sending can be answered with a measurement
++     * instead of another rebuild. */
++    ext->haptics_ride_band = get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumbleRideBand", 0);
++    if (ext->haptics_ride_band)
++        TRACE("device %p: ridden packets are held by the deadband too, as they were before mgvf-0026\n", device);
++
+     ext->haptics_ride = get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumbleRide",
+                                           dualsense_speaks_bluetooth(ext));
+     ext->haptics_sent = -1;
+@@ -2537,10 +2611,14 @@
+     sent = InterlockedCompareExchange(&ext->haptics_sent, 0, 0);
+ 
+     if (!r && !l && sent <= 0) return FALSE;
+-    if (!dualsense_haptics_worth_sending(ext, r, l, &moved_r, &moved_l))
++    /* FALSE: a ride spends no slot, so no band -- see the header of
++     * dualsense_haptics_worth_sending. Only the dedup can refuse here now, and
++     * it refuses the one thing that is never worth a packet: a pair the pad has
++     * already been given. */
++    if (!dualsense_haptics_worth_sending(ext, r, l, FALSE, &moved_r, &moved_l))
+     {
+-        TRACE("device %p: motors %u/%u moved %u/%u of 255, under the band of %u -- the client's packet goes as written\n",
+-              device, r, l, moved_r, moved_l, ext->haptics_deadband);
++        TRACE("device %p: motors %u/%u not stamped, moved %u/%u of 255 at the pad -- the client's packet goes"
++              " as written\n", device, r, l, moved_r, moved_l);
+         return FALSE;
+     }
+     if (ext->haptics_dry_run)
