@@ -3,7 +3,7 @@
 `winebus.sys`, `setupapi.dll`, `ntoskrnl.exe`, `hidclass.sys`, `xinput1_1.dll`,
 `xinput1_2.dll`, `xinput1_3.dll`, `xinput1_4.dll`, `xinputuap.dll` and
 `winebus.so` — shipped here with an `engine-controller-` prefix on each name,
-1,336,304 bytes together — are **Wine**, and Wine is **LGPL-2.1-or-later**. They
+1,340,400 bytes together — are **Wine**, and Wine is **LGPL-2.1-or-later**. They
 are not ours in the sense that matters to the licence: they are somebody else's
 program with twenty-three patches of ours applied, and both halves of that sentence
 carry obligations.
