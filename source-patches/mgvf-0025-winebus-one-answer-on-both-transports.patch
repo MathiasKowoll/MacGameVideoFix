@@ -1,0 +1,61 @@
+winebus: the motor path is a question about the pad, not about the cable.
+
+mgvf-0024 made the pad's own haptic path the default over Bluetooth and left a
+cable on the legacy motors, for a reason that was honest at the time: nothing
+had measured which was better on a wire, and a wired pad has none of the link
+pressure that made the question worth asking again.
+
+The trouble is what that leaves a person holding. One entry in one menu, and it
+means the finer path or the harder one depending on whether a wire is plugged
+in. Nobody reports that as a setting. They report it as the pad feeling
+different on a cable, which is exactly the sentence that sends somebody looking
+for a fault that is not there.
+
+So both transports answer it the same way now, and the way they answer it is
+the one Sony's library asks for on every packet of every session captured here.
+A cable is not a different pad.
+
+AND THE MEASUREMENT THAT MAKES THIS SAFE TO UNIFY arrived the day after
+mgvf-0024, on Mortal Shell 2 -- a title that drives the pad through libScePad,
+so running it twice with only the rewrite moved is the same content against
+itself rather than one game against another. Same motor bytes, gain neutral:
+the legacy rewrite is CLEARLY HARDER, and the haptic path is finer. Two
+characters, both real, neither of them a defect of the other. That is a
+preference, and a preference belongs to the person and not to the transport.
+
+XInputRumbleHapticPath still overrides it on either transport, which is the
+point: the driver picks the path Sony picks, and the menu picks for anybody who
+wants the other.
+
+NOT CHANGED: the ride. It stamps a 0x31 and a wired pad is written 0x02s, so
+there is nothing on a cable to ride and its default stays what mgvf-0024 made
+it. That one really is a fact about the transport.
+
+Signed-off-by: MacGameVideoFix
+---
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -2298,12 +2298,17 @@
+      * made that comparison unfair -- there was no hidden attenuator, the pad
+      * was at full power in both.
+      *
+-     * A CABLE KEEPS THE LEGACY PATH. Nothing measured says which is better
+-     * there, and a wired pad has none of the link pressure that made the
+-     * comparison worth re-running; changing it would be a preference dressed
+-     * as a finding. The option overrides either way. */
+-    ext->haptics_path = get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumbleHapticPath",
+-                                          dualsense_speaks_bluetooth(ext))
++     * MGVF mgvf-0025 GAVE A CABLE THE SAME DEFAULT. mgvf-0024 left the cable on
++     * legacy for want of a measurement, which made one menu entry mean two
++     * different things depending on whether a wire was plugged in -- the kind
++     * of difference a person reports as the pad being inconsistent rather than
++     * as a setting. The path is a question about the pad's motors and not about
++     * the transport, so both transports now answer it the same way, and the way
++     * they answer it is the one Sony's library asks for on every packet.
++     *
++     * The option overrides it on either transport, and that is the point: which
++     * of the two is wanted is a preference, and the menu owns it. */
++    ext->haptics_path = get_device_option(ext->desc.vid, ext->desc.pid, L"XInputRumbleHapticPath", 1)
+                         ? DUALSENSE_VIBRATION_PATH_HAPTIC : DUALSENSE_VIBRATION_PATH_LEGACY;
+     if (ext->haptics_path == DUALSENSE_VIBRATION_PATH_HAPTIC)
+     {
