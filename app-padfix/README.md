@@ -18,9 +18,10 @@ and its release notes live:
 
 ## What it fixes
 
-A DualSense on Bluetooth does not rumble under CrossOver, in any Windows game,
-and its PS button and touchpad do not work either. Over a cable the same pad
-does all three.
+A DualSense on Bluetooth does not reliably rumble under CrossOver. It depends on
+the title: some rumble, some do not, and the adaptive triggers are the same
+lottery. Its PS button and touchpad can go quiet as well. Over a cable the same
+pad does all of it, every time.
 
 The reason is not the game and not the pad. A DualSense on Bluetooth wants
 output report `0x31`, with a CRC; over USB it wants `0x02`, and it silently
