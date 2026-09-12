@@ -1,0 +1,179 @@
+winebus: let the haptics device be asked to declare no button at all.
+
+An experiment with a registry value, not a fix, and the default does not move.
+
+THE OBSERVATION, from the person playing rather than from a trace: Ghost of
+Tsushima does not keep L3 held -- sprint will not stay down -- while
+XInputRumble is on. With it off, it does. The pad is recognised as a Sony
+controller either way, with PlayStation glyphs, so this is not the pad falling
+back to something else.
+
+THE CANDIDATE, in our own code. mgvf-0010's haptics device declares ONE BUTTON
+THAT IS NEVER PRESSED. It is there so that a client counting button caps does
+not see zero. A game that polls the pad and xinput and merges or last-writes the
+two would see a device reporting every button released on every poll, which is
+the exact shape of a held button being cleared.
+
+That is a candidate and not a diagnosis. The game may equally be doing something
+this driver has nothing to do with, and nothing here has measured it. What this
+patch provides is the one-bit experiment that tells the two apart:
+XInputRumbleStubButton 0 builds the same device with the button gone and a byte
+of padding in its place, so the input report stays one byte and every offset
+downstream is unmoved.
+
+WHY IT IS NOT THE DEFAULT, and this is the whole reason it is an option rather
+than a deletion. The reason the button exists has not stopped being true.
+xinput's try_add_device allocates from NumberInputButtonCaps BEFORE it checks
+the count:
+
+    if (!(button_caps = malloc(sizeof(*button_caps) * ...NumberInputButtonCaps))) return FALSE;
+
+With no button caps at all that is a malloc(0), and a malloc(0) that returns
+NULL makes xinput refuse the device outright. The failure mode of guessing wrong
+here is no rumble at all rather than a rumble with one fault, which is worse
+than the thing being tested. So the safer packet stays the default and the
+experiment is the thing that has to be asked for.
+
+HOW TO READ THE RESULT. The trace says which descriptor went out. If L3 holds
+with the button gone, the candidate is the cause and the next question is how to
+keep xinput happy without it. If L3 still does not hold, the button was never
+the problem and this option should be forgotten rather than kept -- an option
+that tested a wrong idea is clutter, and this file will say so.
+
+A NOTE ON HOW THIS PATCH WAS MADE, because it cost half an hour and would cost
+it again. The first version of this file was diffed against a baseline that had
+been rebuilt by applying an earlier patch with fuzz (-F3). Fuzz let that apply
+"succeed" at a shifted offset, so the baseline was subtly wrong and the diff
+inherited it: 262 lines where the real change is 121, and mgvf-0020 then refused
+to reverse off the result, which made build-controller-bus.sh report six patches
+as unapplied and try to apply one of them again.
+
+A baseline for a new patch is reconstructed by exact string surgery on the tree,
+never by re-applying the stack with fuzz, and the check that it is right is that
+the WHOLE existing chain reverses off it cleanly. Then the new patch is verified
+the other way: reversing it off the tree has to reproduce that baseline byte for
+byte.
+
+Signed-off-by: MacGameVideoFix
+---
+--- a/dlls/winebus.sys/dualsense_haptics.h
++++ b/dlls/winebus.sys/dualsense_haptics.h
+@@ -172,7 +172,7 @@
+ unsigned int dualsense_haptics_endpoint(unsigned char *out, unsigned int out_size,
+                                         const unsigned char *desc, unsigned int len,
+                                         unsigned char feature_id, unsigned char output_id,
+-                                        unsigned char input_id);
++                                        unsigned char input_id, int with_button);
+ 
+ /* Write a copy of `desc` with the haptics collections INSIDE its last top-level
+  * collection, and return the new length, or 0 if the descriptor does not end in
+--- a/dlls/winebus.sys/dualsense_haptics.c
++++ b/dlls/winebus.sys/dualsense_haptics.c
+@@ -142,7 +142,7 @@
+  * the two haptics collections. Everything about it is the smallest thing that
+  * a client will still open and drive. */
+ static unsigned int haptics_endpoint_head(unsigned char *out, unsigned int out_size,
+-                                          unsigned char input_id)
++                                          unsigned char input_id, int with_button)
+ {
+     const unsigned char head[] =
+     {
+@@ -186,21 +186,64 @@
+             REPORT_COUNT(1, 1),
+             INPUT(1, Cnst|Var|Abs),
+     };
+-    if (out_size < sizeof(head)) return 0;
+-    memcpy(out, head, sizeof(head));
+-    return sizeof(head);
++    /* MGVF mgvf-0029: the same device with the button taken out, and one byte
++     * of padding in its place so the input report is still one byte long and
++     * every offset downstream is unmoved.
++     *
++     * WHAT IT IS FOR. The button above is never pressed -- it exists so that a
++     * client counting button caps does not see zero. A game that polls both the
++     * pad and xinput and merges the two would see a device reporting every
++     * button released on every poll, which is the shape of a held button being
++     * cleared, and Ghost of Tsushima does not keep L3 held while XInputRumble
++     * is on. That is an observation with a candidate, not a diagnosis, and this
++     * is how the candidate gets tested: one registry value, no rebuild.
++     *
++     * WHY IT IS NOT THE DEFAULT. The reason the button was put there still
++     * stands. xinput's try_add_device allocates from NumberInputButtonCaps
++     * BEFORE it checks the count: with no button caps at all that is a
++     * malloc(0), and a malloc(0) that returns NULL makes it refuse the device
++     * outright -- no rumble at all, rather than a rumble with one fault. So the
++     * safer packet stays the default and the experiment is the thing that has
++     * to be asked for. */
++    const unsigned char no_button[] =
++    {
++        USAGE_PAGE(1, HID_USAGE_PAGE_GENERIC),
++        USAGE(1, HID_USAGE_GENERIC_MULTI_AXIS_CONTROLLER),
++        COLLECTION(1, Application),
++            REPORT_ID(1, input_id),
++            USAGE_PAGE(2, HID_USAGE_PAGE_VENDOR_DEFINED_BEGIN),
++            USAGE(1, 0x20),
++            LOGICAL_MINIMUM(1, 0),
++            LOGICAL_MAXIMUM(2, 0x00ff),
++            REPORT_SIZE(1, 8),
++            REPORT_COUNT(1, 1),
++            INPUT(1, Data|Var|Abs),
++            REPORT_SIZE(1, 8),
++            REPORT_COUNT(1, 1),
++            INPUT(1, Cnst|Var|Abs),
++    };
++
++    if (with_button)
++    {
++        if (out_size < sizeof(head)) return 0;
++        memcpy(out, head, sizeof(head));
++        return sizeof(head);
++    }
++    if (out_size < sizeof(no_button)) return 0;
++    memcpy(out, no_button, sizeof(no_button));
++    return sizeof(no_button);
+ }
+ 
+ unsigned int dualsense_haptics_endpoint(unsigned char *out, unsigned int out_size,
+                                         const unsigned char *desc, unsigned int len,
+                                         unsigned char feature_id, unsigned char output_id,
+-                                        unsigned char input_id)
++                                        unsigned char input_id, int with_button)
+ {
+     const unsigned char tail[] = { END_COLLECTION };
+     unsigned char block[DUALSENSE_HAPTICS_DESC_MAX];
+     unsigned int head, body, total;
+ 
+-    if (!(head = haptics_endpoint_head(block, sizeof(block), input_id))) return 0;
++    if (!(head = haptics_endpoint_head(block, sizeof(block), input_id, with_button))) return 0;
+     if (!(body = dualsense_haptics_descriptor(block + head, sizeof(block) - head, feature_id, output_id)))
+         return 0;
+     if (head + body + sizeof(tail) > sizeof(block)) return 0;
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -2241,10 +2241,23 @@
+      * two cancelled and the left stick lost its vertical while keeping its
+      * horizontal. With the motors on their own device there is nothing for
+      * XInput to report but rumble. */
+-    if (!(length = dualsense_haptics_endpoint(copy, length, source, source_length,
+-                                              DUALSENSE_HAPTICS_FEATURE_ID, DUALSENSE_HAPTICS_OUTPUT_ID,
+-                                              DUALSENSE_HAPTICS_INPUT_ID)))
++    /* MGVF mgvf-0029: with the never-pressed button, or without it. ON, because
++     * the reason it is there has not stopped being true -- xinput allocates
++     * from the button-cap count before it checks it. 0 is the experiment:
++     * Ghost of Tsushima does not keep L3 held while XInputRumble is on, and a
++     * device reporting every button released on every poll is the candidate. */
+     {
++        unsigned int with_button = get_device_option(ext->desc.vid, ext->desc.pid,
++                                                     L"XInputRumbleStubButton", 1);
++        if (!with_button)
++            TRACE("device %p: the haptics device declares no button -- the experiment for a game that"
++                  " loses a held button with the motors offered to xinput\n", device);
++        length = dualsense_haptics_endpoint(copy, length, source, source_length,
++                                            DUALSENSE_HAPTICS_FEATURE_ID, DUALSENSE_HAPTICS_OUTPUT_ID,
++                                            DUALSENSE_HAPTICS_INPUT_ID, with_button != 0);
++    }
++    if (!length)
++    {
+         WARN("device %p: the haptics endpoint does not fit the descriptor of %04x:%04x, "
+              "no haptics offered\n", device, ext->desc.vid, ext->desc.pid);
+         RtlFreeHeap(GetProcessHeap(), 0, copy);
