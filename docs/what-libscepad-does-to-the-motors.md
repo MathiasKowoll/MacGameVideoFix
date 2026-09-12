@@ -66,6 +66,25 @@ title that asked for the haptic path. The pad measured here is past it: in
 hid-175158.log the library chose haptic on 8,568 of its packets and never once
 set bit 0x01.
 
+## And which games this rules out for XInput rumble
+
+`HidD_GetHidGuid` and SETUPAPI are in the import table, and `HidD_GetAttributes`
+beside them: the library finds its pad by walking the HID device interface and
+reading vendor and product ids. The haptics device `mgvf-0010` adds carries the
+pad's own ids, because it is the same physical device with a second top-level
+collection and hidclass makes one device per top level.
+
+So a title using this library sees two `054c:0df2` and one of them answers
+nothing a DualSense would. **No game on this library starts while
+`XInputRumble` is on**, and that is a rule with a mechanism rather than one
+title misbehaving.
+
+It is also not worth working around. A game that links this library is by
+definition a game that drives the pad itself, and it rumbles over Bluetooth
+without any of `mgvf-0010`'s work -- that is what `mgvf-0002` through
+`mgvf-0004` are for. The XInput path exists for the games that never heard of a
+DualSense, and those do not link this library. The two sets do not overlap.
+
 ## What this closes
 
 There is no intensity field in that library, no second mechanism, and no
