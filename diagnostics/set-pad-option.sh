@@ -10,7 +10,7 @@
 # Hidraw, SeizeDevice, UsbEmulation, ProductId, ForwardFeatureWrites,
 # VibrationMode, VibrationGain, XInputRumble, XInputRumbleInterval,
 # XInputRumbleDryRun, XInputRumbleDeadband, XInputRumbleRide,
-# XInputRumbleHapticPath, XInputRumbleMotorPower.
+# XInputRumbleHapticPath, XInputRumbleMotorPower, XInputRumbleRideBand.
 #
 # The last one carries a BYTE and not a switch: 0 to 255 is written into the
 # motor power field with the bit that claims it, and 256 or above -- or the
