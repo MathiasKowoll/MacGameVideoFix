@@ -52,6 +52,26 @@ A CABLE KEEPS THE LEGACY PATH. Nothing measured says which is better there, and
 a wired pad has none of the link pressure that made the comparison worth
 re-running. Changing it would be a preference dressed as a finding.
 
+AND THE PREFERENCE IS NARROWER THAN THIS PATCH FIRST WROTE IT, measured the day
+after on Mortal Shell 2 -- a title that drives the pad through Sony's own
+library, so the comparison is the same content against itself rather than one
+game against another. Same motor bytes, gain neutral at x1, VibrationMode the
+only thing moved: the LEGACY rewrite felt CLEARLY MORE INTENSE than the pad's
+own haptic path.
+
+So the two findings are about different things and both stand. The haptic path
+is FINER -- that is what was preferred at sixty updates a second, and it is what
+Sony's library asks for on every packet of every session captured here. The
+legacy path is HARDER at the same command. A default cannot be both, and this
+patch chose the one the library itself chooses; anybody who wants the other has
+one option, or the menu entry that writes it.
+
+WHAT THAT COMPARISON ALSO SETTLED, and it is worth more than the preference: the
+rewrite reaches a native title's own packets. mgvf-0009 was written for a client
+that asks through XInput, and Mortal Shell 2 asks through nothing of ours -- it
+writes its own 0x31 with the motors already in it, with XInputRumble off. The
+packet is rewritten on the way out all the same.
+
 ONE WARN BECOMES A TRACE. Asking for the haptic path while VibrationMode was 1
 used to be asking for two opposite things, because mgvf-0009's rewrite runs
 after the stamp and turns the packet back into the legacy motors. With the path
