@@ -59,6 +59,27 @@ NOT CLAIMED: that this makes the rumble stronger. It cannot. The peak is the
 peak and the gain saturates at 255; what comes back is everything between the
 peaks, which is where a rumble is actually felt.
 
+MEASURED AFTERWARDS, two runs of the same title at a strength of 175% with the
+one option between them:
+
+                                    band on the ride   this patch
+  changes the ride saw                     468            1,496
+  of those, dropped                         53%              33%
+  motor changes reaching the pad         1.5/s            5.1/s
+  packets saturating at 255                  1%               0%
+
+Three and a half times as much of what the game asks now reaches the motors,
+and the third that is still refused is the dedup rather than the band: a pair
+the pad has already been given. The hand holding it called the difference
+better, twice, without being told which run was which.
+
+AND THE FRAMES HELD, which was the thing worth checking. The pad's input
+reports arrive every 15 ms median in both runs, while writing and while quiet,
+with p95 of 19 ms against 23 ms -- the stream is no worse while the motors move
+than while they do not, on 396 samples where the earlier run had 52. This
+driver's own writes cost 383 microseconds median and none reached half a
+millisecond. The band is still doing its work on the writer that spends slots.
+
 Signed-off-by: MacGameVideoFix
 ---
 --- a/dlls/winebus.sys/dualsense_usb.h
