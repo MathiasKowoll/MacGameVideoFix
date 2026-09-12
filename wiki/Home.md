@@ -32,6 +32,10 @@ out about a game that is not listed yet.
 
 The tooling lives in [MacGameVideoFix](https://github.com/MathiasKowoll/MacGameVideoFix).
 
+Controllers are a separate story with its own page: [Controllers](Controllers.md)
+— what a PlayStation pad does by default, which per-title switch belongs to
+which kind of game, and what was measured on each.
+
 ## The failure modes
 
 They look different and have nothing in common except the symptom.
