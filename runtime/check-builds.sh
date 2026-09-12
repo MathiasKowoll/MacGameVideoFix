@@ -381,12 +381,43 @@ done
 
 # The optional set has a mirror of its own, runtime/engine-payload-controller/,
 # so that overlaying engine-payload/ never installs it. Same rule, same check.
+#
+# THE LIST IS BUILT, NOT WRITTEN DOWN. It was written down, and it named the four
+# files the set had when it was four. The set became ten and the list did not
+# follow, so hidclass.sys and the five xinput DLLs -- six of the ten binaries
+# that actually install -- were compared against nothing at all and could have
+# drifted between the flat files and the mirror without a word. A hand-written
+# list beside a set that grows is the second copy that goes stale, which is the
+# same lesson install-engine-controller.sh learned about PE_NAMES.
+#
+# So the PE names come from the installer that owns them, and the two files that
+# are not PE are named because they are the two exceptions: winebus.so goes to a
+# different directory, and the stamp is not a binary at all.
 controller_drift=0
-for pair in "engine-controller-winebus.sys:wine/x86_64-windows/winebus.sys" \
-            "engine-controller-setupapi.dll:wine/x86_64-windows/setupapi.dll" \
-            "engine-controller-ntoskrnl.exe:wine/x86_64-windows/ntoskrnl.exe" \
-            "engine-controller-winebus.so:wine/x86_64-unix/winebus.so" \
-            "engine-controller-built-for.json:built-for.json"; do
+controller_pairs=""
+# PE_NAMES spans a line continuation, so it is accumulated to the closing quote
+# rather than read a line at a time. The first attempt at this read only the
+# first line, found four names, and reported success -- which is the same shape
+# as the bug being fixed and was caught only by counting what came out.
+controller_pe="$(awk '
+  /^PE_NAMES=/ { acc = $0; sub(/^PE_NAMES="/, "", acc); collecting = 1; next }
+  collecting { acc = acc " " $0 }
+  collecting && /"[[:space:]]*$/ { sub(/".*$/, "", acc); gsub(/\\/, " ", acc); print acc; exit }
+' "$HERE/install-engine-controller.sh")"
+controller_pe_count=0
+for f in $controller_pe; do
+  case "$f" in *.dll|*.sys|*.exe) ;; *) continue ;; esac
+  controller_pairs="$controller_pairs engine-controller-$f:wine/x86_64-windows/$f"
+  controller_pe_count=$((controller_pe_count + 1))
+done
+# A parse that silently found nothing would compare nothing and pass.
+if [ "$controller_pe_count" -lt 9 ]; then
+  echo "  controller payload: only $controller_pe_count PE names parsed out of install-engine-controller.sh -- refusing to call that a check"
+  controller_drift=$((controller_drift + 1))
+fi
+controller_pairs="$controller_pairs engine-controller-winebus.so:wine/x86_64-unix/winebus.so"
+controller_pairs="$controller_pairs engine-controller-built-for.json:built-for.json"
+for pair in $controller_pairs; do
   flat="$HERE/${pair%%:*}"
   laid="$HERE/engine-payload-controller/${pair##*:}"
   if [ ! -f "$flat" ] || [ ! -f "$laid" ]; then
@@ -394,7 +425,7 @@ for pair in "engine-controller-winebus.sys:wine/x86_64-windows/winebus.sys" \
   fi
   cmp -s "$flat" "$laid" || { echo "  controller payload drifted: ${pair##*:}"; controller_drift=$((controller_drift + 1)); }
 done
-[ "$controller_drift" = 0 ] && echo "  payload: engine-payload-controller/ matches the flat engine-controller-* files"
+[ "$controller_drift" = 0 ] && echo "  payload: engine-payload-controller/ matches the flat engine-controller-* files ($((controller_pe_count + 2)) compared)"
 
 # The four files are our own builds and ship stripped: for the three PE ones no
 # .debug_ section, no symbol table, and an export table and an import table
