@@ -34,16 +34,21 @@
 #
 # AND ONE THING THIS CANNOT FIX, which you have to do yourself.
 #
-# THE DISPLAY MUST BE 16:9. Measured: on a 3456x2234 panel -- 1.547:1, which is
-# every Apple laptop -- the game renders four hundred draws a frame at eighty
-# frames a second into a window that stays black. Menu, cutscenes, everything.
-# It filters the display mode list for 16:9, finds nothing, and composes into a
-# region that is never shown. At 1920x1080 it plays.
+# IT STARTS TO A BLACK SCREEN ON AN HDR DISPLAY, and that is a setting rather
+# than a monitor. On a display it reads as HDR the title turns HDR10 on by
+# itself -- nobody sets it -- and then renders four hundred draws a frame into a
+# window that stays black. Menu, cutscenes, everything.
 #
-# So set the display to a 16:9 mode before launching -- with the game's own
-# graphics options, a tool like BetterDisplay, or a CrossOver virtual desktop.
-# This is why the same title runs for people on 16:9 monitors with the same
-# D3DMetal and no fix at all beyond the byte.
+# Set `HDR10 0` in its ENGINESETTINGS file and it starts and draws at the
+# desktop resolution.
+#
+# THIS PARAGRAPH USED TO SAY THE DISPLAY HAD TO BE 16:9, and that was wrong.
+# The retraction is kept rather than deleted, because the reasoning that led
+# there was sound and somebody will arrive at it again: on a 3456x2234 panel the
+# black screen is real, 1920x1080 does cure it, and the aspect ratio is the
+# obvious difference. It is not the cause. Changing resolution changed which
+# display mode was picked and took HDR with it. The wiki page carries the
+# measurement that separated them, on 2026-09-03.
 #
 # AND THE VIDEOS, which are not a video problem.
 #
@@ -73,11 +78,11 @@
 # GB; the zero in the game's own crash report is its own number), D3D11 against
 # D3D12, Game Porting Toolkit 3.0 against 4.0b2, and patching the executable on
 # disk exactly as the community fix says -- which is equivalent to this and just
-# as black on a non-16:9 display.
+# as black while the title has HDR10 on.
 #
 # MGVF-SCOPE: folder
 # MGVF-GAME: RESONANCE: A PLAGUE TALE LEGACY | Resonance.exe |
-# MGVF-WHY: Refuses to start: "Shader Model 6.7 is not supported by this device". Needs a 16:9 display as well -- on an Apple laptop panel it renders into a window that stays black.
+# MGVF-WHY: Refuses to start: "Shader Model 6.7 is not supported by this device". It also turns HDR10 on by itself on a display it reads as HDR and starts to a black screen, so HDR10 0 goes into its ENGINESETTINGS file.
 #
 # Part of MacGameVideoFix — https://github.com/MathiasKowoll/MacGameVideoFix
 # SPDX-License-Identifier: GPL-3.0-or-later
@@ -126,7 +131,7 @@ status() {
   elif is_ours "$CARRIER"; then echo broken
   elif [ ! -f "$CARRIER" ] && [ -f "$REAL" ]; then echo half
   else echo absent; fi
-  echo "note: this fix gets the game to start; it still needs a 16:9 display to show anything" >&2
+  echo "note: this fix gets the game to start; on an HDR display it also needs HDR10 0 in its ENGINESETTINGS file to show anything" >&2
 }
 
 case "$ACTION" in

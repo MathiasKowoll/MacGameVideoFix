@@ -146,12 +146,18 @@ case "$ACTION" in
   --restore)
       refuse_if_bottle_up
       n=0
+      # Counted rather than written down. It said "of 4" for as long as the set
+      # was four files, and went on saying it when the set became ten -- so a
+      # complete restore reported "restored 10 of 4", which reads as a fault in
+      # a script whose whole job is putting somebody's engine back.
+      total=0
       for d in $(for f in $PE_NAMES; do pe_dest "$f"; done) "$USO_DEST"; do
+        total=$((total+1))
         if [ -f "$d.mgvf-stock" ]; then mv -f "$d.mgvf-stock" "$d"; n=$((n+1)); fi
       done
       if [ "$n" -gt 0 ]; then
         reseal
-        echo "restored $n of 4"
+        echo "restored $n of $total"
       else
         echo "nothing to restore"
       fi

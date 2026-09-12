@@ -1,14 +1,20 @@
 # MacGamePadFix
 
 A small macOS application that installs one thing into one CrossOver: the
-**controller-bus engine set** this project builds, three patched Wine files that
-let a Windows game learn whether a controller is on USB or on Bluetooth.
+**controller-bus engine set** this project builds, ten patched Wine files that
+let a Windows game learn whether a controller is on USB or on Bluetooth — and,
+since `mgvf-0010`, let a game that only speaks XInput rumble a DualSense at all.
 
 It is the sibling of `app/`, and it is separate on purpose. MacGameVideoFix is
 about cutscenes and knows about games, bottles and Steam libraries;
-this one carries three files and does three things — say what is installed,
+this one carries ten files and does three things — say what is installed,
 install it, put CrossOver's files back. It is meant to be handed to somebody who
 has this one problem and nothing else.
+
+It is published as its own repository, and that is where the built application
+and its release notes live:
+
+> <https://github.com/MathiasKowoll/MacGamePadFix>
 
 ## What it fixes
 
@@ -39,8 +45,8 @@ faster, or show a cutscene.
 **Stable CrossOver 26.3.0.39832, and nothing else.** The application refuses any
 other version, and shows you the refusal rather than working around it.
 
-That is not caution for its own sake. These three files are Wine, built from the
-Wine source of that exact CrossOver, and they are replacing three files that the
+That is not caution for its own sake. These ten files are Wine, built from the
+Wine source of that exact CrossOver, and they are replacing ten files that the
 rest of that same Wine is compiled against. Mixing Wine binaries across versions
 does not fail loudly — it produces a bottle that starts, runs, and then
 misbehaves somewhere nobody would connect to a controller patch. Refusing is the
@@ -83,7 +89,7 @@ again. The window says `Not installed` afterwards, and that is the state
 CrossOver shipped in.
 
 **A CrossOver update undoes it too**, without asking. An update replaces
-CodeWeavers' three files with CodeWeavers' three files, and the fix is simply
+CodeWeavers' ten files with CodeWeavers' ten files, and the fix is simply
 gone; the window will say `Not installed` and you install it again. If an update
 also changes the version, this build no longer serves it and will refuse — that
 is the same guard as above doing its job.
@@ -112,8 +118,8 @@ MacGamePadFix, and press **Open Anyway**.
 
 They are **Wine**, and Wine is **LGPL-2.1-or-later**. They are built from the
 Wine source of CrossOver 26.3.0.39832, revision `wine-11.0-8726-g2e2f5fca349`,
-with eight patches of this project's on top — `mgvf-0002` through `mgvf-0009` —
-and all eight are published in full, as patch files, in `source-patches/` of
+with twenty-seven patches of this project's on top, and all twenty-seven are
+published in full, as patch files, in `source-patches/` of
 
 > <https://github.com/MathiasKowoll/MacGameVideoFix>
 
@@ -122,27 +128,37 @@ what each patch does, gives the sha256 of every file as shipped, and says where
 the corresponding source is. Read it before redistributing these binaries; the
 licence asks that it travel with them.
 
-Three of the four files are PE and go into `lib/wine/x86_64-windows/`; the
-fourth, `winebus.so`, is the unix half of `winebus` and goes into
+Nine of the ten files are PE and go into `lib/wine/x86_64-windows/`; the tenth,
+`winebus.so`, is the unix half of `winebus` and goes into
 `lib/wine/x86_64-unix/`. They come from one source tree and read one struct, so
-they only work as a set.
+they only work as a set. `CONTROLLER-LICENCES.md` lists all ten by name with the
+sha256 of each as shipped.
 
-Three of the eight are worth knowing about, and all three do nothing unless a
-registry value is set — `runtime/engine-payload-controller/README.md` in the
-repository says how, for each of them. `mgvf-0005` lets a DualSense on Bluetooth
-be *presented* as if it were on USB, per device and off by default, for the two
-clients that refuse to work with a pad they know is wireless; the same file says
-plainly that the driver half has not yet run against a live pad. `mgvf-0008` is
-an **experiment** rather than a fix and is marked as one wherever it is named.
-`mgvf-0009` is a **preference** rather than either: it can rewrite the vibration
-a game asks for into the pad's other rumble mode, and scale it, on the strength
-of one person reporting that the other mode feels stronger.
+**The set has two halves.** `mgvf-0002` through `mgvf-0004` tell Windows which
+bus a device is on, and with them rumble, the PS button, the touchpad and the
+adaptive triggers work over Bluetooth. That half is on for everything and needs
+no configuration. The second half, `mgvf-0010` onward, offers the pad's motors to
+XInput for the games that have never heard of a DualSense; it is one registry
+value per title and off unless asked for.
+
+Some are worth knowing about before installing, and all of them do nothing unless
+a registry value is set — `runtime/engine-payload-controller/README.md` in the
+repository says how, for each. `mgvf-0005` lets a DualSense on Bluetooth be
+*presented* as if it were on USB, per device and off by default, for the clients
+that refuse a pad they know is wireless; one live trace exists and in it the
+pad's Bluetooth link died twenty-two milliseconds later, and the causal claim is
+explicitly **not** established. `mgvf-0008` is an **experiment** rather than a
+fix and is marked as one wherever it is named. `mgvf-0009` and `mgvf-0021` are
+**preferences**: which of the pad's two vibration paths a packet asks for, and a
+percentage over the two motor bytes. Which of the two paths feels better is one
+hand on one pad with nothing instrumented, and it is written that way everywhere
+it appears.
 
 ## Building it
 
     app-padfix/build-app.sh
 
-One Swift file, `swiftc`, no dependencies. It copies six files out of `runtime/`
+One Swift file, `swiftc`, no dependencies. It copies the payload out of `runtime/`
 unchanged — the installer, its four engine files and their stamp — writes the
 `Info.plist`, reuses `app/AppIcon.icns`, and signs ad hoc. It fails before
 compiling anything if one of the six is missing, checks afterwards that every file the installer

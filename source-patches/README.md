@@ -456,7 +456,7 @@ capture shows a wired title doing. `mgvf-0010`'s haptics thread keeps its own
 gain rather than borrowing this one: it never passes the dispatch this lives in,
 and it works on a report of five bytes where this one insists on forty.
 
-### mgvf-0020 — the motors ride the game's own packet instead of costing the link one *(ours, OFF by default)*
+### mgvf-0020 — the motors ride the game's own packet instead of costing the link one *(ours, the Bluetooth default since mgvf-0024)*
 
 The mechanism behind the frame cost, measured twice from the same two traces by
 analysts told to refute each other: the pad's Bluetooth output pipe drains
@@ -478,8 +478,12 @@ packets. The deadband of `mgvf-0018` moves into the extension so both writers
 consult one record; `mgvf-0016`'s gain is applied after the stamp by the same
 function that scales the thread's packets.
 
-**Off until felt.** What is measured is the mechanism and the arithmetic; whether
-a stamped heartbeat feels like the thread's packets is for a hand on the pad.
+**It was off until felt, and it has been felt.** `mgvf-0024` made it the
+Bluetooth default once the stop behaviour was verified — 105 episodes of rumble
+across three runs, every one of them ending in a zero. A cable keeps it off,
+which is not a preference: a wired pad is written `0x02`s and there is no `0x31`
+to ride.
+
 Not covered: the `mgvf-0005` emulation route, whose translated `0x02` is not told
 apart from the thread's own packet.
 
@@ -552,12 +556,225 @@ edges: on Bluetooth the skipped branch would also have packed and signed the
 `0x31`, which is a few microseconds on the haptics thread and nothing on the
 game's.
 
-> **`mgvf-0010`, `mgvf-0011`, `mgvf-0012` and `mgvf-0014` are in the set and are
-> not written up here yet.** They are the XInput rumble work of 2026-09-09 —
-> a haptics collection on the pad's own descriptor, `hidclass` offering such a
-> pad to xinput, xinput learning the Sony axis convention, and the guard that
-> stops "no options" from being read as "silence". Each patch file carries its
-> own header in the meantime.
+### mgvf-0010 — the pad's own motors, offered to XInput *(ours, OFF by default)*
+
+Most Windows games ask XInput for "controller 1" and expect an Xbox pad. XInput
+had no motors to offer a DualSense, because a DualSense does not keep its motors
+where an Xbox pad does. This adds a **haptics collection** — a second top-level
+collection beside the pad's own, so the pad keeps every byte of its descriptor
+and the motors arrive next door on a small device of their own.
+
+Nesting it inside the pad's collection was the first attempt and it was wrong:
+a game reading the pad through raw HID *and* through XInput then heard
+everything twice, and not merely twice — HID counts the Y axis downwards and
+XInput upwards, so the two cancelled and the left stick lost its vertical while
+keeping its horizontal.
+
+The motors are written from a thread of its own, so the game's thread never
+blocks on the link. On Bluetooth it also **names the fields of report `0x31`**,
+which the pad sends as one opaque vendor block; without that xinput finds the
+motors, writes to them, and still cannot read an axis — which a game feels as a
+stick jammed in a corner.
+
+### mgvf-0011 — `hidclass` offers such a pad to xinput as well *(ours)*
+
+Wine's xinput enumerates `GUID_DEVINTERFACE_WINEXINPUT`, which only winexinput's
+own children carry. A pad with a haptics collection is offered under that
+interface too, exactly the way `hidclass` already offers a mouse and a keyboard
+under theirs. Devices that already carry the private class are left alone, so an
+Xbox pad behaves as before.
+
+### mgvf-0012 — the other gamepad convention *(ours)*
+
+A gamepad's axes and buttons come in two conventions, not one. Read the wrong way
+round, a trigger's rest position is full deflection on a stick and the game moves
+untouched. Sony pads put the right stick on Z/Rz and the triggers on Rx/Ry;
+Microsoft's order is the one wine assumed. See `mgvf-0027` for how the choice
+between them is made, which was wrong here for eighteen days.
+
+### mgvf-0014 — no options is not a request for silence *(ours)*
+
+`mgvf-0009` stored "no options" as all zeros, and one of its two write paths read
+a gain of zero as a request for silence. So a pad with nothing configured could
+be silenced by the absence of configuration. Superseded in full by `mgvf-0022`,
+which replaced the sentinel rather than patching the reader.
+
+### mgvf-0021 — the pad's own haptic path, on request *(ours)*
+
+A DualSense knows two ways to be told to vibrate. **LEGACY** is flag0 bit `0x01`,
+where the pad drives its voice coils in imitation of a pair of rotating-mass
+motors. **HAPTIC** is flag2 bit `0x04`, the branch SDL's PS5 driver takes for
+firmware 2.24 and above. Both also set flag0 `0x02`, which is why that bit is
+named for what it does — disable audio haptics — and not for a path.
+
+`mgvf-0010` had always sent legacy, on the strength of a six-pulse ladder in
+which legacy felt stronger at the same value. That ladder was run when this
+driver could deliver about sixteen updates a second. At the sixty a second
+`mgvf-0020` delivers, the comparison was worth making again, and this is the
+option that made it possible without a rebuild between the two runs.
+
+Sony's library takes the haptic path on all 8,608 packets of the session captured
+here and never once sets bit `0x01`.
+
+### mgvf-0022 — absence is a neutral request, not a zeroed one *(ours)*
+
+`mgvf-0009` zeroed its options struct for a pad with nothing configured, and the
+write paths tested for that — which made `{mode CLIENT, gain 0}`, a gain of zero
+written **on purpose**, byte-identical to an absence. Silence by gain alone
+reached no motor, and the comments in the file promised the opposite. The absence
+is now `{CLIENT, 100}`, the pair that changes nothing, so zero can go on meaning
+zero.
+
+### mgvf-0023 — the motor power field, which nothing here had ever claimed *(ours, ON by default)*
+
+One byte-level difference remained between what Sony's library sends a DualSense
+and what this driver sent it: bit `0x40` of the second flag byte, and the byte it
+governs. `mgvf-0007`'s disassembly had already recorded that libScePad sets it on
+every packet together with report byte 37 and flag2's haptic bit, and called the
+three "vibration fields". The capture agrees: of 10,886 native writes, 10,862
+carry the bit and 10,860 carry zero in the byte; of the 283 carrying a motor, 282
+carry both.
+
+Three runs settled what it does, with only that field between them: unclaimed and
+claimed-with-zero felt **the same**, and claimed with `0x77` dropped the rumble to
+almost imperceptible. So the pad honours the field, it is a **reduction**, and it
+was already at none. Nothing had been attenuating this driver, and there is no
+second intensity field to find — the gain scales the two motor bytes and
+saturates at 255; this one can only take away.
+
+The default is 0 — claimed, at no reduction — which changed nothing on the pad
+measured and is kept because an unclaimed field carries whatever the pad was last
+told by anything else on the machine.
+
+### mgvf-0024 — on Bluetooth, ride the packet and take the pad's own path *(ours)*
+
+Two options that had been off since they were written become the Bluetooth
+default, each because it was measured.
+
+The **ride** carried 92–95% of every motor change inside a packet the game was
+sending anyway, added nothing to a link that drains about sixty-five reports a
+second, and removed the frame cost this series started from. The **stop** is what
+it was waiting on, because a ride that cannot deliver a zero leaves a pad buzzing
+in a menu: across three runs, 105 episodes of non-zero rumble, 105 of them ended
+in a zero, median 17 ms after the last non-zero packet and worst 100 ms, and all
+three traces end with the pad silenced.
+
+The **haptic path** was preferred by the same hand at sixty updates a second that
+had preferred legacy at sixteen. Still untested in the field and named rather
+than implied: the thread's 100 ms fallback for a client that stops writing
+mid-rumble. That title writes its own `0x31` about forty-five times a second
+without a pause, so the ride always had a carrier.
+
+### mgvf-0025 — the motor path is a question about the pad, not about the cable *(ours)*
+
+`mgvf-0024` left a cable on the legacy motors for want of a measurement, which
+made one menu entry mean the finer path or the harder one depending on whether a
+wire was plugged in. Nobody reports that as a setting; they report it as the pad
+feeling different on a cable. Both transports answer the same way now.
+
+What made it safe to unify arrived the day after, on a title that drives the pad
+through Sony's library — so running it twice with only the rewrite moved is the
+same content against itself rather than one game against another. Same motor
+bytes, gain neutral: the legacy path is clearly **harder**, the haptic path is
+**finer**. Two characters, both real, and a preference belongs to the person
+rather than to the transport.
+
+The ride is untouched: it stamps a `0x31` and a wired pad is written `0x02`s, so
+there is nothing on a cable to ride. That one really is a fact about the
+transport.
+
+### mgvf-0026 — the deadband belongs at the pad, not at the request *(ours)*
+
+The band is four of 255 and it was compared against what the **game** asked for,
+while the gain that decides what the pad receives is applied afterwards. So it
+meant four of 255 at a strength of ×1 and forty at ×10: **turning the strength up
+made the rumble coarser instead of stronger**, which is the opposite of what the
+control says and exactly what the hand holding the pad reported, twice, before
+anybody read the line.
+
+| at a strength of | changes held | worth ≥10 of 255 at the pad |
+|---|---|---|
+| ×4 | 358 | 16% |
+| ×10 | 632 | **52%** |
+
+It compares the movement at the pad now, and it no longer holds back a change
+that rides inside a packet the game was sending anyway — those leave either way,
+so holding one only made its motors stale. Measured across two runs of one title
+with only that between them: the ride carried **5.1 motor changes a second where
+it had carried 1.5**, and the pad's input stream is no worse while the motors
+move than while they are quiet. `XInputRumbleRideBand 1` restores the old
+behaviour on ridden packets without a rebuild.
+
+Not claimed: that this makes the rumble stronger. It cannot. What comes back is
+everything between the peaks, which is where a rumble is felt.
+
+### mgvf-0027 — a Sony badge is not a Sony descriptor *(ours)*
+
+`mgvf-0012` decided which convention a pad follows by reading its **vendor id**.
+That was right for as long as a Sony pad reached xinput carrying its own report
+descriptor. It stops being right through winebus's SDL backend, where wine throws
+the pad's descriptor away and builds an Xbox-shaped one — while the vendor id
+stays `0x054c`, because it is still the same physical pad. So the Sony order was
+applied to a descriptor already in Xbox order and the two corrections cancelled
+into a fault: a title on that route read its right stick off the triggers. This
+project's own regression, open since `mgvf-0012` shipped.
+
+The descriptor is asked now. A Sony pad declares X as an unsigned byte, logical
+`0..255`; wine's synthetic gamepad declares a signed 16-bit axis with a negative
+minimum. Checked rather than assumed, because a pad that works today must not
+stop: all five descriptors captured in this project — both DualSense models over
+both transports — declare X as `0..255`, so the raw route keeps the Sony order
+exactly as it had it.
+
+### mgvf-0028 — a device that carries motors and nothing else is not a controller *(ours)*
+
+`hidclass` makes one device per top-level collection, so `mgvf-0010`'s haptics
+arrives on a device of its own carrying the pad's vendor and product ids — it is
+the same physical pad. A client that finds its controller by walking the HID
+interface and reading those ids therefore sees **two** DualSense, and the second
+answers nothing a DualSense would. Sony's library does exactly that, and no title
+using it would start while `XInputRumble` was on.
+
+It costs nothing to fix, which is what makes it worth doing: xinput does not look
+for this device under the HID interface. Three conditions mark it, and each does
+work, because getting this wrong the permissive way would erase a real
+force-feedback controller from every application: the multi-axis usage
+`mgvf-0010` chose on purpose, a haptics collection, and **no generic-desktop axis
+at all**.
+
+Mortal Shell 2 starts with the switch on. Not proved by that run: the narrow half
+— there is no real force-feedback wheel here to confirm a genuine one is left
+alone.
+
+### mgvf-0029 — the haptics device can be asked to declare no button *(ours, superseded by mgvf-0030)*
+
+`mgvf-0010`'s device declared **one button that is never pressed**, so a client
+counting button caps would not see zero. Ghost of Tsushima would not keep L3 held
+while `XInputRumble` was on, and a device reporting every button released on
+every poll is the shape of a held button being cleared. This is the one-bit
+experiment that tells a candidate from a diagnosis: `XInputRumbleStubButton 0`
+builds the same device with the button gone and eight bits of padding in its
+place, so the report is the same two bytes and nothing downstream moves.
+
+### mgvf-0030 — no buttons is a legal device, and the haptics stub has none *(ours)*
+
+The experiment answered the same day: with the button gone, L3 holds; with it
+there, it does not. So the better packet becomes the default, in two halves and
+the order matters.
+
+First **xinput stops allocating from a count it has not looked at**. A device
+with no buttons is legal HID, `malloc(0)` may return NULL, and on that line NULL
+meant the whole device was refused — a controller offering nothing but motors
+dropped for having no buttons to count, which is the one thing it was never going
+to have.
+
+Then the stub's default turns over. The button existed only to keep that
+allocation away from zero, and it was always **our** xinput that would have hit
+it: since `mgvf-0028` this device is published under the xinput interface and no
+other, so the only code that opens it is code this set ships.
+
+Not claimed: why the game behaves that way. What is measured is the outcome, on
+one title, with one option between the two runs.
 
 ## If another of their patches is ever needed
 

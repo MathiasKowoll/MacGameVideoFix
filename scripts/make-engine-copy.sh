@@ -274,9 +274,12 @@ say "[3/7] winegstreamer"
 # --- 4. the controller-bus set -----------------------------------------------
 #
 # Installed by default. It is an improvement rather than a fix -- no title in
-# the table needs it and every one of them runs without it -- but the three
-# patches that carry it are what make a DualSense on Bluetooth behave the way
-# it does over USB, and that is worth having on every engine this makes.
+# the table needs it and every one of them runs without it -- but the patches
+# that carry it are what make a DualSense on Bluetooth behave the way it does
+# over USB, and that is worth having on every engine this makes. Three of them
+# do that much; the rest went on to give a game that only speaks XInput a pair
+# of motors to drive. scripts/build-controller-bus.sh names the whole set and
+# source-patches/README.md says what each one is for.
 #
 # What it does NOT turn on is the USB presentation. Those patches are in the
 # same winebus, and they stay off: presenting a Bluetooth pad as a USB one
