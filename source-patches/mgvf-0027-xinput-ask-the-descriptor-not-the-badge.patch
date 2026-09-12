@@ -1,0 +1,102 @@
+xinput: a Sony badge is not a Sony descriptor.
+
+mgvf-0012 taught xinput that a gamepad's axes and buttons come in two
+conventions rather than one, and decided which a pad follows by reading its
+vendor id. 0x054c meant the Sony order: right stick on Z and Rz, triggers on Rx
+and Ry.
+
+That was right for as long as a Sony pad reached xinput carrying its own report
+descriptor, which is every pad on the raw route. It stops being right the moment
+the pad goes through winebus's SDL backend, because wine then throws the pad's
+descriptor away and builds an Xbox-shaped one in its place -- and the vendor id
+stays 0x054c, because it is still the same physical pad on the same bus.
+
+So xinput applied the Sony order to a descriptor that was already in Xbox order,
+and the two corrections cancelled into a fault: God of War Ragnarok on that
+route read its right stick off the trigger axes. That is this project's own
+regression and it has been open since mgvf-0012 shipped.
+
+ASK THE DESCRIPTOR. The X axis is the signal, and it is not a heuristic dressed
+up as one:
+
+  a Sony pad's own descriptor    X is an unsigned byte, logical 0..255
+  wine's synthetic gamepad       X is signed 16-bit, logical minimum negative
+
+One comparison separates them, and it is read from the very descriptor whose
+order is in question rather than from a badge that survives the descriptor being
+replaced. The vendor check stays in front of it: a pad that is not Sony was
+never going to be given this order, and asking its axes about it would only be a
+second way to get the same answer.
+
+A pad that declares no X axis at all falls to the Xbox order with a WARN, which
+is what every build before mgvf-0012 gave everything.
+
+AND THE TRACE SAYS WHICH AND WHY, with the logical range in it. "Uses the Sony
+axis and button order" on its own could not distinguish a correct decision from
+this defect, which is part of why the defect stood as long as it did.
+
+WHAT THIS DOES NOT DO: make God of War Ragnarok work through SDL. It stops this
+driver from breaking it there. That title wants Steam Input, and with Steam
+Input on it is Steam's virtual pad the game reads, not ours; on the raw route,
+with the pad's own descriptor, the glyphs and the axes were already right. The
+fix here is a revert of our own damage, not a feature.
+
+ONE BINARY SERVES BOTH ROUTES, which is the whole point of reading the
+descriptor rather than adding an option: the raw route still gets the Sony
+order, the SDL route stops getting it, and nobody has to know which route their
+pad took.
+
+Signed-off-by: MacGameVideoFix
+---
+--- a/dlls/xinput1_3/main.c
++++ b/dlls/xinput1_3/main.c
+@@ -261,14 +261,45 @@
+ 
+     /* MGVF mgvf-0012: which of the two axis conventions this pad follows.
+      * 0x054c is Sony: every DualShock 4, DualSense and DualSense Edge puts the
+-     * right stick on Z/Rz and the triggers on Rx/Ry. */
++     * right stick on Z/Rz and the triggers on Rx/Ry.
++     *
++     * MGVF mgvf-0027: AND THE VENDOR ALONE IS NOT THE QUESTION. It was, for as
++     * long as a Sony pad reached this code carrying its own report descriptor.
++     * It stops being one the moment the pad goes through winebus's SDL backend,
++     * because wine then throws the pad's descriptor away and synthesises an
++     * Xbox-shaped one for it -- while the vendor id stays 0x054c, since it is
++     * still the same physical pad. The Sony layout was then applied to a
++     * descriptor that was already in Xbox order, and both were undone: God of
++     * War Ragnarok on that route read its right stick off the triggers.
++     *
++     * So the descriptor is asked, not the badge. The X axis is the signal and
++     * it is not a heuristic: a Sony pad declares it as an unsigned byte, 0 to
++     * 255, and wine's synthetic gamepad declares a signed 16-bit axis whose
++     * logical minimum is negative. One comparison separates them, it is read
++     * from the very descriptor whose order is in question, and a pad that
++     * declares no X axis at all gets the Xbox order -- which is what every
++     * build before mgvf-0012 gave everything. */
+     {
+         HIDD_ATTRIBUTES attrs = {sizeof(attrs)};
++        HIDP_VALUE_CAPS x_caps;
++        USHORT x_count = 1;
++
+         if (HidD_GetAttributes(device, &attrs) && attrs.VendorID == 0x054c)
+         {
+-            TRACE("%04x:%04x uses the Sony axis and button order\n",
+-                  attrs.VendorID, attrs.ProductID);
+-            controller->hid.sony_layout = TRUE;
++            if (HidP_GetSpecificValueCaps(HidP_Input, HID_USAGE_PAGE_GENERIC, 0, HID_USAGE_GENERIC_X,
++                                          &x_caps, &x_count, preparsed) != HIDP_STATUS_SUCCESS || !x_count)
++                WARN("%04x:%04x declares no X axis; using the Xbox axis and button order\n",
++                     attrs.VendorID, attrs.ProductID);
++            else if (x_caps.LogicalMin < 0)
++                TRACE("%04x:%04x is a Sony pad whose X axis is signed (%ld..%ld), so this descriptor is not"
++                      " the pad's own -- using the Xbox axis and button order\n",
++                      attrs.VendorID, attrs.ProductID, (long)x_caps.LogicalMin, (long)x_caps.LogicalMax);
++            else
++            {
++                TRACE("%04x:%04x uses the Sony axis and button order (X is %ld..%ld, the pad's own descriptor)\n",
++                      attrs.VendorID, attrs.ProductID, (long)x_caps.LogicalMin, (long)x_caps.LogicalMax);
++                controller->hid.sony_layout = TRUE;
++            }
+         }
+     }
+ 
