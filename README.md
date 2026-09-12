@@ -188,18 +188,27 @@ which is a signature message rather than a date one, whatever the wording about
 an unknown download date suggests. What to do when a copy comes out that way is
 in [Troubleshooting](#troubleshooting).
 
-**One game at a time** is still there and unchanged: **pick your game from the
-list**, drop its folder on it, and press **Apply Fix**.
+**There is one way in now.** The game picker and its drop zone are gone. They
+existed to point the app at a single title, and the scan does everything they
+did; two ways in, one of them strictly weaker, was a choice nobody should have
+had to make.
 
-Picking the game first is what tells the app which folder to ask for, and it
-says so on the drop zone. It also checks that the game's shipping executable is
-really under the folder you dropped, and refuses the folder if it is not, naming
-the file it could not find. There is no continue-anyway.
+**One game at a time still works, and it is the same gesture** — drop that
+game's folder on the window. The scan walks up to the library's `common` and
+finds the game inside it, so pointing at one title and pointing at a whole
+library are the same action with a different starting folder.
 
-The list carries one more entry, **Another Unreal Engine 5 title**, which is
-how an untried Unreal game is attempted. It is the one entry with no shipping
-executable to check against, so it is taken at its word — and no claim that the
-fix works applies to it.
+**Identity is the shipping executable and nothing else.** A folder is claimed as
+a supported game only when that file is really inside it. One that fails the
+test is not claimed, carries no checkbox, and says why. There is no
+continue-anyway.
+
+**An untried Unreal title cannot be attempted from the app.** There used to be a
+list entry for it, and it was removed rather than kept: with no shipping
+executable to check against it matched any folder holding an `Engine` directory,
+claimed to be a supported game, and put unrelated folder names on screen. The
+route for one is `runtime/install-runtime-fix.sh` from a clone, which the wiki's
+*Running the scripts* page covers.
 
 The table carries rows that list does not, and for opposite reasons. **METAL
 GEAR SOLID: Peace Walker** needs nothing picked — the patched engine is its
@@ -249,7 +258,7 @@ published page or in a bug report.
 
 ### Which folder to pick, by hand
 
-One game at a time, which is what the drop zone is for and the fallback when a  <!-- count-ok: how the drop zone works, not a count of anything -->
+Which folder a title actually lives in — for when a scan does not turn it up, and  <!-- count-ok: which folder to pick, not a count of anything -->
 scan does not turn a title up.
 
 For **DYNASTY WARRIORS: ORIGINS**, the folder holding `DWORIGINS.exe` — usually
@@ -288,9 +297,9 @@ The app backs everything up first and has a **Revert** button. It shows a
 progress bar and streams the underlying scripts' output live, so you can see
 which file it is working on rather than staring at a frozen window.
 
-Once the fix is applied, **Apply Fix** is disabled until you revert. Applying
-twice would move the proxy DLL aside as though it were the game's own and lose
-the original.
+A row that is already fixed is not offered for fixing again, and the reason is
+the one that rule always had: applying twice would move the proxy DLL aside as
+though it were the game's own, and lose the original.
 
 Because the app is signed ad-hoc rather than notarised, macOS will refuse the
 first launch. Right click it and choose **Open**, then confirm.
@@ -491,11 +500,13 @@ scripts/build-controller-bus.sh
 scripts/install-controller-build.sh
 ```
 
-These two produce a second engine set, and it is **optional**: four files from
-the same tree with eight patches of ours applied — `winebus.sys`,
-`setupapi.dll` and `ntoskrnl.exe`, and `winebus.so`, the unix half of winebus.
-`mgvf-0002`, `mgvf-0003` and `mgvf-0004` let a Windows client learn a
-controller is on Bluetooth. A DualSense then rumbles over Bluetooth, and its PS
+These two produce a second engine set, and it is **optional**: ten files from
+the same tree with twenty-seven patches of ours applied — `winebus.sys`,
+`setupapi.dll`, `ntoskrnl.exe`, `hidclass.sys`, the five `xinput` DLLs, and
+`winebus.so`, the unix half of winebus.
+
+**It has two halves.** `mgvf-0002`, `mgvf-0003` and `mgvf-0004` let a Windows
+client learn a controller is on Bluetooth. A DualSense then rumbles over Bluetooth, and its PS
 button and touchpad work, as they always did over USB; trigger effects ride in
 the same report, and a title that sends them over Bluetooth is reported working.
 The same `winebus.sys` also carries `mgvf-0005`, a per-device registry option
@@ -503,7 +514,10 @@ The same `winebus.sys` also carries `mgvf-0005`, a per-device registry option
 USB, for Sony's libScePad and for Steam's *plug in your controller* dialog,
 which both insist on a wired pad. Either DualSense, plain or Edge, can be
 presented that way; `runtime/engine-payload-controller/README.md` says how to
-turn it on, and that the driver half has not yet run against a live pad.
+turn it on. One live trace of the driver half exists, and in it the pad's
+Bluetooth link died twenty-two milliseconds after the write; whether the write
+caused it **is not established**, and `mgvf-0007`'s header carries the session
+that argues against it.
 `mgvf-0006` is the fourth, and it is why the set now carries a unix half:
 macOS drives a connected DualSense itself, wine opened the same pad shared and
 wrote to it too, and with two writers on the pad's single Bluetooth output pipe
@@ -593,10 +607,45 @@ values read for the Bluetooth pad and not for the wired one — **and the benefi
 is not**: of 10,684 captured wired writes, not one asks the motors for anything,
 so on everything seen so far this is a no-op waiting for a title that asks.
 
+**And then the other half of the set, which is a different problem.** Everything
+above is about a game that drives the pad *as a DualSense*. Most Windows games do
+not: they ask XInput for "controller 1" and expect an Xbox pad, and XInput had no
+motors to offer, because a DualSense does not keep its motors where an Xbox pad
+does. `mgvf-0010` gives the pad a haptics collection beside its own — the pad
+keeps every byte of its descriptor and the motors arrive on a small device of
+their own — `mgvf-0011` offers that device to XInput, and `mgvf-0012` teaches
+xinput that a gamepad's axes and buttons come in two conventions rather than one.
+So a game that has never heard of a DualSense rumbles one. It is off unless a
+per-title registry value asks for it.
+
+**It costs nothing in frames, and that took the most work to be able to write.**
+The pad's Bluetooth output pipe drains about sixty-five reports a second, and a
+title rumbling through XInput already spends most of those on packets of its own.
+A second writer every frame offers more than the radio drains and everybody pays,
+the game included — the first attempt cost three to five frames a second with
+visible stutter. The answer was not to write less often but not to write at all:
+since `mgvf-0020` a motor change is **stamped into a packet the game is already
+sending**, measured at 92–95% of every change carried that way with nothing of
+ours reaching the link.
+
+The rest of the set is what came out of using it, and
+`source-patches/README.md` has each one with its measurements: which of the pad's
+two vibration paths a packet asks for and what each feels like, a deadband that
+compares the movement at the pad rather than the one the game asked for, the axis
+order chosen by reading the descriptor instead of the vendor badge, and the
+motors device published to xinput and to nothing else — which is what let a title
+driving the pad through Sony's own library start with the switch on.
+
+**This half of the set is also published on its own**, as a small application
+that installs it into one CrossOver and does nothing else:
+
+> **<https://github.com/MathiasKowoll/MacGamePadFix>** — built from `app-padfix/`
+> in this repository.
+
 The set as a whole is an improvement rather than a fix: no row of the table
 needs it and the Motor column does not change. It is installed and removed with
 `runtime/install-engine-controller.sh <app> install | --status | --restore`,
-which keeps CodeWeavers' four files as `.mgvf-stock`, refuses any engine but the
+which keeps CodeWeavers' ten files as `.mgvf-stock`, refuses any engine but the
 one both stamp fields name, refuses while a bottle is running, and re-signs the
 bundle itself. `make-engine-copy.sh` never installs it. The files ship stripped;
 `runtime/engine-payload-controller/README.md` says what that means and what
