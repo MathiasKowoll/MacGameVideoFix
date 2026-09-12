@@ -1,0 +1,167 @@
+hidclass: a device that carries motors and nothing else is not a HID controller.
+
+mgvf-0011 wrote a promise into its own header: "the device is not replaced,
+wrapped or hidden: it keeps GUID_DEVINTERFACE_HID and every client that reads it
+today reads the same bytes tomorrow." That was the right promise for a pad. It
+was the wrong one for THIS device, and the difference has cost two releases.
+
+hidclass makes one device per top-level collection, so mgvf-0010's haptics
+collection arrives on a PDO of its own -- carrying the pad's vendor and product
+ids, because it is the same physical pad on the same bus. A client that finds
+its controller by walking the HID interface and reading those ids therefore
+sees TWO DualSense, and the second one answers nothing a DualSense would.
+
+Sony's own library does exactly that. Its import table is HidD_GetHidGuid,
+SETUPAPI and HidD_GetAttributes, and the disassembly in
+docs/what-libscepad-does-to-the-motors.md has the rest. NO TITLE USING THAT
+LIBRARY STARTS while XInputRumble is on. It has been known since 2026-09-09 and
+shipped as a documented limitation twice.
+
+IT COSTS NOTHING TO FIX, WHICH IS THE PART THAT MAKES IT WORTH DOING, because
+nothing else ever wanted this device. xinput does not look for it under the HID
+interface: dlls/xinput1_3/main.c enumerates GUID_DEVINTERFACE_WINEXINPUT, which
+mgvf-0011 registers and which this patch does not touch. Every other client was
+only ever going to be confused by it -- which is why mgvf-0010 already declared
+it a multi-axis controller rather than a gamepad, to keep games that enumerate
+pads by usage from counting it. This finishes that thought for clients that
+enumerate by vendor id instead, which usage cannot hide from.
+
+THE TEST IS THREE CONDITIONS AND EACH IS DOING WORK, because getting this wrong
+in the permissive direction would make a real force-feedback controller vanish
+from every application on the system:
+
+  MULTI_AXIS_CONTROLLER    the usage mgvf-0010 chose for this device on purpose.
+                           A real pad or wheel declares GAMEPAD or JOYSTICK.
+  a haptics collection     it has motors to offer at all.
+  NO generic-desktop axes  mgvf-0010 puts this device's single input byte on the
+                           VENDOR page precisely so nothing reads it as an axis.
+                           Anything with a stick, a pedal or a wheel declares
+                           axes here and is a real controller whatever its usage
+                           says.
+
+A device that is all three is one this driver built for one client. It is
+offered to that client and to nobody else.
+
+NOT CLAIMED: that this makes those titles rumble through XInput. They do not
+need to -- a game that links Sony's library drives the pad itself and already
+rumbles over Bluetooth on mgvf-0002 through mgvf-0004. What this removes is the
+reason they refused to start at all, so the switch stops being a thing a person
+has to know to turn off for half their library.
+
+UNTESTED AGAINST A TITLE AT THE TIME OF WRITING. The mechanism is read from
+libScePad's import table and from wine's own enumeration, and the three
+conditions are read from mgvf-0010's descriptor; what has not happened yet is
+one of those games starting with XInputRumble on.
+
+Signed-off-by: MacGameVideoFix
+---
+--- a/dlls/hidclass.sys/hid.h
++++ b/dlls/hidclass.sys/hid.h
+@@ -93,6 +93,7 @@
+     /* MGVF mgvf-0011: a pad that carries a HID haptics collection is also
+      * offered under the private interface xinput looks for. See pnp.c. */
+     BOOL is_xinput_haptics;
++    BOOL is_motors_only; /* MGVF mgvf-0028: exists to carry motors and nothing else, so it is not offered as a HID device */
+     UNICODE_STRING xinput_link_name;
+ };
+ 
+--- a/dlls/hidclass.sys/pnp.c
++++ b/dlls/hidclass.sys/pnp.c
+@@ -216,6 +216,47 @@
+     return found;
+ }
+ 
++/* MGVF mgvf-0028: a device that exists ONLY to carry motors, as opposed to a
++ * controller that also has them. The difference decides whether it is offered
++ * to everything that reads HID or only to xinput, and getting it wrong in the
++ * permissive direction is how a real force-feedback controller would vanish
++ * from every application on the system. So all three of these are required and
++ * each is doing work:
++ *
++ *   MULTI_AXIS_CONTROLLER   mgvf-0010 chose that usage for this device on
++ *                           purpose, so that a game enumerating gamepads and
++ *                           joysticks does not count it as a second controller.
++ *                           A real pad or wheel declares GAMEPAD or JOYSTICK.
++ *   a haptics collection    it has motors to offer at all.
++ *   NO generic-desktop axes mgvf-0010 puts this device's single input byte on
++ *                           the VENDOR page precisely so that nothing reads it
++ *                           as an axis. Anything with a stick, a pedal or a
++ *                           wheel declares axes here and is a real controller,
++ *                           whatever its usage says.
++ *
++ * A device that is all three is one this driver built, and the only client that
++ * has any business with it is xinput. */
++static BOOL is_motors_only_collection( HIDP_COLLECTION_DESC *desc )
++{
++    HIDP_VALUE_CAPS *values;
++    HIDP_CAPS caps;
++    USHORT count;
++    BOOL axes = FALSE;
++    ULONG i;
++
++    if (desc->UsagePage != HID_USAGE_PAGE_GENERIC ||
++        desc->Usage != HID_USAGE_GENERIC_MULTI_AXIS_CONTROLLER) return FALSE;
++    if (!has_haptics_collection( desc )) return FALSE;
++    if (HidP_GetCaps( desc->PreparsedData, &caps ) != HIDP_STATUS_SUCCESS) return FALSE;
++    if (!(count = caps.NumberInputValueCaps)) return TRUE;
++    if (!(values = malloc( count * sizeof(*values) ))) return FALSE;
++    if (HidP_GetValueCaps( HidP_Input, values, &count, desc->PreparsedData ) == HIDP_STATUS_SUCCESS)
++        for (i = 0; i < count && !axes; ++i)
++            axes = values[i].UsagePage == HID_USAGE_PAGE_GENERIC;
++    free( values );
++    return !axes;
++}
++
+ static NTSTATUS get_hid_device_desc( minidriver *minidriver, DEVICE_OBJECT *device, HIDP_DEVICE_DESC *desc )
+ {
+     HID_DESCRIPTOR descriptor = {0};
+@@ -641,9 +682,39 @@
+                     pdo->is_xinput_haptics = TRUE;
+                 else
+                     ERR( "Failed to register the xinput interface for %s.\n", debugstr_w(pdo->base.device_id) );
++
++                /* MGVF mgvf-0028: and if it carries motors and nothing else, it
++                 * is not offered as a HID device at all.
++                 *
++                 * WHY, because "it keeps GUID_DEVINTERFACE_HID and every client
++                 * that reads it today reads the same bytes tomorrow" was this
++                 * patch's own promise and it was the wrong promise for THIS
++                 * device. hidclass makes one device per top-level collection,
++                 * so the motors arrive on a PDO of their own -- carrying the
++                 * pad's vendor and product ids, because it is the same physical
++                 * pad. A client that finds its controller by walking the HID
++                 * interface and reading those ids therefore sees TWO of them,
++                 * and the second answers nothing a controller would.
++                 *
++                 * Sony's own library does exactly that: HidD_GetHidGuid,
++                 * SetupAPI, HidD_GetAttributes. No title using it starts while
++                 * XInputRumble is on, and that has been known and shipped as a
++                 * limitation twice.
++                 *
++                 * It costs nothing to fix because nothing else ever wanted this
++                 * device. xinput does not look for it under the HID interface
++                 * -- dlls/xinput1_3/main.c enumerates GUID_DEVINTERFACE_WINEXINPUT,
++                 * which is registered just above and is untouched here. Every
++                 * other client was only ever going to be confused by it. */
++                if (is_motors_only_collection( desc ))
++                {
++                    pdo->is_motors_only = TRUE;
++                    TRACE( "%s carries motors and nothing else: offered to xinput only.\n",
++                           debugstr_w(pdo->base.device_id) );
++                }
+             }
+ 
+-            IoSetDeviceInterfaceState( &pdo->link_name, TRUE );
++            if (!pdo->is_motors_only) IoSetDeviceInterfaceState( &pdo->link_name, TRUE );
+             if (pdo->is_mouse) IoSetDeviceInterfaceState( &pdo->mouse_link_name, TRUE );
+             if (pdo->is_keyboard) IoSetDeviceInterfaceState( &pdo->keyboard_link_name, TRUE );
+             if (pdo->is_xinput_haptics) IoSetDeviceInterfaceState( &pdo->xinput_link_name, TRUE );
+@@ -655,7 +726,7 @@
+         case IRP_MN_REMOVE_DEVICE:
+             send_wm_input_device_change( pdo, GIDC_REMOVAL );
+ 
+-            IoSetDeviceInterfaceState( &pdo->link_name, FALSE );
++            if (!pdo->is_motors_only) IoSetDeviceInterfaceState( &pdo->link_name, FALSE ); /* MGVF mgvf-0028 */
+             if (pdo->is_mouse) IoSetDeviceInterfaceState( &pdo->mouse_link_name, FALSE );
+             if (pdo->is_keyboard) IoSetDeviceInterfaceState( &pdo->keyboard_link_name, FALSE );
+             if (pdo->is_xinput_haptics) IoSetDeviceInterfaceState( &pdo->xinput_link_name, FALSE ); /* MGVF mgvf-0011 */

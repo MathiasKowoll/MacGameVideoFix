@@ -388,7 +388,7 @@ runs after the engine copy exists with no signing step after it.
 | `wine/x86_64-windows/winebus.sys` | 69,632 | 0 | 72 |
 | `wine/x86_64-windows/setupapi.dll` | 462,848 | 617 | 210 |
 | `wine/x86_64-windows/ntoskrnl.exe` | 393,216 | 1,667 | 678 |
-| `wine/x86_64-windows/hidclass.sys` | 53,248 | 1 | 63 |
+| `wine/x86_64-windows/hidclass.sys` | 53,248 | 1 | 64 |
 | `wine/x86_64-windows/xinput1_1.dll` | 57,344 | 5 | 78 |
 | `wine/x86_64-windows/xinput1_2.dll` | 57,344 | 5 | 78 |
 | `wine/x86_64-windows/xinput1_3.dll` | 57,344 | 100 | 78 |
@@ -399,7 +399,11 @@ runs after the engine copy exists with no signing step after it.
 The last six rows arrived with `mgvf-0011` and `mgvf-0012`, which let a game
 that reads XInput rumble a DualSense without the pad losing anything.
 `hidclass.sys` publishes a pad that carries a haptics collection under the
-interface xinput looks for, beside its own; the xinput DLLs learn the second of
+interface xinput looks for -- and since `mgvf-0028`, a device that carries
+motors and NOTHING else is published under that interface alone, which is the
+sixty-fourth imported symbol in the row above: `HidP_GetValueCaps`, asked
+whether the collection declares any axis before deciding it is not a
+controller; the xinput DLLs learn the second of
 the two conventions a HID gamepad may follow. Five of them for one patch:
 wine builds `xinput1_1`, `xinput1_2`, `xinput1_4` and `xinputuap` from
 `xinput1_3`'s sources, and a game links whichever it was built against.
