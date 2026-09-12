@@ -5,7 +5,7 @@
 `winebus.so` — shipped here with an `engine-controller-` prefix on each name,
 1,340,400 bytes together — are **Wine**, and Wine is **LGPL-2.1-or-later**. They
 are not ours in the sense that matters to the licence: they are somebody else's
-program with twenty-six patches of ours applied, and both halves of that sentence
+program with twenty-seven patches of ours applied, and both halves of that sentence
 carry obligations.
 
 The last is the **unix half** of `winebus`: nine of these are PE files that go
@@ -27,7 +27,7 @@ not only in the repository.
 - Source tree: the wine source of **CrossOver 26.3.0.39832**, revision
   **`wine-11.0-8726-g2e2f5fca349`**, which is the build string
   `engine-controller-built-for.json` records beside these files.
-- Patches applied on top, all twenty-six of them ours:
+- Patches applied on top, all twenty-seven of them ours:
   - **`mgvf-0002`** — `winebus.sys` names the bus a device is on in its
     compatible ids, so `BTHENUM` is there for a client to find.
   - **`mgvf-0003`** — `setupapi.dll` answers `CM_Get_Parent` for HID children,
@@ -105,15 +105,18 @@ not only in the repository.
   - **`mgvf-0028`** — the small device that carries the motors is offered to
     `xinput` and to nothing else, so a client that finds its controller by
     vendor id no longer sees two of them and refuses to start.
-  - **`mgvf-0029`** — an experiment rather than a fix: that same device can be
-    asked to declare no button at all, for a title that loses a held button
-    while the motors are offered to `xinput`. Off by default, because the
-    button is there for a reason that has not stopped being true.
+  - **`mgvf-0029`** — that same device can be asked to declare no button at all,
+    for a title that loses a held button while the motors are offered to
+    `xinput`.
+  - **`mgvf-0030`** — and that becomes the default, because it was measured: a
+    held L3 survives without the button and does not with it. `xinput` stops
+    allocating from a button count it has not checked, so a device with no
+    buttons is no longer refused for having none.
 - Built by `scripts/build-controller-bus.sh` in the repository below, which also
   strips the binaries and proves that the strip changed nothing a loader reads.
 
-The twenty-six patch files are published, in full, as
-`source-patches/mgvf-0002-*.patch` … `mgvf-0029-*.patch` in
+The twenty-seven patch files are published, in full, as
+`source-patches/mgvf-0002-*.patch` … `mgvf-0030-*.patch` in
 
 > **<https://github.com/MathiasKowoll/MacGameVideoFix>**
 
@@ -125,7 +128,7 @@ specific to this project, and anyone carrying a patched Wine is welcome to them.
 The LGPL asks that whoever receives these binaries can get the source they were
 built from. Both halves are public and neither is behind us: Wine's source at
 the revision above is CodeWeavers' published CrossOver source for 26.3.0.39832,
-and the twenty-six patches are in the repository named above. Anyone who cannot
+and the twenty-seven patches are in the repository named above. Anyone who cannot
 obtain either should ask through that repository's issues and it will be
 provided.
 
@@ -143,17 +146,17 @@ for.
 
 | file | bytes | sha256 |
 | --- | --- | --- |
-| `engine-controller-winebus.sys` | 73,728 | `518680c2d7486ba3f973cc7555752d15bc81cb1928f975794ea2cf1827ee99ee` |
+| `engine-controller-winebus.sys` | 73,728 | `a6a65af62de8d5c123029358895add3f6f7bdff86109e8239ab146d092543b00` |
 | `engine-controller-setupapi.dll` | 462,848 | `9806fae23e1b0ee8effc22212992b115e1896381139c0f4e4be44eade2347a1a` |
 | `engine-controller-ntoskrnl.exe` | 393,216 | `9231cb23bd73e0ccbaca37f1293eb2d75ad42bb34c7b9d139ff76d1c812893a8` |
 | `engine-controller-hidclass.sys` | 53,248 | `31876ac61a5d6276abd1af7a89871417032f098840d05b3b665b886ba61c1998` |
-| `engine-controller-xinput1_1.dll` | 57,344 | `95dfa9293622095099506b0946809d663d0d01548b54373c553f6a09d850862b` |
-| `engine-controller-xinput1_2.dll` | 57,344 | `0919f191436e89ac2f12bffec7db49e90bc53831bd8e7db7560c5b065f5eee61` |
-| `engine-controller-xinput1_3.dll` | 57,344 | `487d4e45dab2444d7d73b594d408fc891aef4908af5432696279cc2df2dc691e` |
-| `engine-controller-xinput1_4.dll` | 61,440 | `c99d69acb088c075be435fa457a8b19d69916dc358e5a26f149e217215795f47` |
-| `engine-controller-xinputuap.dll` | 61,440 | `ef3a948edea226cb5df5f8821f2389baa167d60d7662dc58f8d601d4dc59bb6d` |
+| `engine-controller-xinput1_1.dll` | 57,344 | `d989955f4be5ea24519e3f7f55d56884637b57d2e96cd6efe38b8ce234bc478d` |
+| `engine-controller-xinput1_2.dll` | 57,344 | `2dc0690f6ac9a5fa96772e6784ac8f69c468e8ac46dff2dc50ebe141dd40fbd4` |
+| `engine-controller-xinput1_3.dll` | 57,344 | `286fa2ea480ba4bb8689eb09d729966b7a475ea3466b42cd62e51a89fe02a4aa` |
+| `engine-controller-xinput1_4.dll` | 61,440 | `ea593dd4008217aa577993605ecb9ed10c9c3c56627664dbe8d95ef5fa2304c0` |
+| `engine-controller-xinputuap.dll` | 61,440 | `009e0f4dafc30a798f48b311059979d374292a542d529fda6e5f3de01645c199` |
 | `engine-controller-winebus.so` | 62,448 | `c84ead102604e01b34bde836c4db6c796dfc7b8d761b35cac51f36d74b022224` |
-| `engine-controller-built-for.json` | 395 | `b589ac48dde3da3385e602377c94bc8df23aa2d85065a6d6e0af35b3af7f7743` |
+| `engine-controller-built-for.json` | 405 | `40dc41166e1115ec61d5a557e47afc2314f688b198e37e06689b8a1445ac875e` |
 
 The same bytes ship in the repository as `runtime/engine-controller-*` and, laid
 out the way an engine is, as `runtime/engine-payload-controller/wine/x86_64-windows/`

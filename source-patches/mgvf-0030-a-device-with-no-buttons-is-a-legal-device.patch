@@ -1,0 +1,121 @@
+xinput, winebus: no buttons is a legal device, and the haptics stub has none.
+
+mgvf-0029 asked a question with a registry value and the answer came back the
+same day: with the haptics device's never-pressed button gone, Ghost of Tsushima
+keeps L3 held. With it there, it does not. So the button was the cost, the
+candidate written into mgvf-0029's header was right, and what is left is to make
+the better packet the one everybody gets.
+
+TWO HALVES, AND THE ORDER MATTERS.
+
+FIRST, xinput stops allocating from a count it has not looked at:
+
+    if (!(button_caps = malloc(sizeof(*button_caps) * ...NumberInputButtonCaps))) return FALSE;
+
+A device with no buttons at all is legal HID. malloc(0) is allowed to return
+NULL, and on that line NULL meant the whole device was refused -- so a
+controller offering nothing but motors would have been dropped for having no
+buttons to count, which is the one thing it was never going to have. The block
+is skipped when the count is zero and nothing else changes; `button_count` stays
+0 and the "Too few buttons, continuing anyway" warning below already handles
+that case, which is how we know the rest of the function was always ready for
+it.
+
+THEN the stub's default turns over. The button existed only to keep that
+allocation away from zero, and it was always OUR xinput that would have hit it:
+since mgvf-0028 this device is published under the xinput interface and no
+other, so the only code that opens it is code this set ships. With the hazard
+fixed at its own end there is nothing left on the other side of the trade.
+
+WHAT THIS IS NOT. It is not a claim about why the game behaves that way. A
+device reporting every button released on every poll is the shape of a held
+button being cleared, and that is still the reading rather than a measurement of
+the game's code. What is measured is the outcome: L3 holds without the button
+and does not hold with it, on one title, with one option between the two runs.
+
+XInputRumbleStubButton 1 puts the old device back, for a client that turns out
+to want a button after all.
+
+Signed-off-by: MacGameVideoFix
+---
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -2241,17 +2241,27 @@
+      * two cancelled and the left stick lost its vertical while keeping its
+      * horizontal. With the motors on their own device there is nothing for
+      * XInput to report but rumble. */
+-    /* MGVF mgvf-0029: with the never-pressed button, or without it. ON, because
+-     * the reason it is there has not stopped being true -- xinput allocates
+-     * from the button-cap count before it checks it. 0 is the experiment:
+-     * Ghost of Tsushima does not keep L3 held while XInputRumble is on, and a
+-     * device reporting every button released on every poll is the candidate. */
++    /* MGVF mgvf-0029, and mgvf-0030 turned it around: the device declares NO
++     * button now, and XInputRumbleStubButton 1 puts the old one back.
++     *
++     * The button was there so that a client counting button caps would not see
++     * zero, because xinput allocated from that count before it checked it. That
++     * was a real hazard and it is now fixed at its own end (mgvf-0030), and it
++     * was only ever OUR xinput that could hit it: since mgvf-0028 this device
++     * is published under the xinput interface and no other, so the only code
++     * that opens it is code this set ships.
++     *
++     * And the button had a cost that was measured rather than guessed. Ghost of
++     * Tsushima would not keep L3 held while XInputRumble was on: a device
++     * reporting every button released on every poll is the shape of a held
++     * button being cleared, and with the button gone L3 holds. Confirmed by the
++     * hand on the pad, 2026-09-12. */
+     {
+         unsigned int with_button = get_device_option(ext->desc.vid, ext->desc.pid,
+-                                                     L"XInputRumbleStubButton", 1);
+-        if (!with_button)
+-            TRACE("device %p: the haptics device declares no button -- the experiment for a game that"
+-                  " loses a held button with the motors offered to xinput\n", device);
++                                                     L"XInputRumbleStubButton", 0);
++        if (with_button)
++            TRACE("device %p: the haptics device declares the never-pressed button again -- a game that"
++                  " reads it may stop holding a button down\n", device);
+         length = dualsense_haptics_endpoint(copy, length, source, source_length,
+                                             DUALSENSE_HAPTICS_FEATURE_ID, DUALSENSE_HAPTICS_OUTPUT_ID,
+                                             DUALSENSE_HAPTICS_INPUT_ID, with_button != 0);
+--- a/dlls/xinput1_3/main.c
++++ b/dlls/xinput1_3/main.c
+@@ -303,19 +303,28 @@
+         }
+     }
+ 
+-    if (!(button_caps = malloc(sizeof(*button_caps) * controller->hid.caps.NumberInputButtonCaps))) return FALSE;
+-    status = HidP_GetButtonCaps(HidP_Input, button_caps, &controller->hid.caps.NumberInputButtonCaps, preparsed);
+-    if (status != HIDP_STATUS_SUCCESS) WARN("HidP_GetButtonCaps returned %#lx\n", status);
+-    else for (i = 0; i < controller->hid.caps.NumberInputButtonCaps; i++)
++    /* MGVF mgvf-0030: a device with no buttons at all is legal HID, and this
++     * allocated from the count before it looked at it. malloc(0) is allowed to
++     * return NULL, and on the line below that meant the whole device was
++     * refused -- a controller offering nothing but motors would have been
++     * dropped for having no buttons to count, which is the one thing it was
++     * never going to have. Nothing here needs to run when the count is zero. */
++    if (controller->hid.caps.NumberInputButtonCaps)
+     {
+-        if (button_caps[i].UsagePage != HID_USAGE_PAGE_BUTTON)
+-            continue;
+-        if (button_caps[i].IsRange)
+-            button_count = max(button_count, button_caps[i].Range.UsageMax);
+-        else
+-            button_count = max(button_count, button_caps[i].NotRange.Usage);
++        if (!(button_caps = malloc(sizeof(*button_caps) * controller->hid.caps.NumberInputButtonCaps))) return FALSE;
++        status = HidP_GetButtonCaps(HidP_Input, button_caps, &controller->hid.caps.NumberInputButtonCaps, preparsed);
++        if (status != HIDP_STATUS_SUCCESS) WARN("HidP_GetButtonCaps returned %#lx\n", status);
++        else for (i = 0; i < controller->hid.caps.NumberInputButtonCaps; i++)
++        {
++            if (button_caps[i].UsagePage != HID_USAGE_PAGE_BUTTON)
++                continue;
++            if (button_caps[i].IsRange)
++                button_count = max(button_count, button_caps[i].Range.UsageMax);
++            else
++                button_count = max(button_count, button_caps[i].NotRange.Usage);
++        }
++        free(button_caps);
+     }
+-    free(button_caps);
+     if (button_count < 11)
+         WARN("Too few buttons, continuing anyway\n");
+     caps->Gamepad.wButtons = 0xffff;
