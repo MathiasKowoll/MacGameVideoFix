@@ -48,10 +48,17 @@ rumbles over Bluetooth on mgvf-0002 through mgvf-0004. What this removes is the
 reason they refused to start at all, so the switch stops being a thing a person
 has to know to turn off for half their library.
 
-UNTESTED AGAINST A TITLE AT THE TIME OF WRITING. The mechanism is read from
-libScePad's import table and from wine's own enumeration, and the three
-conditions are read from mgvf-0010's descriptor; what has not happened yet is
-one of those games starting with XInputRumble on.
+CONFIRMED THE SAME DAY. Mortal Shell 2 -- the title that would not start with
+XInputRumble on, and the one this limitation was written around twice -- starts
+with it on. That is one title and one library, which is the whole of what was
+broken: the block was libScePad's enumeration finding two devices with the pad's
+ids, and there is now one.
+
+What is NOT claimed from that run is any of the rest of it. The three conditions
+were still read from mgvf-0010's descriptor rather than exercised against a real
+force-feedback controller, because there is none here to try; a wheel or a pad
+that declares its own axes and its own motors is what would prove the narrow
+half of this patch, and nothing on this machine is one.
 
 Signed-off-by: MacGameVideoFix
 ---
