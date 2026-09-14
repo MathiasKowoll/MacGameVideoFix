@@ -44,7 +44,9 @@
 # and writes Bluetooth output reports to it, winebus opened the same pad shared
 # and wrote its own, and macOS's writes then time out -- 163 of them in a day,
 # every one inside a minute a game was running under wine -- after which its
-# driver tears itself down and the Bluetooth link drops. So the pad is seized,
+# driver tore itself down and the Bluetooth link dropped. That the contention
+# caused the drop, and that the seize prevents it, was never measured; the
+# corrections are in mgvf-0006's header. So the pad is seized,
 # and the set grows a unix half: dlls/winebus.sys/winebus.so, which the engine
 # has been carrying as CodeWeavers' own build until now.
 #

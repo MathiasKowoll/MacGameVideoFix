@@ -151,6 +151,20 @@ wheel, because there is not one here. Start there.
 **A button that will not stay held.** One title had this and the cause was ours.
 If another does, say so — the reading behind that fix is a reading, not a proof.
 
+**A pad on Bluetooth that drops.** Two things were measured ending the link.
+The first has nothing to do with the set; the second is a cost of the set
+taking the pad from macOS:
+
+- **Holding the PS button.** Held for about five seconds, a DualSense on
+  Bluetooth leaves the Mac from its own side and reconnects a few seconds later.
+  It did so with nothing but macOS running. To open Steam's menu, tap PS rather
+  than holding it.
+- **macOS's idle disconnect, about 15 minutes in.** macOS drops a Bluetooth pad
+  15 minutes after the last input it saw, and while a bottle holds the pad macOS
+  sees none, however much you play. It was seen only on a pad that was already
+  connected before the bottle started — before Steam, for a Steam game. Turn
+  the pad on, or reconnect it, after the game is running.
+
 **Frames.** Turn the trace on for the title and send the log; it measures the
 cost of every write and whether the pad's input stream is disturbed.
 

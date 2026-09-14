@@ -224,11 +224,36 @@ appears and writes Bluetooth output reports to it. winebus opened the same pad
 own. A pad on Bluetooth has one output pipe, and with two writers on it macOS's
 writes time out. Measured from macOS's own log on 2026-09-08: 163
 `kIOReturnTimeout` failures in a day, every one inside a minute in which a game
-was running under wine, 4 to 35 a minute; after a burst its driver tears itself
-down and 160 ms later bluetoothd drops the link with `reason 10719`, six times
-in six minutes across two launches, against the spread-out `10722` drops — the
-pad's idle power-off — earlier the same day. The pad was not turning itself off
-during play.
+was running under wine, 4 to 35 a minute; after a burst its driver tore itself
+down and 160 ms later bluetoothd dropped the link with `reason 10719`, six times
+in six minutes across two launches, against spread-out `10722` drops earlier
+the same day. That log has since left the unified log and cannot be re-read.
+
+**Corrected on 2026-09-14: both reasons were misread.** `10722`, with HID
+reason 436 and an L2CAP Disconnect sent by the host, is not the pad's idle
+power-off but **the Mac closing the link**: before every retained one
+WindowServer logs *"isIdle for N seconds - will disconnect if permitted"* and
+*"disconnectIfIdle disconnecting..."*, then gamecontrollerd asks bluetoothd to
+disconnect. Disassembled, `GCGamepadHIDServicePlugin` (GameControllerIO, loaded
+in WindowServer) disconnects a Bluetooth Classic pad once more than 900.0 s,
+hard-coded, have passed since the last button or stick change its own input
+handler parsed; the DualSense plugin's *"if permitted"* is only
+`isBluetoothClassic`. No preference changes it, and it also disconnects on
+system sleep. `10719`, with HID reason 431 and SDP `STATUS 719`, is **the link
+ended from the pad's side**: no host request, no host L2CAP Disconnect. (431 as
+a remote L2CAP disconnect request and 719 as 700 plus HCI `0x13`, Remote User
+Terminated Connection, is a reading of AOSP's `oi_status.h` names, which also
+appear as strings in bluetoothd; the numeric table was not read from Apple's
+binary.) Every traced unrequested removal ended with the PS button held
+continuously for 4.98–5.00 s up to the last input report, and on 2026-09-14,
+with no wine process running, holding PS under macOS alone produced the same
+431 and 10719, the pad reconnecting by itself 2.7 s later. So holding PS drops
+a Bluetooth DualSense regardless of wine, Steam or the seize. Whether the
+2026-09-08 drops were PS holds is unknown; that the seize prevents them was
+never measured; under the seize no `kIOReturnTimeout` has been logged in any of
+seven disconnect windows checked. Two further `10719` drops, on 2026-09-13 at
+03:21:07 and 22:42:21, came with no trace and no wine activity logged, and
+their cause is open.
 
 The open now asks for `kIOHIDOptionsTypeSeizeDevice`, so IOKit hands the device
 to wine alone and macOS's driver releases it. **The cost is the mechanism:**
@@ -251,11 +276,24 @@ noticeably weaker, and felt right again once the four-file set was back —
 two engine builds compared by hand, on one person's hand, nothing
 instrumented.
 
+**Beside the scope there is a second cost, and it was not intended.** The idle
+rule above counts only input WindowServer's plugin parses, and a seized pad
+sends it none: while wine held the pad, the plugin's idle clock did not reset
+through 13.5 minutes of play at about 64 reports a second. So a pad that was
+connected *before* the bottle started — the plugin attached first — is cut by
+macOS about 15 minutes after the last input macOS saw. A pad that connects
+while a wine process already holds the IOHIDManager match gets no plugin for
+that connection and no idle cut: four of four retained connections each way.
+Turning the pad on, or reconnecting it, after the game is running avoids it —
+seen on automatic reconnects; a deliberate power cycle was not separately
+timed.
+
 Scoped to what was measured and no wider — a DualSense (`054c:0ce6`,
 `054c:0df2`) that arrived over Bluetooth — with `SeizeDevice` under
 `HKLM\System\CurrentControlSet\Services\winebus\Devices\<vid>/<pid>` to
 decide it either way for any device. **On by default** for those pads, unlike
-`mgvf-0005`'s `UsbEmulation`, because without it the link drops mid-game.
+`mgvf-0005`'s `UsbEmulation`, because it was written against the drops seen
+under a shared open on 2026-09-08; that it prevents them is not measured.
 winebus refuses everything that is not a joystick or a gamepad before it opens
 anything, so no value under that key can seize a keyboard or a mouse.
 

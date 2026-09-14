@@ -40,10 +40,46 @@ From macOS's own log on 2026-09-08, not from inside wine:
     HIDDevice" -- and 160 ms later bluetoothd drops the link: "ACL
     disconnected: <addr>, reason 10719". Six such drops in six minutes across
     the last two launches, against single, spread-out drops earlier in the day
-    carrying reason 10722, which is the pad's ordinary idle power-off.
+    carrying reason 10722.
 
-So the pad is not powering itself off during play. The link is being killed by
-contention on the output pipe, and wine is the second writer.
+What that log shows is contention on the output pipe, with wine as the second
+writer. When this was written it was read as the link being killed by that
+contention while the pad was not powering itself off. That reading rested on
+the two disconnect reasons, and both were misread; see the correction below.
+
+CORRECTED ON 2026-09-14
+
+  - "reason 10722", with HID "Disconnection Reason 436" and an L2CAP
+    Disconnect sent by the host, is not the pad's idle power-off. It is the
+    MAC closing the link. Every retained one (2026-09-12 13:40:46 and
+    23:11:34, 2026-09-13 20:27:44 and 20:49:42) is preceded by WindowServer's
+    "[com.apple.GameController.HID:DualSense] isIdle for N seconds - will
+    disconnect if permitted" and "disconnectIfIdle disconnecting...", then
+    gamecontrollerd asking bluetoothd to disconnect. The rule, disassembled:
+    GCGamepadHIDServicePlugin (GameControllerIO.framework, loaded in
+    WindowServer) disconnects a Bluetooth Classic pad when more than 900.0 s,
+    hard-coded, have passed since the last button or stick change its own input
+    handler parsed; DualSenseHIDServicePlugin's "if permitted" is only
+    isBluetoothClassic. No preference changes it. It also disconnects on
+    system sleep.
+  - "reason 10719", with HID reason 431 and SDP "STATUS 719", is the link
+    ended from the PAD's side: no host request, no host L2CAP Disconnect.
+    (431 as OI_L2CAP_DISCONNECT_REMOTE_REQUEST and 719 as 700 + HCI 0x13,
+    Remote User Terminated Connection, is a reading of AOSP's oi_status.h,
+    whose names also appear as strings in bluetoothd; the numeric table was not
+    read from Apple's binary.) Every traced unrequested removal ended with the
+    PS button held continuously for 4.98 to 5.00 s up to the last input report.
+    On 2026-09-14, with no wine process running, holding PS under macOS alone
+    produced the same HID 431 and ACL 10719, and the pad reconnected by itself
+    2.7 s later while PS was still held. Holding PS drops a Bluetooth DualSense
+    regardless of wine, Steam or this patch.
+  - The 2026-09-08 log above is no longer in the unified log and cannot be
+    re-read. Whether its 10719 drops were PS holds is unknown. Whether the
+    seize prevents them was never measured. Under the seize, no
+    kIOReturnTimeout has been logged in any retained window (seven disconnect
+    windows checked).
+  - Two further drops, 2026-09-13 03:21:07 and 22:42:21, were 10719/431 with no
+    trace and no wine activity logged. Their cause is open.
 
 THE CHANGE
 
@@ -55,6 +91,18 @@ The seize is not a preference; it is the mechanism, and it costs what it does
 by design: while winebus holds the pad, macOS and its own applications cannot
 use it. It is given back when the process that seized it goes away, which for
 winebus is the bottle's winedevice.exe -- that is, when the bottle shuts down.
+
+It has a second cost, which was not intended. The idle rule in the correction
+above counts only input the GameController plugin parses, and the seize starves
+that plugin of input: while wine held the pad, the plugin's idle clock did not
+reset however much the pad was used -- 13.5 minutes of play at about 64 reports
+a second, clock never reset. So a pad that was connected BEFORE the bottle
+started, when the plugin attached first, is cut about 15 minutes after the last
+input macOS saw. A pad that connects while a wine process already holds the
+IOHIDManager match gets no plugin for that connection and no idle cut (4 of 4
+retained connections each way). Turning the pad on, or reconnecting it, after
+the game is running avoids it: seen on automatic reconnects; a deliberate power
+cycle was not separately timed.
 
 If the seizing open fails, the shared open this code always did is tried
 instead, with a WARN. A device another process has already seized therefore
@@ -92,8 +140,9 @@ THE OPTION
                             exactly as before this patch. Non-zero: seize.
 
 ON by default for the pads it covers, unlike mgvf-0005's UsbEmulation, because
-this repairs a defect rather than adding a behaviour: without it the link drops
-mid-game. The value exists for the two people the default is wrong for -- a
+it was written against the link drops seen under a shared open on 2026-09-08.
+That it prevents them is not measured; see the correction above. The value
+exists for the two people the default is wrong for -- a
 DualSense owner who would rather share the pad with macOS while a bottle is up,
 and the owner of some other pad who has measured the same timeouts and wants to
 try it.
@@ -120,10 +169,11 @@ NOT COVERED
 A wired DualSense, a DualShock 4, and every other pad, by default -- see THE
 SCOPE. The registry value reaches all of them for anyone who wants to measure.
 
-Whether the seize repairs the drops has NOT been measured yet: what is measured
-is the contention and its consequence, and that wine is the second writer. The
-first run with this patch belongs in the same log the timeouts were counted in,
-looking for the absence of "Unable to send BT output report".
+Whether the seize prevents any drop has NOT been measured: what was measured is
+the contention and that wine was the second writer. Since the patch, no
+"Unable to send BT output report" timeout has been logged in any of seven
+disconnect windows checked; which drops, if any, the contention caused is not
+known, and the 2026-09-08 log can no longer be read to find out.
 
 What macOS does with a pad it has been asked to release mid-session is IOKit's
 business and is not asserted here. What is asserted is only that the seizing
@@ -142,7 +192,7 @@ open, when it fails, falls back to the open this code always did.
  };
  
  static inline struct iohid_device *impl_from_unix_device(struct unix_device *iface)
-@@ -266,7 +269,77 @@
+@@ -266,7 +269,88 @@
      iohid_device_get_feature_report,
      iohid_device_set_feature_report,
  };
@@ -159,12 +209,14 @@ open, when it fails, falls back to the open this code always did.
 + * -536870186", which is kIOReturnTimeout -- 163 of them in a day, 4 to 35 a
 + * minute and only in the minutes a game was running under wine, the highest
 + * rate in the session where the guest wrote most often. After a burst its
-+ * driver tears itself down ("Cancel", "Freeing HIDDevice") and 160 ms later
-+ * bluetoothd drops the link: "ACL disconnected ... reason 10719", six times in
-+ * six minutes across two launches, where the drops earlier in the day carried
-+ * 10722, the pad's ordinary idle power-off. The pad is not turning itself off
-+ * during play; the link is being killed by contention on the output pipe, and
-+ * wine is the second writer.
++ * driver tore itself down ("Cancel", "Freeing HIDDevice") and 160 ms later
++ * bluetoothd dropped the link: "ACL disconnected ... reason 10719", six times
++ * in six minutes across two launches. That log has since rotated away and
++ * cannot be re-read, so whether those drops were a held PS button is unknown:
++ * holding PS for about 5 s ends the link from the pad's side with the same
++ * 10719 (HID reason 431), measured on 2026-09-14 with no wine process running.
++ * The 10722 drops earlier that day were not the pad powering off either; they
++ * are macOS's own idle cut, below.
 + *
 + * THE CHANGE. Open with kIOHIDOptionsTypeSeizeDevice, which hands the device
 + * to this process alone and makes macOS's driver release it, so there is only
@@ -172,6 +224,14 @@ open, when it fails, falls back to the open this code always did.
 + * bottle holds the pad, macOS and its own applications cannot use it. It is
 + * given back when the process that seized it goes away, which for winebus is
 + * the bottle's winedevice.exe.
++ *
++ * A second cost, not intended: WindowServer's GCGamepadHIDServicePlugin
++ * disconnects a Bluetooth Classic pad 900 s after the last button or stick
++ * change it parsed (bluetoothd: "reason 10722", HID reason 436), and a seized
++ * pad sends it none -- its clock did not reset through 13.5 minutes of play.
++ * So a pad connected before the bottle started is cut about 15 minutes after
++ * the last input macOS saw. A pad that connects while this process already
++ * holds the match got no plugin and no cut, in every retained connection.
 + *
 + * THE SCOPE. Seizing indiscriminately would take the user's own input devices
 + * away from macOS, so the default is what the measurement covers and nothing
@@ -186,11 +246,12 @@ open, when it fails, falls back to the open this code always did.
 + *                             before. Non-zero: seize.
 + *
 + * Unlike mgvf-0005's UsbEmulation this one is ON by default for the pads it
-+ * covers, because it repairs a defect rather than adding a behaviour: without
-+ * it the link drops mid-game. The value is there for the two people the
-+ * default is wrong for -- a DualSense owner who would rather share the pad
-+ * with macOS, and the owner of some other pad who has measured the same
-+ * timeouts and wants to try it.
++ * covers, because it was written against the drops seen under a shared open
++ * on 2026-09-08. That it prevents them is not measured; under the seize no
++ * kIOReturnTimeout was logged in the seven disconnect windows checked. The
++ * value is there for the two people the default is wrong for -- a DualSense
++ * owner who would rather share the pad with macOS, and the owner of some
++ * other pad who has measured the same timeouts and wants to try it.
 + *
 + * The value cannot reach a keyboard or a mouse: the enumeration below refuses
 + * everything that is not a joystick or a gamepad before it ever opens
@@ -220,7 +281,7 @@ open, when it fails, falls back to the open this code always did.
  static void handle_DeviceMatchingCallback(void *context, IOReturn result, void *sender, IOHIDDeviceRef IOHIDDevice)
  {
      struct device_desc desc =
-@@ -275,6 +348,7 @@
+@@ -275,6 +359,7 @@
          .serialnumber = {'0','0','0','0',0},
      };
      struct iohid_device *impl;
@@ -228,7 +289,7 @@ open, when it fails, falls back to the open this code always did.
      USAGE_AND_PAGE usages;
      CFStringRef str;
  
-@@ -306,8 +380,22 @@
+@@ -306,8 +391,22 @@
          return;
      }
  
@@ -252,7 +313,7 @@ open, when it fails, falls back to the open this code always did.
          ERR("Failed to open HID device %p (vid %04x, pid %04x)\n", IOHIDDevice, desc.vid, desc.pid);
          return;
      }
-@@ -333,6 +421,7 @@
+@@ -333,6 +432,7 @@
      list_add_tail(&device_list, &impl->unix_device.entry);
      impl->device = IOHIDDevice;
      impl->buffer = NULL;
@@ -260,7 +321,7 @@ open, when it fails, falls back to the open this code always did.
  
      bus_event_queue_device_created(&event_queue, &impl->unix_device, &desc);
  }
-@@ -346,9 +435,14 @@
+@@ -346,9 +446,14 @@
      /* Note: Yes, we leak the buffer. But according to research there is no
               safe way to deallocate that buffer. */
      IOHIDDeviceUnscheduleFromRunLoop(IOHIDDevice, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);

@@ -525,12 +525,21 @@ that argues against it.
 `mgvf-0006` is the fourth, and it is why the set now carries a unix half:
 macOS drives a connected DualSense itself, wine opened the same pad shared and
 wrote to it too, and with two writers on the pad's single Bluetooth output pipe
-macOS's writes timed out until its driver gave up and the Bluetooth link
-dropped — measured from macOS's own log, 163 timeouts in a day and every one of
-them while a game was running under wine. wine now **seizes** such a pad, and
+macOS's writes timed out — measured from macOS's own log on 2026-09-08, 163
+timeouts in a day and every one of them while a game was running under wine.
+Link drops followed in that log. That the contention caused them, and that the
+seize prevents them, is **not measured**, and the log can no longer be re-read;
+what is measured since is that holding the PS button for about five seconds
+drops a Bluetooth DualSense from the pad's own side, with or without wine.
+wine now **seizes** such a pad, and
 that costs exactly what it sounds like: **while a bottle holds the pad, macOS
 and its own applications cannot use it**, and it is released when the bottle
-closes. On by default for a DualSense on Bluetooth, and only for that; a
+closes. It has a second, unintended cost: macOS disconnects a Bluetooth pad
+900 seconds after the last input it saw, and a seized pad shows it none, so a
+pad connected before the bottle started is cut by macOS about fifteen minutes
+after the last input macOS saw; one that reconnected while the game was running
+was not (seen on automatic reconnects).
+On by default for a DualSense on Bluetooth, and only for that; a
 registry value turns it off per device.
 
 That claim is the right one to make while a game runs: two programs writing

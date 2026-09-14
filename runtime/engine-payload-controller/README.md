@@ -201,12 +201,44 @@ output pipe, and with two writers on it macOS's writes time out. Measured from
 macOS's own log on 2026-09-08: 163 timeouts in a day — *"(Async) Unable to send
 BT output report to DualSense - error -536870186"*, which is
 `kIOReturnTimeout` — every one of them inside a minute in which a game was
-running under wine, 4 to 35 a minute. After a burst the driver tears itself
-down and 160 ms later bluetoothd drops the link, *"reason 10719"*: six drops in
-six minutes across two launches, where the drops earlier that day carried
-`10722`, the pad's ordinary idle power-off. **The pad was not turning itself off
-during play. The link was being killed by contention, and wine was the second
-writer.**
+running under wine, 4 to 35 a minute. After a burst the driver tore itself
+down and 160 ms later bluetoothd dropped the link, *"reason 10719"*: six drops
+in six minutes across two launches, where the drops earlier that day carried
+`10722`. That is what the seize was written against, and wine was the second
+writer. The log it was read from has since left macOS's unified log and cannot
+be read again.
+
+**What those disconnects were, corrected on 2026-09-14.** This section used to
+call `10722` the pad's ordinary idle power-off and say the link was being
+killed by contention. Neither held up.
+
+- **`10722` is the Mac closing the link, not the pad powering off.** It comes
+  with HID *"Disconnection Reason 436"* and an L2CAP Disconnect sent by the
+  host, and every retained one follows WindowServer's *"isIdle for N seconds -
+  will disconnect if permitted"* and *"disconnectIfIdle disconnecting..."*,
+  then gamecontrollerd asking bluetoothd to disconnect. The rule, disassembled
+  from `GCGamepadHIDServicePlugin` in GameControllerIO: a Bluetooth Classic pad
+  is disconnected once more than 900.0 s, hard-coded, have passed since the
+  last button or stick change the plugin parsed. The DualSense plugin's *"if
+  permitted"* is only whether the pad is Bluetooth Classic. No preference
+  changes it, and it also disconnects on system sleep.
+- **`10719` is the pad ending the link, and holding the PS button does it.** It
+  comes with HID reason 431 and SDP *"STATUS 719"*, with no host request and no
+  host L2CAP Disconnect. (That 431 is a remote L2CAP disconnect request and 719
+  is HCI `0x13`, Remote User Terminated Connection, is a reading of AOSP's
+  `oi_status.h` names, which appear as strings in bluetoothd; the numbers were
+  not read from Apple's binary.) Every traced unrequested removal ended with PS
+  held continuously for 4.98–5.00 s up to the last input report. On 2026-09-14,
+  with no wine process running, holding PS under macOS alone gave the same 431
+  and 10719, and the pad reconnected by itself 2.7 s later, PS still held. So
+  **holding PS — to open Steam's menu, say — drops a Bluetooth DualSense with
+  or without wine, Steam or the seize. Tap it instead.**
+- **Whether the seize stops any drop is not measured.** Whether the six drops
+  of 2026-09-08 were PS holds is unknown. Under the seize, no timeout has been
+  logged in any of seven disconnect windows checked.
+- Two more `10719` drops, on 2026-09-13 at 03:21:07 and 22:42:21, came with no
+  trace and no wine activity logged. Battery or the pad's own idle behaviour
+  are open; their cause is not known.
 
 With `mgvf-0006` winebus opens such a pad with `kIOHIDOptionsTypeSeizeDevice`:
 IOKit hands it to wine alone and macOS's driver releases it, so there is one
@@ -233,6 +265,18 @@ without `mgvf-0006` the vibration felt noticeably weaker, and felt right
 again once the four-file set was back — two engine builds compared by hand,
 on one person's hand, nothing instrumented.
 
+**And a second cost, which nobody intended: macOS's idle disconnect.** The
+900-second rule above counts only input WindowServer's plugin parses, and a
+seized pad sends it none. While wine held the pad, that clock did not reset
+through 13.5 minutes of play at about 64 reports a second. So a pad that was
+connected **before** the bottle started — the plugin attached first — is cut
+by macOS about **15 minutes** after the last input macOS saw, however much it
+is being played. A pad that connects while a wine process already holds it
+gets no plugin for that connection and no idle cut: four of four retained
+connections each way. **Turn the pad on, or reconnect it, after the game is
+running.** That was seen on automatic reconnects; a deliberate power cycle was
+not separately timed.
+
 **What it applies to.** Only a **DualSense** (`054c:0ce6`, `054c:0df2`) that
 arrived over **Bluetooth**, which is where the timeouts were counted. A pad on
 a cable, a DualShock 4 and every other device are opened shared, exactly as
@@ -248,16 +292,20 @@ winebus falls back to the shared open and the pad still works.
 The key is the one `UsbEmulation` and winebus's own `Hidraw` live under, named
 after the pad's real ids in lower-case hex with a slash — `054c/0ce6`,
 `054c/0df2`. **Unlike `UsbEmulation` this one is on by default** for the pads
-above, because it repairs a defect rather than adding a behaviour: without it
-the link drops mid-game. Set it to `0` if you would rather share the pad; set
-it to `1` on some other pad if you have measured the same timeouts and want to
-try it. It is read once, when the bottle's wine starts — not per connect, as
-`UsbEmulation` is — so a change applies on the next start of the bottle.
+above, because it was written against the drops seen under a shared open on
+2026-09-08; that it prevents them is not measured. Set it to `0` if you would
+rather share the pad; set it to `1` on some other pad if you have measured the
+same timeouts and want to try it. A key that already says `1` for a DualSense
+changes nothing, because absent means the same; only `0` turns the seize off.
+One bottle here carries an explicit `1` under both `054c/0ce6` and `054c/0df2`,
+present since at least 2026-09-12 and of unknown origin. It is read once, when
+the bottle's wine starts — not per connect, as `UsbEmulation` is — so a change
+applies on the next start of the bottle.
 
-**Not yet measured:** that the seize *stops* the drops. What is measured is the
-contention, its consequence, and that wine is the second writer. The first run
-with this file belongs in the same log the timeouts were counted in, looking
-for the absence of *"Unable to send BT output report"*.
+**Not yet measured:** that the seize *stops* any drop. What was measured on
+2026-09-08 is the contention and that wine was the second writer; that log can
+no longer be re-read. Since the seize, no *"Unable to send BT output report"*
+timeout has been logged in any of seven disconnect windows checked.
 
 ## Making the rumble stronger
 

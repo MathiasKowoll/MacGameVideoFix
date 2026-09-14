@@ -31,11 +31,15 @@
 # The fourth file, winebus.so, is the unix half, and it is here for a different
 # fault: macOS drives a connected DualSense itself and writes Bluetooth output
 # reports to it, wine opened the same pad shared and wrote its own, and macOS's
-# writes then time out until its driver gives up and the Bluetooth link drops.
-# Measured from macOS's own log on 2026-09-08. So wine now SEIZES a DualSense
+# writes then time out. Measured from macOS's own log on 2026-09-08, where link
+# drops followed; that the contention caused them, and that the seize prevents
+# them, was never measured. So wine now SEIZES a DualSense
 # that arrived over Bluetooth, and that costs what it says: while a bottle
 # holds the pad, macOS and its own applications cannot use it. The pad comes
-# back when the bottle shuts down. A registry value turns it off per device --
+# back when the bottle shuts down. It also starves macOS's own 900 s idle
+# disconnect of input, so a pad connected before the bottle started is cut by
+# macOS about 15 minutes after the last input macOS saw. A registry value turns
+# it off per device --
 # see runtime/engine-payload-controller/README.md.
 #
 # Same shape as install-engine-media.sh, same rules: it writes into the ENGINE,
