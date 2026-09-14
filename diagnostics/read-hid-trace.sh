@@ -23,6 +23,10 @@
 #                                      output reports without a motor in them
 #   the motor power field           -- mgvf-0023; flag1 0x40 on every row or the
 #                                      option never reached the driver at all
+#   the lights                      -- mgvf-0031; what clients asked of the
+#                                      lightbar and player lights, and whether
+#                                      the driver read and rewrote them
+#   whether SDL left the pad alone  -- mgvf-0032's hint line
 #
 # IT REFUSES AN EMPTY TRACE. A log with no trace:hid lines reads exactly like a
 # pad that did nothing: every count comes out zero and looks like a finding.
@@ -168,6 +172,54 @@ else:
             print("  (ours was 76% -- if a native title is far below that, it is writing")
             print("   deliberately where we are writing on every twitch)")
 PY3
+
+say "mgvf-0031: the lights  (client packets with flag1 0x04 or 0x10, as the client wrote them)"
+printf '  lights will be set          : '; /usr/bin/grep -ac "lights will be set" "$L"
+printf "  set the client's lights     : "; /usr/bin/grep -ac "set the client's lights" "$L"
+printf '  released the lightbar       : '; /usr/bin/grep -ac "released the lightbar before the first colour" "$L"
+/usr/bin/grep -a "lights will be set" "$L" | tail -2 | sed 's/^/  /'
+/usr/bin/grep -a "released the lightbar before the first colour" "$L" | tail -2 | sed 's/^/  /'
+/usr/bin/grep -a "lightbar release could not be written\|carrying the lightbar release could not be written" "$L" | tail -2 | sed 's/^/  /'
+python3 - "$L" <<'PY5'
+import sys, re, collections
+# Offsets into the report as dumped, report id at 0. Bluetooth 0x31: the common
+# block starts at 3. Wired and emulated 0x02: at 1. flag1 is common[1], flag2
+# common[38], the lightbar setup common[41], player common[43], RGB common[44..46].
+rows = collections.Counter(); cur = None; kind = None
+def flush():
+    if cur is None: return
+    base = 3 if kind == 49 else 1
+    if cur.get(0) != kind or len(cur) < base + 47: return
+    f1 = cur.get(base + 1, 0)
+    if not f1 & 0x14: return
+    rgb = "%02x%02x%02x" % (cur.get(base + 44, 0), cur.get(base + 45, 0), cur.get(base + 46, 0))
+    rows[("0x31" if kind == 49 else "0x02", f1, cur.get(base + 38, 0), cur.get(base + 41, 0), cur.get(base + 43, 0), rgb)] += 1
+for line in open(sys.argv[1], errors='replace'):
+    m = re.search(r'write output report id (49|2) length', line)
+    if m:
+        flush(); cur = {}; kind = int(m.group(1)); continue
+    if cur is not None:
+        h = re.search(r'hid_internal_dispatch (\d{8})  ((?:[0-9a-f]{2} ?)+)', line)
+        if h:
+            off = int(h.group(1), 16)
+            for i, v in enumerate(h.group(2).split()): cur[off + i] = int(v, 16)
+            continue
+        flush(); cur = None
+flush()
+if not rows:
+    print("  no client packet asked for a light -- nothing for mgvf-0031 to rewrite")
+else:
+    print(f"  {sum(rows.values())} client packets carry a light:")
+    for (rid, f1, f2, setup, player, rgb), c in rows.most_common(12):
+        print(f"    {rid}  flag1 {f1:#04x}  flag2 {f2:#04x}  setup {setup:#04x}  player {player:#04x}  rgb {rgb}   x{c}")
+    print("  These are the client's bytes, before any rewrite. flag2 0x02 with setup 0x02")
+    print("  is a lightbar release; Steam's session in hid-203611 carried none.")
+PY5
+
+say "mgvf-0032: did SDL leave the hidraw pads alone?"
+/usr/bin/grep -a "SDL will not open" "$L" | tail -2 | sed 's/^/  /'
+/usr/bin/grep -a "SDL may still open\|too many hidraw devices for SDL" "$L" | tail -2 | sed 's/^/  /'
+/usr/bin/grep -aq "SDL will not open\|SDL may still open" "$L" || echo "  no hint line -- no key with Hidraw set, or a build before mgvf-0032"
 
 say "mgvf-0023: did the motor power field go out, and with what in it?"
 python3 - "$L" <<'PY4'

@@ -352,6 +352,79 @@ sounds: a client writing the pad's *own* `0x02` with a motor in it.
 runs — nothing here reads it. No title has been played with the rewrite on; what
 is measured is the ladder, by hand, and the corpus the mode was read out of.
 
+## The lights a user chose
+
+**A preference, and off unless a value asks for it** (`mgvf-0031`). A DualSense's
+lightbar and player lights show whatever the last client wrote. In
+`hid-203611.log` — Mortal Shell 2 under Steam Input, on Bluetooth — 8 of 1858
+client writes set a light and all 8 are Steam's. At each config activation and
+on a reconnect: player `0x24` with colour `00ffff`, the colour alone, then player
+`0x00` with the colour. The Desktop activation is different: a `00/08`
+release-LEDs packet (a ninth write, which sets no light), then player `0x00`
+with the colour, then the colour alone, and no `0x24`. The game sent none.
+
+    HKLM\System\CurrentControlSet\Services\winebus\Devices\<vid>/<pid>
+        LightbarColour   REG_DWORD   0x01RRGGBB: this colour replaces the one
+                                     the client sends; 0x01000000 is the
+                                     lightbar off. Absent, 0, or anything
+                                     without the 0x01 marker: as the client
+                                     asks.
+        PlayerLights     REG_DWORD   0x100 | pattern: this pattern replaces the
+                                     client's; 0x100 is off, 0x104 / 0x10A /
+                                     0x115 / 0x11B are players 1 to 4. Absent,
+                                     0, or anything else: as the client asks.
+        LightbarRelease  REG_DWORD   Bluetooth only, with LightbarColour set.
+                                     0: never. 1 (absent): one release-only
+                                     report of ours before the first client
+                                     lightbar packet. 2: the same two fields
+                                     folded into that client packet instead.
+                                     A measurement knob; the launcher does not
+                                     write it.
+
+The same key as `VibrationMode`, named after the pad's real ids — `054c/0ce6`,
+`054c/0df2` — and read once as the device arrives, before `mgvf-0005` can
+replace the product id, so a change applies the next time the pad connects.
+The markers keep "black" and "off" apart from "nothing asked".
+
+**What is rewritten.** Only packets a client writes — the native Bluetooth
+`0x31`, the wired `0x02`, and the emulated `0x02` on a copy — and only a field
+whose enable bit that client set: the colour under flag1 `0x04`, the pattern
+under flag1 `0x10`, keeping the client's instant bit `0x20`. No flag bit is set
+or cleared, a Bluetooth packet is signed again only when a byte changed, a wired
+`0x02` only at 48 to 64 bytes, and nothing the rumble thread writes passes
+through it. So a title, or a Steam setup, that never sends a light change gets
+nothing from this yet: no packet is sent at arrival. Brightness, the mic LED and
+Steam's release-LEDs packet pass through untouched. Every pad of one model in a
+bottle gets the same lights, and the player number is the user's: the xinput slot
+cannot be seen from winebus. One `+hid` line says the values were read (*"lights
+will be set"*), one per rewritten packet (*"set the client's lights"*), and one
+for the release (*"released the lightbar before the first colour"*).
+
+**Measured on 2026-09-14:** with form 1, the default, the chosen colour and player
+light held on a DualSense Edge on Bluetooth under Steam Input in two titles, and
+a Sony-library title with both values at 0 kept its own lights.
+
+**Not measured yet:** whether a Bluetooth pad needs the release at all, and whether
+form 2 would work too — Linux `hid-playstation` says a Bluetooth DualSense
+ignores lightbar programming until it gets one, and Steam never sends one — and
+that the rewrite costs no frame.
+
+## SDL leaves a hidraw pad alone
+
+`mgvf-0032`, in `winebus.so`, with no value of its own. A pad whose key sets
+`Hidraw` to a non-zero value is served by `bus_iohid.c`, but wine's SDL bus
+opened it too, 4 ms before the seize, and kept a handle that `main.c` never used;
+ioreg showed that second client's refused writes climbing at 2.00 a second.
+Before `SDL_Init` the SDL bus now lists those pads in `SDL_HIDAPI_IGNORE_DEVICES`
+and `SDL_GAMECONTROLLER_IGNORE_DEVICES`, and a `+hid` line says so: *"SDL will
+not open 0x054c/0x0ce6,0x054c/0x0df2: the hidraw route owns them"*. A key with
+`Hidraw` 0 — the launcher's SDL route — or with no `Hidraw` value is untouched,
+and a variable already set in the environment wins, with a `WARN`. **Measured on
+2026-09-14:** with the patch, that client's refused and accepted writes both
+stayed at 0 across a 20 s sample; one shared client with every counter at zero
+remains, most likely the IOKit backend's HID manager (a reading). It does not
+touch the idle disconnect.
+
 ## Optional
 
 An improvement, not a fix. No title in the README's table needs it, every one
@@ -385,7 +458,7 @@ runs after the engine copy exists with no signing step after it.
 
 | file | bytes | exports | imported symbols |
 | --- | --- | --- | --- |
-| `wine/x86_64-windows/winebus.sys` | 69,632 | 0 | 72 |
+| `wine/x86_64-windows/winebus.sys` | 77,824 | 0 | 72 |
 | `wine/x86_64-windows/setupapi.dll` | 462,848 | 617 | 210 |
 | `wine/x86_64-windows/ntoskrnl.exe` | 393,216 | 1,667 | 678 |
 | `wine/x86_64-windows/hidclass.sys` | 53,248 | 1 | 64 |
@@ -394,7 +467,7 @@ runs after the engine copy exists with no signing step after it.
 | `wine/x86_64-windows/xinput1_3.dll` | 57,344 | 100 | 78 |
 | `wine/x86_64-windows/xinput1_4.dll` | 61,440 | 108 | 79 |
 | `wine/x86_64-windows/xinputuap.dll` | 61,440 | 8 | 79 |
-| `wine/x86_64-unix/winebus.so` | 62,448 | 2 | 5 |
+| `wine/x86_64-unix/winebus.so` | 66,544 | 2 | 5 |
 
 The last six rows arrived with `mgvf-0011` and `mgvf-0012`, which let a game
 that reads XInput rumble a DualSense without the pad losing anything.

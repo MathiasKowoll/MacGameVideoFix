@@ -11,16 +11,24 @@
 # VibrationMode, VibrationGain, XInputRumble, XInputRumbleInterval,
 # XInputRumbleDryRun, XInputRumbleDeadband, XInputRumbleRide,
 # XInputRumbleHapticPath, XInputRumbleMotorPower, XInputRumbleRideBand,
-# XInputRumbleStubButton.
+# XInputRumbleStubButton, LightbarColour, PlayerLights, LightbarRelease.
 #
-# The last one carries a BYTE and not a switch: 0 to 255 is written into the
-# motor power field with the bit that claims it, and 256 or above -- or the
-# value removed -- leaves the field alone, which is what every build before
+# XInputRumbleMotorPower carries a BYTE and not a switch: 0 to 255 is written
+# into the motor power field with the bit that claims it, and 256 or above -- or
+# the value removed -- leaves the field alone, which is what every build before
 # mgvf-0023 did. 0 is what Sony's own library sends on every packet.
 #
-# The launcher rewrites six of those per title and never touches the others, so
-# anything set here that is not one of its six outlives every launch -- which is
-# how a Bluetooth-measured interval once followed a pad onto a cable for weeks.
+# The three light values (mgvf-0031) carry a marker, so give them in hex:
+# LightbarColour 0x01RRGGBB (0x01000000 is the lightbar off), PlayerLights
+# 0x100 | pattern (0x100 off, 0x104 / 0x10A / 0x115 / 0x11B players 1 to 4),
+# anything without the marker meaning "as the client asks". LightbarRelease is
+# 0, 1 or 2 and is a measurement knob only.
+#
+# The launcher rewrites six of those per title, writes the two light values per
+# title as well (0 when the game decides), and never touches the rest -- so
+# anything set here that is not one of its eight, LightbarRelease included,
+# outlives every launch. That is how a Bluetooth-measured interval once followed
+# a pad onto a cable for weeks.
 #
 # Part of MacGameVideoFix — https://github.com/MathiasKowoll/MacGameVideoFix
 # SPDX-License-Identifier: GPL-3.0-or-later
@@ -68,7 +76,7 @@ import sys, re
 reg, name, val = sys.argv[1], sys.argv[2], sys.argv[3]
 lines = open(reg, encoding='utf-8', errors='surrogateescape').read().split('\n')
 sect = re.compile(r'^\[System\\\\CurrentControlSet\\\\Services\\\\winebus\\\\Devices\\\\', re.I)
-want = None if val == 'remove' else f'"{name}"=dword:{int(val):08x}'
+want = None if val == 'remove' else f'"{name}"=dword:{int(val, 0):08x}'
 out, i, done = [], 0, 0
 while i < len(lines):
     line = lines[i]

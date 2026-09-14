@@ -94,6 +94,40 @@ here, whose loudest request is 143 of 255, a little under half the bar is where
 that reaches the ceiling with nothing clipped. Above it the loud and the very
 loud arrive the same.
 
+## Lights
+
+**The lightbar colour and the player number can be chosen per title.** Off
+unless asked for: at the default the pad shows what the game or Steam Input sends,
+exactly as before.
+
+**How it works, and why that decides what it can do.** The choice replaces the
+colour or the player pattern inside the light changes a game or Steam Input
+already sends to the pad. On Bluetooth, with a colour chosen, the driver adds one
+release packet just before the first colour it replaces after the pad connects,
+and nothing else while you play; a player choice alone adds nothing. A game or Steam setup
+that never sends a light change gets nothing from it yet — nothing is sent when
+the pad connects. A game that animates its lightbar loses the animation, and every
+DualSense of the same model in one bottle gets the same choice.
+
+**The player number is yours to pick.** A Windows game using XInput never tells
+the pad which player it is, so the driver cannot know either.
+
+**What was seen.** In one Mortal Shell 2 session under Steam Input, the game sent
+no light change at all; every one came from Steam, at each controller config
+activation: player lights on and then off, and a cyan bar.
+
+**What it did.** On a DualSense Edge on Bluetooth under Steam Input, a chosen red
+bar and player 1 held in two titles, and a Sony-library title left at the default
+kept the lights the game sets.
+
+**Not measured yet:** whether a DualSense on Bluetooth needs a lightbar "release"
+before it accepts a new colour. Linux's driver says it does and Steam never sends
+one, so the driver sends one release before the first colour it replaces; with
+that release the colour holds, and whether it would hold without it was not tried.
+
+The values are read when the pad connects, so start with Steam closed or
+reconnect the pad after changing them.
+
 ## What was measured on which title
 
 Only titles worked on deliberately. This is not an inventory of anyone's
@@ -102,7 +136,7 @@ library.
 | title | how it reaches the pad | what was found |
 | --- | --- | --- |
 | [Beast of Reincarnation](Beast-of-Reincarnation.md) | XInput | Rumble where there was none, and where the frame cost and the deadband were measured. Asks 1 to 143 of 255 across a session |
-| [Mortal Shell 2](Mortal-Shell-2.md) | Sony's library | Would not start with the XInput switch on until 0.2.2. Does not need it: it rumbles on its own |
+| [Mortal Shell 2](Mortal-Shell-2.md) | Sony's library | Would not start with the XInput switch on until 0.2.2. Does not need it: it rumbles on its own. Under Steam Input it sends no light change of its own; Steam sets the lights |
 | Ghost of Tsushima | its own | Would not keep L3 held with the XInput switch on, until the motors device stopped declaring a button. Recognised as a Sony pad either way |
 | God of War Ragnarök | XInput only | Imports `XINPUT1_4` and nothing else, so it needs Steam Input to see a controller at all. Rumbles with both on |
 

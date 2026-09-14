@@ -1,0 +1,163 @@
+winebus: SDL leaves a pad the hidraw route owns alone.
+
+A DualSense whose key says Hidraw is served by bus_iohid.c, and main.c ignores
+the copy of it that the SDL bus reports. Ignoring that copy was never the same
+as SDL leaving the pad alone, and on this engine it is not.
+
+WHAT WAS MEASURED, in one bottle, with the pad on Bluetooth and mgvf-0006's
+seize on:
+
+- sdl_add_device 054c/0df2 is traced 4 ms before bus_iohid.c's seize
+  (hid-203611.log, 333081.353 against 333081.357);
+- ioreg shows a second IOHIDLibUserClient on the pad from the same
+  winedevice.exe, the process that loads winebus.so and
+  lib64/libSDL2-2.0.0.dylib. It has ClientOptions 0, is locked out by the
+  seize, and its SetReportErrCnt climbs at exactly 2.00/s (3251 to 4050 over
+  399.7 s);
+- that libSDL2 has a single IOHIDDeviceOpen call, with options 0.
+
+What ties that client to SDL is read, not traced. sdl_device_stop closes only
+the joystick, so SDL's hidapi handle outlives the SDL device main.c threw away.
+And SDL 2.30's PS5 driver, when nothing else is written, sends a Bluetooth
+keep-alive every 500 ms -- a 78-byte 0x31 with no CRC -- which is the rate.
+Under the seize every one of those writes is refused. Without the seize
+(SeizeDevice 0, or any moment it is not held) it would be a third writer on a
+pad whose link already drops under contention.
+
+THE CHANGE. Before SDL_Init, the SDL bus lists the pads the hidraw route owns
+and gives the list to SDL twice:
+
+- SDL_HIDAPI_IGNORE_DEVICES, which SDL's hid enumeration reads on every pass
+  (src/hidapi/mac/hid.c), so hidapi never lists the pad and no driver opens
+  it;
+- SDL_GAMECONTROLLER_IGNORE_DEVICES, which SDL_JoystickInit loads before any
+  joystick backend starts. The first list alone is not enough: hidapi letting
+  go of a pad is exactly what makes the IOKit backend (HIDAPI_IsDevicePresent)
+  and the GameController backend (HIDAPI_IsDeviceTypePresent) take it, and
+  both check this list before they add a device.
+
+Both hint names, and both of hidapi's match formats ("0x%.4x/0x%.4x" and
+"0x%.4x/0x0000"), are in the engine's libSDL2, 2.30.12 by its dylib version.
+SDL lets the environment win over SDL_SetHint, so a user who sets either
+variable keeps it, and a WARN says so.
+
+THE SCOPE is what is_hidraw_enabled decides from a device key: a key under
+winebus\Devices naming a vendor AND a product, with a non-zero Hidraw, and no
+DisableHidraw. The launcher writes Hidraw 1 for its raw route and 0 for its SDL
+route, so the SDL route is untouched. Also left exactly as before:
+
+- a pad with no Hidraw value, even one that is_hidraw_enabled sends raw by its
+  own preference for Sony pads -- that is a default, not a key saying so;
+- a key naming only a vendor, which SDL's second list cannot express;
+- product 0000, which SDL's hidapi reads as every product of the vendor.
+
+main.c ignored these pads' SDL devices before this patch and still does, so
+nothing a game enumerates changes.
+
+WHAT THIS IS NOT.
+
+- It does not make the second client leave ioreg. Measured on 2026-09-14 with
+  the patch (hid-090147.log has the trace line below): the winedevice.exe
+  client with ClientOptions 0 showed SetReportErrCnt 0 and SetReportCnt 0
+  across a 20 s sample, where before it climbed at 2.00/s. One shared client
+  with every counter at zero remains; that it is the IOKit backend's HID
+  manager is a reading.
+- SDL's IOKit backend opens its HID manager with options 0 at SDL_Init, before
+  any list is consulted. That is read from source, is not changed here, and
+  only reads.
+- The GameController backend names every DualSense 054c:0ce6, so a key for
+  the Edge alone does not keep that one backend away from it. Whether that
+  backend sees a pad at all inside winedevice.exe is not measured.
+- macOS's idle disconnect is a different mechanism, and this does not affect
+  it.
+
+Trace (+hid): "SDL will not open 0x054c/0x0ce6,0x054c/0x0df2: the hidraw
+route owns them".
+
+Signed-off-by: MacGameVideoFix
+---
+--- a/dlls/winebus.sys/bus_sdl.c
++++ b/dlls/winebus.sys/bus_sdl.c
+@@ -1073,6 +1073,72 @@
+     pthread_mutex_unlock(&sdl_cs);
+ }
+ 
++/* MGVF mgvf-0032: SDL leaves a pad the hidraw route owns alone.
++ *
++ * THE PROBLEM. This bus starts SDL over every game controller, and SDL's
++ * hidapi opens a DualSense for its PS5 driver -- in the traces 4 ms before
++ * bus_iohid.c seizes it. main.c then ignores the SDL device, because the pad's
++ * key says Hidraw, but sdl_device_stop closes only the joystick, so SDL's own
++ * handle on the pad stays open for the life of the bottle. ioreg shows that
++ * handle as a second winedevice.exe client, ClientOptions 0, whose
++ * SetReportErrCnt climbs at 2.00/s against mgvf-0006's seize. SDL 2.30's PS5
++ * driver sends a Bluetooth keep-alive, a 78-byte 0x31 with no CRC, every
++ * 500 ms; the rate and the source are what tie the two, no trace of SDL's own
++ * writes does. Without the seize it would be a third writer on the pad.
++ *
++ * THE CHANGE. Before SDL_Init, name those pads in two of SDL's own hints.
++ * SDL_HIDAPI_IGNORE_DEVICES is read on every hid enumeration, so hidapi never
++ * lists them and nothing opens them for a driver. SDL_GAMECONTROLLER_IGNORE_DEVICES
++ * is loaded in SDL_JoystickInit before any joystick backend starts, and the
++ * IOKit and GameController backends -- which would otherwise take a pad the
++ * moment hidapi stops claiming it -- both check it before they add a device.
++ * main.c never kept these pads from SDL in any case, so no game sees a
++ * difference.
++ *
++ * THE SCOPE. What is_hidraw_enabled decides from a device key, and nothing
++ * wider: a key naming a vendor AND a product, with a non-zero Hidraw. A pad
++ * with no Hidraw value, a Hidraw of 0, a key naming only a vendor, and every
++ * pad under DisableHidraw reach SDL exactly as before. Product 0000 is left
++ * out too, because SDL's hidapi reads 0x0000 as every product of the vendor.
++ * The GameController backend names every DualSense 054c:0ce6, so a key for
++ * the Edge alone does not reach that one backend.
++ */
++static void sdl_leave_hidraw_devices_alone(void)
++{
++    const struct device_options *device;
++    SDL_bool hidapi, controller;
++    char list[512];
++    size_t len = 0;
++    int ret;
++
++    if (options->disable_hidraw) return;
++
++    LIST_FOR_EACH_ENTRY(device, &options->devices, struct device_options, entry)
++    {
++        if (device->pid == -1 || !device->pid || device->vid > 0xffff || device->pid > 0xffff) continue;
++        if (device->hidraw == -1 || !device->hidraw) continue;
++
++        ret = snprintf(list + len, sizeof(list) - len, "%s0x%04x/0x%04x", len ? "," : "", device->vid, device->pid);
++        if (ret < 0 || (size_t)ret >= sizeof(list) - len)
++        {
++            list[len] = 0;
++            WARN("too many hidraw devices for SDL's ignore lists, stopping after %s\n", debugstr_a(list));
++            break;
++        }
++        len += ret;
++    }
++    if (!len) return;
++
++    hidapi = pSDL_SetHint(SDL_HINT_HIDAPI_IGNORE_DEVICES, list);
++    controller = pSDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES, list);
++    if (hidapi && controller)
++        TRACE("SDL will not open %s: the hidraw route owns them\n", list);
++    else
++        WARN("SDL may still open %s, which the hidraw route owns: %s set in the environment, and SDL lets the environment win\n",
++             list, !hidapi && !controller ? SDL_HINT_HIDAPI_IGNORE_DEVICES " and " SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES " are" :
++             !hidapi ? SDL_HINT_HIDAPI_IGNORE_DEVICES " is" : SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES " is");
++}
++
+ NTSTATUS sdl_bus_init(void *args)
+ {
+     const char *mapping;
+@@ -1156,6 +1222,9 @@
+     pSDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5_RUMBLE, "1");
+ #endif
+ 
++    /* MGVF mgvf-0032: before SDL_Init, which is when SDL first enumerates */
++    sdl_leave_hidraw_devices_alone();
++
+     if (pSDL_Init(SDL_INIT_GAMECONTROLLER | SDL_INIT_HAPTIC) < 0)
+     {
+         ERR("could not init SDL: %s\n", pSDL_GetError());

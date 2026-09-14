@@ -501,9 +501,13 @@ scripts/install-controller-build.sh
 ```
 
 These two produce a second engine set, and it is **optional**: ten files from
-the same tree with twenty-seven patches of ours applied — `winebus.sys`,
+the same tree with twenty-nine patches of ours applied — `winebus.sys`,
 `setupapi.dll`, `ntoskrnl.exe`, `hidclass.sys`, the five `xinput` DLLs, and
-`winebus.so`, the unix half of winebus.
+`winebus.so`, the unix half of winebus. The newest two are `mgvf-0031`, a
+lightbar colour and player number chosen per pad model and put into the light
+changes a client already sends, and `mgvf-0032`, which keeps wine's SDL bus from
+opening a pad the hidraw route owns; what neither one has been measured to do is
+in `source-patches/README.md`.
 
 **It has two halves.** `mgvf-0002`, `mgvf-0003` and `mgvf-0004` let a Windows
 client learn a controller is on Bluetooth. A DualSense then rumbles over Bluetooth, and its PS

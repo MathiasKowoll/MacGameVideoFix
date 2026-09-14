@@ -776,6 +776,113 @@ other, so the only code that opens it is code this set ships.
 Not claimed: why the game behaves that way. What is measured is the outcome, on
 one title, with one option between the two runs.
 
+### mgvf-0031 — the lights a user chose *(ours)*
+
+A DualSense's lightbar and player LEDs showed whatever the last writer said, and
+on this route nobody asked the user. Three values under the pad's own winebus
+key, read as it arrives and under its real model, change that: `LightbarColour`
+(`0x01RRGGBB`, `0x01000000` is off), `PlayerLights` (`0x100 | pattern`, `0x100`
+is off, `0x104`/`0x10A`/`0x115`/`0x11B` are players 1 to 4) and
+`LightbarRelease` (0, 1, 2). A value without its marker asks for nothing, so the
+default is byte-identical to the build before it.
+
+What it changes is the **client's own light packets**, on the native Bluetooth
+`0x31`, the wired `0x02` and the emulated `0x02`, and only the fields whose
+enable bit that client set: the colour under flag1 `0x04`, the pattern under
+flag1 `0x10`, keeping the client's instant bit. No flag bit moves, a Bluetooth
+packet is re-signed only when a byte changed, and nothing the haptics thread
+writes passes through it. By construction it adds no packet of its own while
+you play, apart from the release below, at most once per arrival; that it costs
+no frame is not measured yet.
+
+What was measured: in `hid-203611.log` (Mortal Shell 2, Steam Input, Bluetooth),
+8 of 1858 client writes set a light and all 8 are Steam's; a ninth is Steam's
+`00/08` release-LEDs packet, which sets none. At each config activation and
+again on a reconnect Steam sends player `0x24` with colour `00ffff`, then the
+colour alone, then player `0x00` with the colour. The Desktop activation is
+different: `00/08`, then player `0x00` with `00ffff`, then `00ffff` alone, and
+no `0x24`. The game sent none. No packet in that session carries the lightbar setup release, and the
+macOS logs of the same evening show macOS's own colour writes carrying it and
+Steam's reaching the radio without it.
+
+The release: Linux `hid-playstation` says a Bluetooth DualSense ignores lightbar
+programming until it is sent a setup release. So with a colour chosen, before
+the first client lightbar packet on Bluetooth, `LightbarRelease 1` (the default)
+sends one release-only report of ours and `2` folds the same two fields into the
+client's packet instead; `0` sends nothing.
+
+Measured on 2026-09-14 with the default, `LightbarRelease 1`, on a DualSense Edge
+on Bluetooth under Steam Input (`hid-090147.log`): the release went out with
+status 0, then Steam's own light packets were rewritten as they passed — colour
+`000040` and `00ffff` became `ff0000`, player `0x00` became `0x04` and `0x24`
+kept its instant bit — and the pad showed the red bar and the centre light, in
+two titles. A Sony-library title launched with no choice made (both values
+written as 0) kept the lights the game sets; that session was seen, not traced.
+
+Not claimed:
+
+- that this pad needs the release at all, or that form `2` would work too —
+  form `1` works and the others were not tried;
+- anything for a title that never sends a light change, such as a pure XInput
+  title without Steam Input: this phase writes no packet at arrival;
+- brightness, the mic LED and Steam's release-LEDs packet, which pass through
+  untouched;
+- per-pad lights: values are keyed by model, so two pads of one model in one
+  bottle share them;
+- the xinput slot: it cannot be seen from winebus, so the player number is the
+  user's choice, not the game's.
+
+### mgvf-0032 — SDL leaves a hidraw pad alone *(ours)*
+
+A pad whose key says `Hidraw` goes through `bus_iohid.c`, and `main.c` throws
+away the copy the SDL bus reports. SDL did not let go of it. In the same
+winedevice.exe:
+- `sdl_add_device 054c/0df2` is traced 4 ms before the seize;
+- ioreg shows a second client on the pad with `ClientOptions` 0;
+- that client's `SetReportErrCnt` climbs at exactly 2.00/s against
+  mgvf-0006's seize.
+
+`sdl_device_stop` closes only the joystick, and SDL 2.30's PS5 driver sends a
+CRC-less Bluetooth keep-alive every 500 ms. That is read from source and
+matches the rate; no trace of SDL's own writes ties them. Under the seize every
+write is refused. Without the seize it would be a third writer.
+
+Before `SDL_Init`, the SDL bus now names those pads in two of SDL's own hints:
+- `SDL_HIDAPI_IGNORE_DEVICES`, so hidapi never lists them;
+- `SDL_GAMECONTROLLER_IGNORE_DEVICES`, so the IOKit and GameController backends
+  do not pick them up once hidapi lets go.
+
+Both names and hidapi's match formats are in the engine's libSDL2 (2.30.12). A
+variable already set in the environment wins, with a WARN. The scope is exactly
+a key naming a vendor and a product with a non-zero `Hidraw`, and no
+`DisableHidraw`.
+
+Unchanged:
+- the launcher's SDL route, which writes `Hidraw` 0;
+- a pad with no `Hidraw` value;
+- a vendor-only key;
+- product `0000`.
+
+The SDL devices it removes were already ignored by `main.c`, so nothing a game
+enumerates changes. Trace (`+hid`): `SDL will not open 0x054c/0x0ce6,0x054c/0x0df2:
+the hidraw route owns them`.
+
+Not claimed:
+
+- that the second client leaves ioreg. Measured on 2026-09-14 with the patch
+  (`hid-090147.log` has the hint line): the winedevice.exe client with
+  `ClientOptions` 0 showed `SetReportErrCnt` 0 and `SetReportCnt` 0 across a
+  20 s sample, where before it climbed at 2.00/s. One shared client with every
+  counter at zero remains; that it is the IOKit backend's HID manager is a
+  reading;
+- anything about the idle disconnect, which is macOS's own mechanism and is not
+  affected;
+- the IOKit backend's shared HID manager open at `SDL_Init`, which comes before
+  any list and is unchanged;
+- the GameController backend for an Edge-only key: that backend names every
+  DualSense `054c:0ce6`, and whether it sees a pad inside winedevice.exe at all
+  is not measured.
+
 ## If another of their patches is ever needed
 
 The remaining 31 are not applied here, and several address titles this project

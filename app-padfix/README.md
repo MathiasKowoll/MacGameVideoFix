@@ -119,7 +119,7 @@ MacGamePadFix, and press **Open Anyway**.
 
 They are **Wine**, and Wine is **LGPL-2.1-or-later**. They are built from the
 Wine source of CrossOver 26.3.0.39832, revision `wine-11.0-8726-g2e2f5fca349`,
-with twenty-seven patches of this project's on top, and all twenty-seven are
+with twenty-nine patches of this project's on top, and all twenty-nine are
 published in full, as patch files, in `source-patches/` of
 
 > <https://github.com/MathiasKowoll/MacGameVideoFix>

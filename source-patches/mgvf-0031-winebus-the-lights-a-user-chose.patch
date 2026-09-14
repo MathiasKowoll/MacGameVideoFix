@@ -1,0 +1,752 @@
+winebus: the lights a user chose, in the light changes a client already sends.
+
+A DualSense has a lightbar and five small player LEDs, and on this route nobody
+asks the user what they should show. In hid-203611.log, Mortal Shell 2 under
+Steam Input on Bluetooth, 8 of 1858 client writes set a light, and every one
+of them is Steam's; a ninth is Steam's 00/08 release-LEDs packet, which sets
+none. At each config activation, and again on a reconnect, Steam sends player
+0x24 with RGB 00ffff (flag1 0x14), RGB 00ffff alone (flag1 0x04), then player
+0x00 with 00ffff (flag1 0x14). The Desktop activation is different: 00/08, then
+player 0x00 with 00ffff (flag1 0x14), then 00ffff alone, and no 0x24. The game
+itself sends no light at all.
+
+THREE REGISTRY VALUES, REG_DWORD, under the pad's own key
+HKLM\System\CurrentControlSet\Services\winebus\Devices\054c/0ce6 or 054c/0df2,
+read as the device arrives, beside VibrationMode and before
+dualsense_usb_emulation_fixups can replace the pid, so always under the real
+model:
+
+  LightbarColour   0x01RRGGBB replaces the colour; 0x01000000 is the lightbar
+                   off. Anything without the 0x01 marker is pass-through.
+  PlayerLights     0x100 | pattern replaces the player LEDs; 0x100 is off,
+                   0x104 / 0x10A / 0x115 / 0x11B are players 1 to 4. Anything
+                   else is pass-through.
+  LightbarRelease  0 never, 1 (the default) a separate release packet, 2 the
+                   release folded into the client's packet. See below.
+
+The markers keep "black" and "off" apart from "nothing asked", which is the
+lesson of mgvf-0022's all-zero sentinel.
+
+WHAT CHANGES. Only CLIENT packets, at the three dispatch entry paths: the native
+Bluetooth 0x31 after the ride and the vibration rewrite, the wired 0x02, and the
+emulated 0x02 on a copy at the dispatch arm -- never inside
+dualsense_usb_set_output_report, which the haptics thread also calls. The
+dispatch conditions now let a light packet reach those paths when vibration and
+the ride are off. In each packet only a field whose enable bit the client set is
+replaced: the colour when flag1 0x04 is set, the pattern when flag1 0x10 is set,
+keeping the client's instant bit 0x20 (Steam and SDL send 0x24). No flag bit is
+ever set or cleared. A Bluetooth packet is signed again only when a byte
+changed; a wired 0x02 is rewritten only when it is 48 to 64 bytes, long enough
+to carry the whole lightbar. Nothing is kept but one claim per arrival, no
+owner is guessed at, and no packet of ours is ever read back.
+
+THE RELEASE, AND WHY IT IS AN OPTION. Linux hid-playstation says a Bluetooth
+DualSense keeps its startup colour and ignores lightbar programming until it has
+been sent a lightbar setup release (flag2 0x02, common byte 41 = 0x02, "light
+out"). Steam never sends one: flag2 bit 0x02 is clear in every packet of
+hid-203611.log. The macOS logs of the same evening show macOS's own colour
+writes carrying the setup bits and Steam's cyan reaching the radio intact with
+none. So with LightbarColour set, on Bluetooth, before the first client lightbar
+packet after the device arrives, LightbarRelease 1 sends one release-only report
+of ours from that same client write (a signed 31 00 10 packet natively, the 0x02
+form through the translation when emulated) and then the client's rewritten
+packet; 2 sets the same two fields in that client packet instead and adds
+nothing. Once per arrival: the claim is taken before the write, so a failed
+release is not retried until the pad next arrives, and its WARN comes at most
+once per arrival. Client writes are already serialised by the device lock.
+WHETHER THE PAD NEEDS THE RELEASE AT ALL, AND WHETHER FORM 2 WORKS TOO, IS NOT
+MEASURED. That is what the value is for. Form 1 was measured on 2026-09-14: on
+a DualSense Edge on Bluetooth under Steam Input the release went out with status
+0, Steam's light packets were rewritten, and the chosen colour and player light
+held in two titles (hid-090147.log).
+
+NOT IN THIS PATCH. No packet at IRP_MN_START_DEVICE and no new feature kick: a
+pad that no client ever writes a light to -- a pure XInput title with no Steam
+Input -- gets nothing yet. Brightness, the mic LED and Steam's release-LEDs
+packet are passed through untouched. Values are keyed by model, so every pad of
+one model in a bottle gets the same lights, and the player number is the user's:
+the xinput slot cannot be seen from here.
+
+TRACES (+hid): "lights will be set" once per arrival with the decoded values;
+"set the client's lights (Bluetooth|cable|emulated)" for each packet a byte of
+which changed; "released the lightbar before the first colour" with the form
+and the write's status, and a WARN if that write fails.
+
+The pure half -- decoding, rewrite, release builders -- is in dualsense_usb.c
+and covered by usb_emu_test.c against the captured packets: Steam's trio with
+only the expected bytes changed and a CRC that agrees with an independent
+bitwise CRC-32, the inert, SDL, 00/08 and haptics-thread packets unchanged,
+libScePad's open keeping its setup byte and flags, the 47/48/64-byte bounds, the
+release packet on both envelopes, and the fold.
+
+Signed-off-by: MacGameVideoFix
+---
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -123,6 +123,13 @@
+      * transport since mgvf-0016 -- which is what makes the hooks below cost
+      * nothing on anything else. */
+     struct dualsense_vibration dualsense_vibration;
++    /* MGVF mgvf-0031: the lights the user chose for this pad, read under its
++     * real product id as it arrives, and DUALSENSE_LIGHTS_NONE for everything
++     * else. dualsense_lights_released is claimed once, the first time a client
++     * lightbar packet is rewritten on Bluetooth; a new arrival is a new
++     * extension and starts at 0 again. */
++    struct dualsense_lights dualsense_lights;
++    LONG dualsense_lights_released;
+     /* MGVF mgvf-0010: the two report ids the haptics collection was given, or
+      * zero when it was not offered -- which is every device but a DualSense
+      * whose key asks for it, and a DualSense whose descriptor already uses
+@@ -456,7 +463,8 @@
+  * belong to the pad's REAL product id, and by the time this runs mgvf-0005 may
+  * have replaced it in the desc with the one being presented. */
+ static DEVICE_OBJECT *bus_create_hid_device(struct device_desc *desc, UINT64 unix_device, UINT32 report_fixups,
+-                                            const struct dualsense_vibration *vib)
++                                            const struct dualsense_vibration *vib,
++                                            const struct dualsense_lights *lights)
+ {
+     struct device_extension *ext;
+     DEVICE_OBJECT *device;
+@@ -491,6 +499,13 @@
+         struct dualsense_vibration none = DUALSENSE_VIBRATION_NONE;
+         ext->dualsense_vibration = vib ? *vib : none;
+     }
++    {
++        /* MGVF mgvf-0031: carried like the vibration options, for the same
++         * reason -- they belong to the real product id. */
++        struct dualsense_lights none = DUALSENSE_LIGHTS_NONE;
++        ext->dualsense_lights = lights ? *lights : none;
++        ext->dualsense_lights_released = 0;
++    }
+     list_init(&ext->reports);
+ 
+     if (report_fixups & HIDRAW_FIXUP_DUALSENSE_USB)
+@@ -782,6 +797,57 @@
+           desc->bus_type == BUS_TYPE_USB ? "a cable" : "a bus it did not name",
+           vib->mode == DUALSENSE_VIBRATION_MODE_LEGACY ?
+           "the haptic path becomes the legacy compatible motors" : "the client's own mode is kept", vib->gain);
++}
++
++/* MGVF mgvf-0031: the lights a user chose, read as the device arrives.
++ *
++ * Read beside the vibration options and for the same reason: before
++ * dualsense_usb_emulation_fixups can replace the pid in the desc, so the values
++ * are always the real model's. A reconnect is a new DEVICE_CREATED and reads
++ * them again; nothing re-reads them during a session.
++ *
++ *   LightbarColour   0x01RRGGBB replaces the colour; 0x01000000 is the
++ *                    lightbar off; anything else leaves it to the client
++ *   PlayerLights     0x100 | pattern replaces the player LEDs; 0x100 is off
++ *   LightbarRelease  0, 1 (the default) or 2 -- see dualsense_usb.h
++ *
++ * @@ Wine registry key: HKLM\System\CurrentControlSet\Services\WineBus\Devices\<VID/PID>
++ */
++static void dualsense_lights_options(const struct device_desc *desc, struct dualsense_lights *lights)
++{
++    struct dualsense_lights none = DUALSENSE_LIGHTS_NONE;
++    char bar[32], player[32];
++
++    *lights = none;
++
++    if (!desc->is_hidraw) return;
++    if (!is_dualsense_gamepad(desc->vid, desc->pid)) return;
++
++    dualsense_lights_from_values(get_device_option(desc->vid, desc->pid, L"LightbarColour", 0),
++                                 get_device_option(desc->vid, desc->pid, L"PlayerLights", 0),
++                                 get_device_option(desc->vid, desc->pid, L"LightbarRelease",
++                                                   DUALSENSE_LIGHTBAR_RELEASE_SEPARATE),
++                                 lights);
++    if (!dualsense_lights_wanted(lights))
++    {
++        *lights = none;
++        return;
++    }
++
++    if (lights->bar) sprintf(bar, "%02x%02x%02x", lights->rgb[0], lights->rgb[1], lights->rgb[2]);
++    else strcpy(bar, "as the client asks");
++    if (!lights->player) strcpy(player, "as the client asks");
++    else if (!lights->pattern) strcpy(player, "off");
++    else sprintf(player, "pattern %#x", lights->pattern);
++
++    TRACE("DualSense %04x:%04x on %s: lights will be set -- lightbar %s, player lights %s, release %s\n",
++          desc->vid, desc->pid, desc->bus_type == BUS_TYPE_BLUETOOTH ? "Bluetooth" :
++          desc->bus_type == BUS_TYPE_USB ? "a cable" : "a bus it did not name", bar, player,
++          !lights->bar ? "not needed without a lightbar colour" :
++          desc->bus_type != BUS_TYPE_BLUETOOTH ? "only sent over Bluetooth" :
++          lights->release == DUALSENSE_LIGHTBAR_RELEASE_NEVER ? "never" :
++          lights->release == DUALSENSE_LIGHTBAR_RELEASE_FOLD ? "folded into the first client colour" :
++          "a separate packet before the first client colour");
+ }
+ 
+ static BOOL is_hidraw_enabled(WORD vid, WORD pid, const USAGE_AND_PAGE *usages, UINT buttons)
+@@ -1141,7 +1207,7 @@
+     struct device_create_params params = {{0}};
+ 
+     if (winebus_call(mouse_create, &params)) return;
+-    mouse_obj = bus_create_hid_device(&params.desc, params.device, 0, NULL);
++    mouse_obj = bus_create_hid_device(&params.desc, params.device, 0, NULL, NULL);
+     IoInvalidateDeviceRelations(bus_pdo, BusRelations);
+ }
+ 
+@@ -1150,7 +1216,7 @@
+     struct device_create_params params = {{0}};
+ 
+     if (winebus_call(keyboard_create, &params)) return;
+-    keyboard_obj = bus_create_hid_device(&params.desc, params.device, 0, NULL);
++    keyboard_obj = bus_create_hid_device(&params.desc, params.device, 0, NULL, NULL);
+     IoInvalidateDeviceRelations(bus_pdo, BusRelations);
+ }
+ 
+@@ -1280,6 +1346,7 @@
+         {
+             struct device_desc desc = event->device_created.desc;
+             struct dualsense_vibration vib; /* MGVF mgvf-0009 */
++            struct dualsense_lights lights; /* MGVF mgvf-0031 */
+             USAGE_AND_PAGE usages;
+             UINT32 fixups;
+             UINT buttons;
+@@ -1296,6 +1363,8 @@
+ 
+             /* MGVF mgvf-0009: read first, while the desc still names the real pad */
+             dualsense_vibration_options(&event->device_created.desc, &vib);
++            /* MGVF mgvf-0031: and the lights, for the same reason */
++            dualsense_lights_options(&event->device_created.desc, &lights);
+ 
+             /* MGVF mgvf-0005: may change the bus type and the pid in the desc */
+             fixups = dualsense_usb_emulation_fixups(&event->device_created.desc);
+@@ -1304,7 +1373,7 @@
+             TRACE("creating %shidraw device %04x:%04x with usages %04x:%04x\n", desc.is_hidraw ? "" : "non-",
+                   desc.vid, desc.pid, usages.UsagePage, usages.Usage);
+ 
+-            device = bus_create_hid_device(&event->device_created.desc, event->device, fixups, &vib);
++            device = bus_create_hid_device(&event->device_created.desc, event->device, fixups, &vib, &lights);
+             if (device) IoInvalidateDeviceRelations(bus_pdo, BusRelations);
+             else
+             {
+@@ -2572,8 +2641,94 @@
+           "the mode is the client's own", change.motor_right_before, change.motor_left_before,
+           change.motor_right_after, change.motor_left_after);
+     return TRUE;
++}
++
++/* MGVF mgvf-0031: the lights a user chose, in a CLIENT packet.
++ *
++ * Called only from the three client write paths below -- the native Bluetooth
++ * 0x31, the wired 0x02 and the emulated 0x02 -- on a copy, and never from
++ * dualsense_usb_set_output_report, which the haptics thread also calls. So no
++ * packet of ours is ever read back here, and nothing is kept but the one claim
++ * that the release has been done for this arrival.
++ *
++ * THE RELEASE. On Bluetooth only, with a lightbar colour set, before the first
++ * client lightbar packet the override applies to: LightbarRelease 1 sends one
++ * release-only report of ours from this same client call, just before the
++ * client's packet; 2 folds the same two fields into the client's packet
++ * instead and adds nothing. Claimed before the write, not after: a failed
++ * release is not retried this arrival. ext->cs already serialises the writes.
++ * Whether the pad needs either form is not measured -- the Linux driver says a
++ * Bluetooth DualSense ignores lightbar programming without it, and Steam never
++ * sends one.
++ *
++ * *folded says the caller must trace the folded release once its own write has
++ * a status. Returns TRUE when a byte of the copy changed. */
++static BOOL dualsense_lights_fixup(DEVICE_OBJECT *device, BYTE *report, ULONG len, const char *route, BOOL *folded)
++{
++    struct device_extension *ext = (struct device_extension *)device->DeviceExtension;
++    struct dualsense_lights_change change;
++    BOOL fold = FALSE, changed;
++
++    *folded = FALSE;
++    if (!dualsense_lights_wanted(&ext->dualsense_lights)) return FALSE;
++
++    if (ext->dualsense_lights.bar && ext->dualsense_lights.release != DUALSENSE_LIGHTBAR_RELEASE_NEVER
++        && dualsense_speaks_bluetooth(ext) && dualsense_lights_bar_asked(report, len)
++        && !InterlockedCompareExchange(&ext->dualsense_lights_released, 1, 0))
++    {
++        if (ext->dualsense_lights.release == DUALSENSE_LIGHTBAR_RELEASE_FOLD) fold = TRUE;
++        else
++        {
++            BYTE release[DUALSENSE_BT_REPORT_LEN];
++            HID_XFER_PACKET out = {.reportBuffer = release};
++            IO_STATUS_BLOCK io = {0};
++
++            if (report[0] == DUALSENSE_BT_REPORT_ID)
++            {
++                out.reportId = DUALSENSE_BT_REPORT_ID;
++                out.reportBufferLen = dualsense_bt_lights_release_report(release, sizeof(release), dualsense_crc32);
++                unix_device_set_output_report(device, &out, &io);
++            }
++            else
++            {
++                /* the emulated route: a 0x02 of the client's own length, which
++                 * the translation turns into a signed 0x31 like any other */
++                out.reportId = DUALSENSE_USB_OUTPUT_ID;
++                out.reportBufferLen = dualsense_usb_lights_release_report(release, sizeof(release), len);
++                dualsense_usb_set_output_report(device, &out, &io);
++            }
++            TRACE("device %p: released the lightbar before the first colour (separate packet), status %#lx\n",
++                  device, io.Status);
++            if (io.Status)
++                WARN("device %p: the lightbar release could not be written, status %#lx -- it is not tried again"
++                     " until the pad next arrives\n", device, io.Status);
++        }
++    }
++
++    changed = dualsense_bt_lights_fixup(report, len, &ext->dualsense_lights, fold, dualsense_crc32, &change)
++              || dualsense_usb_lights_fixup(report, len, &ext->dualsense_lights, fold, &change);
++    *folded = fold;
++    if (changed)
++        TRACE("device %p: set the client's lights (%s) -- flag1 %#x, lightbar %02x%02x%02x -> %02x%02x%02x,"
++              " player %#x -> %#x -- no packet of ours on the link\n", device, route, change.flag1,
++              change.rgb_before[0], change.rgb_before[1], change.rgb_before[2],
++              change.rgb_after[0], change.rgb_after[1], change.rgb_after[2],
++              change.player_before, change.player_after);
++    return changed;
+ }
+ 
++/* MGVF mgvf-0031: the folded release has a status only once the client's
++ * packet that carries it has been written. */
++static void dualsense_lights_note_folded(DEVICE_OBJECT *device, BOOL folded, NTSTATUS status)
++{
++    if (!folded) return;
++    TRACE("device %p: released the lightbar before the first colour (folded into the client's packet), status %#lx\n",
++          device, status);
++    if (status)
++        WARN("device %p: the client's packet carrying the lightbar release could not be written, status %#lx --"
++             " it is not tried again until the pad next arrives\n", device, status);
++}
++
+ /* MGVF mgvf-0009: a client that knows the pad is on Bluetooth and writes the
+  * pad's own 0x31 itself -- which is what the Unreal title in
+  * steam-hid-game-145815.log does for all 6493 of its output reports. Nothing is
+@@ -2671,17 +2826,22 @@
+     BYTE buffer[DUALSENSE_BT_REPORT_LEN];
+     HID_XFER_PACKET bt = {.reportId = packet->reportId, .reportBuffer = buffer,
+                           .reportBufferLen = DUALSENSE_BT_REPORT_LEN};
+-    BOOL changed;
++    BOOL changed, folded;
+ 
+     memcpy(buffer, packet->reportBuffer, DUALSENSE_BT_REPORT_LEN);
+     /* MGVF mgvf-0020: the ride first, the preference after, so that a stamped
+      * pair is scaled like any other and the CRC covers the final bytes. */
+     changed = dualsense_bt_ride(device, buffer);
+     changed = dualsense_vibration_fixup(device, buffer, DUALSENSE_BT_REPORT_LEN) || changed;
++    /* MGVF mgvf-0031: the lights last. The ride has already decided on the
++     * client's own bytes, a light packet is never inert, and whichever helper
++     * changes a byte last signs the packet. */
++    changed = dualsense_lights_fixup(device, buffer, DUALSENSE_BT_REPORT_LEN, "Bluetooth", &folded) || changed;
+     if (changed)
+         unix_device_set_output_report(device, &bt, io);
+     else
+         unix_device_set_output_report(device, packet, io);
++    dualsense_lights_note_folded(device, folded, io->Status);
+ }
+ 
+ /* MGVF mgvf-0016: a pad on a cable, writing the pad's own report 0x02.
+@@ -2703,6 +2863,7 @@
+     BYTE buffer[DUALSENSE_USB_OUTPUT_MAX];
+     HID_XFER_PACKET usb = {.reportId = packet->reportId, .reportBuffer = buffer,
+                            .reportBufferLen = packet->reportBufferLen};
++    BOOL changed, folded;
+ 
+     if (packet->reportBufferLen > sizeof(buffer))
+     {
+@@ -2712,17 +2873,21 @@
+          * was not applied to this write, which is the one thing somebody
+          * looking for a missing rumble needs to know. */
+         WARN("device %p: output report id %u is %Iu bytes, longer than any DualSense declares one -- it goes to the"
+-             " pad as the client wrote it, and the vibration preference is not applied to it\n",
++             " pad as the client wrote it, and neither the vibration preference nor the lights are applied to it\n",
+              device, packet->reportId, (size_t)packet->reportBufferLen);
+         unix_device_set_output_report(device, packet, io);
+         return;
+     }
+ 
+     memcpy(buffer, packet->reportBuffer, packet->reportBufferLen);
+-    if (dualsense_vibration_fixup(device, buffer, packet->reportBufferLen))
++    changed = dualsense_vibration_fixup(device, buffer, packet->reportBufferLen);
++    /* MGVF mgvf-0031: a cable takes no release, so nothing is folded here */
++    changed = dualsense_lights_fixup(device, buffer, packet->reportBufferLen, "cable", &folded) || changed;
++    if (changed)
+         unix_device_set_output_report(device, &usb, io);
+     else
+         unix_device_set_output_report(device, packet, io);
++    dualsense_lights_note_folded(device, folded, io->Status);
+ }
+ 
+ /* A USB 0x02 output report from the client becomes the Bluetooth 0x31 the
+@@ -2786,6 +2951,27 @@
+     if (!io->Status) io->Information = packet->reportBufferLen;
+ }
+ 
++/* MGVF mgvf-0031: the emulated route's client 0x02, with the user's lights.
++ *
++ * Here and not inside dualsense_usb_set_output_report, because the haptics
++ * thread calls that one with packets of its own, and the release above does
++ * too. The rewrite runs on a copy of the client's report before the
++ * translation, which signs it; the copy has the client's length, so the
++ * Information the client sees is its own. */
++static void dualsense_usb_emulated_lights_set_output_report(DEVICE_OBJECT *device, HID_XFER_PACKET *packet,
++                                                            IO_STATUS_BLOCK *io)
++{
++    BYTE buffer[DUALSENSE_USB_OUTPUT_MAX];
++    HID_XFER_PACKET usb = {.reportId = packet->reportId, .reportBuffer = buffer,
++                           .reportBufferLen = packet->reportBufferLen};
++    BOOL changed, folded;
++
++    memcpy(buffer, packet->reportBuffer, packet->reportBufferLen);
++    changed = dualsense_lights_fixup(device, buffer, packet->reportBufferLen, "emulated", &folded);
++    dualsense_usb_set_output_report(device, changed ? &usb : packet, io);
++    dualsense_lights_note_folded(device, folded, io->Status);
++}
++
+ /* A feature report written by the client goes to the pad with the CRC it
+  * checks over Bluetooth in its last four bytes, from a copy: the client's
+  * buffer is not ours to rewrite.
+@@ -3228,14 +3414,23 @@
+             }
+             /* MGVF mgvf-0005: the USB 0x02 goes out as a Bluetooth 0x31 */
+             if ((ext->report_fixups & HIDRAW_FIXUP_DUALSENSE_USB) && packet->reportId == DUALSENSE_USB_OUTPUT_ID)
+-                dualsense_usb_set_output_report(device, packet, &irp->IoStatus);
++            {
++                /* MGVF mgvf-0031: through a copy when there are lights to set */
++                if (dualsense_lights_wanted(&ext->dualsense_lights)
++                    && packet->reportBufferLen <= DUALSENSE_USB_OUTPUT_MAX)
++                    dualsense_usb_emulated_lights_set_output_report(device, packet, &irp->IoStatus);
++                else
++                    dualsense_usb_set_output_report(device, packet, &irp->IoStatus);
++            }
+             /* MGVF mgvf-0009: or the client wrote the pad's own 0x31 itself.
+              * The options are all zero unless this is a hidraw DualSense whose
+              * key asks for something, so every other device takes the last
+              * branch below exactly as before. */
+             else if ((dualsense_vibration_wanted(&ext->dualsense_vibration)
+                       /* MGVF mgvf-0020: or the motors are riding this packet */
+-                      || (ext->haptics_ride && ext->haptics_output_id))
++                      || (ext->haptics_ride && ext->haptics_output_id)
++                      /* MGVF mgvf-0031: or there are lights to set */
++                      || dualsense_lights_wanted(&ext->dualsense_lights))
+                      && packet->reportId == DUALSENSE_BT_REPORT_ID
+                      && packet->reportBufferLen == DUALSENSE_BT_REPORT_LEN)
+                 dualsense_bt_set_output_report(device, packet, &irp->IoStatus);
+@@ -3244,7 +3439,8 @@
+              * whole of what keeps the two apart: an emulated pad's 0x02 has to
+              * become a 0x31, and only a pad nobody is lying about reaches here
+              * with one. */
+-            else if (dualsense_vibration_wanted(&ext->dualsense_vibration)
++            else if ((dualsense_vibration_wanted(&ext->dualsense_vibration)
++                      || dualsense_lights_wanted(&ext->dualsense_lights)) /* MGVF mgvf-0031 */
+                      && packet->reportId == DUALSENSE_USB_OUTPUT_ID)
+                 dualsense_usb_native_set_output_report(device, packet, &irp->IoStatus);
+             else
+--- a/dlls/winebus.sys/dualsense_usb.h
++++ b/dlls/winebus.sys/dualsense_usb.h
+@@ -399,5 +399,122 @@
+  * calibration report, whose tail a wired pad returns as well. */
+ unsigned int dualsense_bt_feature_set_crc(unsigned char *report, unsigned int len, dualsense_crc32_fn crc32);
+ unsigned int dualsense_bt_feature_get_strip(unsigned char *report, unsigned int len);
++
++/* MGVF mgvf-0031: the lights a user chose, and where they live in the report.
++ *
++ * Common-block numbering, as above. The enable bits are in flag1 and the one
++ * setup bit in flag2:
++ *
++ *   flag1 (common 1)  bit 0x04  lightbar colour, common 44..46 = R G B
++ *   flag1 (common 1)  bit 0x08  release the LEDs (named so a test can prove it
++ *                               is kept, never acted on)
++ *   flag1 (common 1)  bit 0x10  player LEDs, common 43 = instant bit 0x20 |
++ *                               a five-bit pattern
++ *   flag2 (common 38) bit 0x02  lightbar setup, common 41; 0x02 there is
++ *                               "light out"
++ *
++ * Where these come from: Steam's own packets in hid-203611.log (flag1 0x14,
++ * player 0x24 at Bluetooth byte 46, RGB 00 ff ff at 47..49, CRC valid), the
++ * libScePad open in steam-hid-game-145815.log (flag2 0x02, setup 0x02 at byte
++ * 44), and the Linux hid-playstation driver, which names the same fields.
++ *
++ * The registry values carry a marker so that "black" and "the lightbar off"
++ * stay apart from "nothing asked": LightbarColour is 0x01RRGGBB and
++ * PlayerLights is 0x100 | pattern. Anything without the marker -- 0, an absent
++ * value, 0xffffffff, a stray 0x00RRGGBB -- asks for nothing. That is the lesson
++ * of mgvf-0022, where an all-zeros sentinel collided with a real request. */
++#define DUALSENSE_FLAG1_LIGHTBAR            0x04
++#define DUALSENSE_FLAG1_RELEASE_LEDS        0x08
++#define DUALSENSE_FLAG1_PLAYER_LEDS         0x10
++#define DUALSENSE_FLAG2_LIGHTBAR_SETUP      0x02
++#define DUALSENSE_COMMON_LIGHTBAR_SETUP     41
++#define DUALSENSE_COMMON_PLAYER_LEDS        43
++#define DUALSENSE_COMMON_LIGHTBAR           44
++#define DUALSENSE_LIGHTBAR_SETUP_LIGHT_OUT  0x02
++#define DUALSENSE_PLAYER_LEDS_INSTANT       0x20
++#define DUALSENSE_PLAYER_LEDS_PATTERN       0x1f
++#define DUALSENSE_LIGHTBAR_SET_MASK         0xff000000
++#define DUALSENSE_LIGHTBAR_SET              0x01000000
++#define DUALSENSE_PLAYER_LIGHTS_SET_MASK    0xffffff00
++#define DUALSENSE_PLAYER_LIGHTS_SET         0x100
+ 
++/* The shortest USB 0x02 that carries the last lightbar byte, common 46. Both
++ * pads measured here declare 48 or 64, so this is exactly a DualSense's 0x02. */
++#define DUALSENSE_USB_OUTPUT_LIGHTS_MIN (DUALSENSE_USB_COMMON + DUALSENSE_COMMON_LIGHTBAR + 3)
++
++/* LightbarRelease: whether, and how, a pad on Bluetooth is sent the lightbar
++ * setup release before the first colour a client writes after the device
++ * arrives. Linux hid-playstation says a Bluetooth DualSense ignores lightbar
++ * programming until it has had one, and Steam never sends one (0 of 1858
++ * packets in hid-203611.log). WHETHER THIS PAD NEEDS IT, AND WHICH OF THE TWO
++ * FORMS WORKS, IS NOT MEASURED; the value exists so both can be tried without a
++ * rebuild.
++ *
++ *   NEVER     0  send nothing of the kind
++ *   SEPARATE  1  the default: one release-only report of ours, from the same
++ *                client write and just before it
++ *   FOLD      2  no packet of ours: flag2 0x02 and common 41 = 0x02 are set in
++ *                that first client lightbar packet itself */
++#define DUALSENSE_LIGHTBAR_RELEASE_NEVER    0
++#define DUALSENSE_LIGHTBAR_RELEASE_SEPARATE 1
++#define DUALSENSE_LIGHTBAR_RELEASE_FOLD     2
++
++struct dualsense_lights
++{
++    unsigned int bar;          /* non-zero: replace the lightbar colour */
++    unsigned char rgb[3];
++    unsigned int player;       /* non-zero: replace the player LED pattern */
++    unsigned char pattern;
++    unsigned int release;      /* DUALSENSE_LIGHTBAR_RELEASE_* */
++};
++#define DUALSENSE_LIGHTS_NONE { 0, {0, 0, 0}, 0, 0, DUALSENSE_LIGHTBAR_RELEASE_NEVER }
++static inline int dualsense_lights_wanted(const struct dualsense_lights *lights)
++{
++    return lights->bar || lights->player;
++}
++
++/* What a rewrite did, for the caller to trace. Filled in whenever the pointer
++ * is passed, changed or not. */
++struct dualsense_lights_change
++{
++    unsigned char changed;
++    unsigned char folded;      /* the release was folded into this packet */
++    unsigned char flag1;
++    unsigned char rgb_before[3], rgb_after[3];
++    unsigned char player_before, player_after;
++};
++
++/* The three registry values, decoded. Pure, so the host test can hold the
++ * table; main.c reads the values and passes them in. */
++void dualsense_lights_from_values(unsigned int bar, unsigned int player, unsigned int release,
++                                  struct dualsense_lights *out);
++
++/* Whether a report is a client lightbar write the override applies to: a
++ * 78-byte 0x31 or a 0x02 of DUALSENSE_USB_OUTPUT_LIGHTS_MIN..64 bytes, with
++ * flag1 0x04 set. */
++int dualsense_lights_bar_asked(const unsigned char *report, unsigned int len);
++
++/* Rewrite the lights in a CLIENT packet, in place, only in the fields whose
++ * enable bit the client set itself. No flag bit is ever set or cleared, except
++ * that fold_release adds the lightbar setup (flag2 0x02, common 41 = 0x02) to a
++ * packet whose lightbar is rewritten. The player byte keeps the client's
++ * instant bit. Each returns len when a byte changed and 0 when none did; the
++ * Bluetooth one signs the packet again only then. change may be NULL. */
++unsigned int dualsense_bt_lights_fixup(unsigned char *report, unsigned int len,
++                                       const struct dualsense_lights *lights, int fold_release,
++                                       dualsense_crc32_fn crc32, struct dualsense_lights_change *change);
++unsigned int dualsense_usb_lights_fixup(unsigned char *report, unsigned int len,
++                                        const struct dualsense_lights *lights, int fold_release,
++                                        struct dualsense_lights_change *change);
++
++/* The release-only report: flag2 0x02, common 41 = 0x02, every other byte
++ * zero. The Bluetooth form is a signed 78-byte 0x31 with the header 31 00 10;
++ * the USB form is a 0x02 of len bytes (DUALSENSE_USB_OUTPUT_LIGHTS_MIN..64) for
++ * the emulated route, which translates and signs it itself. Each returns the
++ * number of bytes written, or 0. */
++unsigned int dualsense_bt_lights_release_report(unsigned char *out, unsigned int out_size,
++                                                dualsense_crc32_fn crc32);
++unsigned int dualsense_usb_lights_release_report(unsigned char *out, unsigned int out_size,
++                                                 unsigned int len);
++
+ #endif /* __WINEBUS_DUALSENSE_USB_H */
+--- a/dlls/winebus.sys/dualsense_usb.c
++++ b/dlls/winebus.sys/dualsense_usb.c
+@@ -693,4 +693,184 @@
+     if (!emulated) return DUALSENSE_FEATURE_WRITE_FORWARD;
+     if (forward_option) return DUALSENSE_FEATURE_WRITE_FORWARD;
+     return DUALSENSE_FEATURE_WRITE_SWALLOW;
++}
++
++/* MGVF mgvf-0031: the lights a user chose, stamped into the light changes a
++ * client already sends.
++ *
++ * WHAT WAS MEASURED. In hid-203611.log, a Bluetooth session of Mortal Shell 2
++ * under Steam Input, 8 of 1858 client writes set a light, and a ninth is
++ * Steam's 00/08 release-LEDs packet, which sets none. At each config activation,
++ * and again on a reconnect, Steam sends player 0x24 with RGB 00ffff (flag1
++ * 0x14), then RGB 00ffff alone (flag1 0x04), then player 0x00 with 00ffff
++ * (flag1 0x14). The Desktop activation is different: 00/08, then player 0x00
++ * with 00ffff (flag1 0x14), then 00ffff alone, and no 0x24. The game itself
++ * sends no light. No packet in that session ever carries the lightbar setup.
++ *
++ * WHAT THIS DOES. Only the fields whose enable bit the client set are
++ * replaced, in the client's own packet: the colour when flag1 0x04 is set, the
++ * player pattern when flag1 0x10 is set. The player byte keeps the client's
++ * instant bit 0x20, because Steam and SDL both send 0x24. A packet with neither
++ * bit -- the all-zero packet, SDL's motor packets, the haptics thread's motor
++ * report, Steam's 00/08 release -- cannot match and is left byte for byte. No
++ * flag bit is set or cleared, so nothing the client asked for is taken away
++ * and nothing it did not ask for is added -- with one exception, the release
++ * folded in on request (LightbarRelease 2), which main.c asks for at most once
++ * per arrival.
++ *
++ * WHAT IS NOT CLAIMED. That the pad shows the colour: over Bluetooth it may
++ * ignore lightbar programming until it has had a setup release, which is what
++ * LightbarRelease is there to find out. And a client that never sends a light
++ * change gets nothing from this. */
++void dualsense_lights_from_values(unsigned int bar, unsigned int player, unsigned int release,
++                                  struct dualsense_lights *out)
++{
++    memset(out, 0, sizeof(*out));
++    if ((bar & DUALSENSE_LIGHTBAR_SET_MASK) == DUALSENSE_LIGHTBAR_SET)
++    {
++        out->bar = 1;
++        out->rgb[0] = (bar >> 16) & 0xff;
++        out->rgb[1] = (bar >> 8) & 0xff;
++        out->rgb[2] = bar & 0xff;
++    }
++    if ((player & DUALSENSE_PLAYER_LIGHTS_SET_MASK) == DUALSENSE_PLAYER_LIGHTS_SET)
++    {
++        out->player = 1;
++        out->pattern = player & DUALSENSE_PLAYER_LEDS_PATTERN;
++    }
++    /* An unknown value is the default rather than never: the default is the
++     * form the Linux driver's reading of the firmware asks for. */
++    out->release = release <= DUALSENSE_LIGHTBAR_RELEASE_FOLD ? release : DUALSENSE_LIGHTBAR_RELEASE_SEPARATE;
++}
++
++int dualsense_lights_bar_asked(const unsigned char *report, unsigned int len)
++{
++    if (len == DUALSENSE_BT_REPORT_LEN && report[0] == DUALSENSE_BT_REPORT_ID)
++        return !!(report[DUALSENSE_BT_COMMON + DUALSENSE_COMMON_FLAG1] & DUALSENSE_FLAG1_LIGHTBAR);
++    if (len >= DUALSENSE_USB_OUTPUT_LIGHTS_MIN && len <= DUALSENSE_USB_OUTPUT_MAX
++        && report[0] == DUALSENSE_USB_OUTPUT_ID)
++        return !!(report[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_FLAG1] & DUALSENSE_FLAG1_LIGHTBAR);
++    return 0;
++}
++
++static unsigned char dualsense_lights_rewrite(unsigned char *common, const struct dualsense_lights *lights,
++                                              int fold_release, struct dualsense_lights_change *change)
++{
++    unsigned char changed = 0, folded = 0, player;
++    unsigned char flag1 = common[DUALSENSE_COMMON_FLAG1];
++    unsigned int i;
++
++    if (change)
++    {
++        memset(change, 0, sizeof(*change));
++        change->flag1 = flag1;
++        memcpy(change->rgb_before, common + DUALSENSE_COMMON_LIGHTBAR, 3);
++        change->player_before = common[DUALSENSE_COMMON_PLAYER_LEDS];
++    }
++
++    if (lights->bar && (flag1 & DUALSENSE_FLAG1_LIGHTBAR))
++    {
++        for (i = 0; i < 3; i++)
++        {
++            if (common[DUALSENSE_COMMON_LIGHTBAR + i] == lights->rgb[i]) continue;
++            common[DUALSENSE_COMMON_LIGHTBAR + i] = lights->rgb[i];
++            changed = 1;
++        }
++        if (fold_release)
++        {
++            if (!(common[DUALSENSE_COMMON_FLAG2] & DUALSENSE_FLAG2_LIGHTBAR_SETUP)
++                || common[DUALSENSE_COMMON_LIGHTBAR_SETUP] != DUALSENSE_LIGHTBAR_SETUP_LIGHT_OUT)
++            {
++                common[DUALSENSE_COMMON_FLAG2] |= DUALSENSE_FLAG2_LIGHTBAR_SETUP;
++                common[DUALSENSE_COMMON_LIGHTBAR_SETUP] = DUALSENSE_LIGHTBAR_SETUP_LIGHT_OUT;
++                changed = 1;
++            }
++            folded = 1;
++        }
++    }
++
++    if (lights->player && (flag1 & DUALSENSE_FLAG1_PLAYER_LEDS))
++    {
++        player = (common[DUALSENSE_COMMON_PLAYER_LEDS] & DUALSENSE_PLAYER_LEDS_INSTANT) | lights->pattern;
++        if (common[DUALSENSE_COMMON_PLAYER_LEDS] != player)
++        {
++            common[DUALSENSE_COMMON_PLAYER_LEDS] = player;
++            changed = 1;
++        }
++    }
++
++    if (change)
++    {
++        change->changed = changed;
++        change->folded = folded;
++        memcpy(change->rgb_after, common + DUALSENSE_COMMON_LIGHTBAR, 3);
++        change->player_after = common[DUALSENSE_COMMON_PLAYER_LEDS];
++    }
++    return changed;
+ }
++
++unsigned int dualsense_bt_lights_fixup(unsigned char *report, unsigned int len,
++                                       const struct dualsense_lights *lights, int fold_release,
++                                       dualsense_crc32_fn crc32, struct dualsense_lights_change *change)
++{
++    static const unsigned char seed = DUALSENSE_CRC_SEED_OUTPUT;
++    unsigned int crc;
++
++    if (change) memset(change, 0, sizeof(*change));
++    if (len != DUALSENSE_BT_REPORT_LEN || report[0] != DUALSENSE_BT_REPORT_ID) return 0;
++    if (!dualsense_lights_wanted(lights)) return 0;
++    if (!dualsense_lights_rewrite(report + DUALSENSE_BT_COMMON, lights, fold_release, change)) return 0;
++
++    crc = crc32(0, &seed, 1);
++    crc = crc32(crc, report, DUALSENSE_BT_REPORT_LEN - DUALSENSE_CRC_TAIL);
++    dualsense_store_crc(report + DUALSENSE_BT_REPORT_LEN - DUALSENSE_CRC_TAIL, crc);
++    return len;
++}
++
++/* A wired 0x02 is not signed, and one shorter than 48 bytes does not carry the
++ * whole lightbar, so it is left alone rather than half rewritten. */
++unsigned int dualsense_usb_lights_fixup(unsigned char *report, unsigned int len,
++                                        const struct dualsense_lights *lights, int fold_release,
++                                        struct dualsense_lights_change *change)
++{
++    if (change) memset(change, 0, sizeof(*change));
++    if (len < DUALSENSE_USB_OUTPUT_LIGHTS_MIN || len > DUALSENSE_USB_OUTPUT_MAX) return 0;
++    if (report[0] != DUALSENSE_USB_OUTPUT_ID) return 0;
++    if (!dualsense_lights_wanted(lights)) return 0;
++    if (!dualsense_lights_rewrite(report + DUALSENSE_USB_COMMON, lights, fold_release, change)) return 0;
++    return len;
++}
++
++/* The release-only report. flag0 and flag1 are zero and so are both motors,
++ * so mgvf-0009's rewrite finds nothing to change in it at any gain or mode,
++ * and flag2 carries 0x02 without the haptic bit 0x04. */
++unsigned int dualsense_bt_lights_release_report(unsigned char *out, unsigned int out_size,
++                                                dualsense_crc32_fn crc32)
++{
++    static const unsigned char seed = DUALSENSE_CRC_SEED_OUTPUT;
++    unsigned int crc;
++
++    if (out_size < DUALSENSE_BT_REPORT_LEN) return 0;
++    memset(out, 0, DUALSENSE_BT_REPORT_LEN);
++    out[0] = DUALSENSE_BT_REPORT_ID;
++    out[1] = 0x00;
++    out[2] = 0x10;
++    out[DUALSENSE_BT_COMMON + DUALSENSE_COMMON_FLAG2] = DUALSENSE_FLAG2_LIGHTBAR_SETUP;
++    out[DUALSENSE_BT_COMMON + DUALSENSE_COMMON_LIGHTBAR_SETUP] = DUALSENSE_LIGHTBAR_SETUP_LIGHT_OUT;
++
++    crc = crc32(0, &seed, 1);
++    crc = crc32(crc, out, DUALSENSE_BT_REPORT_LEN - DUALSENSE_CRC_TAIL);
++    dualsense_store_crc(out + DUALSENSE_BT_REPORT_LEN - DUALSENSE_CRC_TAIL, crc);
++    return DUALSENSE_BT_REPORT_LEN;
++}
++
++unsigned int dualsense_usb_lights_release_report(unsigned char *out, unsigned int out_size,
++                                                 unsigned int len)
++{
++    if (len < DUALSENSE_USB_OUTPUT_LIGHTS_MIN || len > DUALSENSE_USB_OUTPUT_MAX || out_size < len) return 0;
++    memset(out, 0, len);
++    out[0] = DUALSENSE_USB_OUTPUT_ID;
++    out[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_FLAG2] = DUALSENSE_FLAG2_LIGHTBAR_SETUP;
++    out[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_LIGHTBAR_SETUP] = DUALSENSE_LIGHTBAR_SETUP_LIGHT_OUT;
++    return len;
++}
