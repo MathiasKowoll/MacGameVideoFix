@@ -473,6 +473,47 @@ stayed at 0 across a 20 s sample; one shared client with every counter at zero
 remains, most likely the IOKit backend's HID manager (a reading). It does not
 touch the idle disconnect.
 
+## Turning off a pad nobody is using
+
+`mgvf-0033`, in `winebus.so`, and **on by default**. A DualSense that connects
+over Bluetooth while wine already holds it gets no GameController plugin, so
+macOS's 900 s cut above never applies to it, and in the connections retained
+the pad did not turn itself off either. On 2026-09-12/13 one ran on for 3 h
+13 min, until it went flat; the game and Steam had exited long before.
+
+With the patch, a DualSense on Bluetooth that this process has opened with
+`kIOHIDOptionsTypeSeizeDevice` and started is sent feature report `0x08` — `08
+02`, zeros, and the Bluetooth CRC-32 in the last four of 48 bytes — **once**,
+after the limit below with no stick, trigger or button input. Gyro,
+accelerometer, battery and the touchpad do not count, so a pad held perfectly
+still, or used only for motion or touch, counts as unused. The request is not
+repeated if it fails or the pad ignores it; a reconnect starts a fresh clock.
+A pad opened shared, a pad on a cable and every other device are left alone.
+
+    HKLM\System\CurrentControlSet\Services\winebus\Devices\<vid>/<pid>
+        IdlePowerOffMinutes  REG_DWORD   absent: 20 for 054c/0ce6 and
+                                         054c/0df2. 0: never. Anything else is
+                                         clamped to 5..240. Ignored for any
+                                         other device.
+
+The same key as `SeizeDevice`, read in the same place, so a change applies the
+next time the bottle's wine starts. The 20 is a reasoned default, not a
+measurement: above the pad's own 686 s and macOS's 900 s. When it acts, a
+`FIXME` visible without `+hid` says so: *"DualSense 054c:0df2 had no input for
+N s while this process held it; asking it to turn itself off (feature 0x08):
+0"*. With `+hid`, one line at start gives the limit, and one says *"the pad did
+not turn off"* if input comes back with no removal.
+
+**Measured on 2026-09-14,** on a DualSense Edge over Bluetooth with no wine
+running: the same report, opened shared and opened seized, returned 0 both
+times, and the pad ended the link itself 63 and 64 ms later and stayed off. A
+plain DualSense (`054c:0ce6`), opened shared, did the same 62 ms later.
+
+**Not measured yet:** the patch inside wine — the `FIXME` line and the pad
+dropping after it; whether a game takes the
+pad back after PS reconnects it. **Not covered:** anything after wine exits,
+which is where the reported drain happened.
+
 ## Optional
 
 An improvement, not a fix. No title in the README's table needs it, every one
@@ -515,7 +556,7 @@ runs after the engine copy exists with no signing step after it.
 | `wine/x86_64-windows/xinput1_3.dll` | 57,344 | 100 | 78 |
 | `wine/x86_64-windows/xinput1_4.dll` | 61,440 | 108 | 79 |
 | `wine/x86_64-windows/xinputuap.dll` | 61,440 | 8 | 79 |
-| `wine/x86_64-unix/winebus.so` | 66,544 | 2 | 5 |
+| `wine/x86_64-unix/winebus.so` | 66,608 | 2 | 5 |
 
 The last six rows arrived with `mgvf-0011` and `mgvf-0012`, which let a game
 that reads XInput rumble a DualSense without the pad losing anything.

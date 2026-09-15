@@ -3,9 +3,9 @@
 `winebus.sys`, `setupapi.dll`, `ntoskrnl.exe`, `hidclass.sys`, `xinput1_1.dll`,
 `xinput1_2.dll`, `xinput1_3.dll`, `xinput1_4.dll`, `xinputuap.dll` and
 `winebus.so` — shipped here with an `engine-controller-` prefix on each name,
-1,348,592 bytes together — are **Wine**, and Wine is **LGPL-2.1-or-later**. They
+1,348,656 bytes together — are **Wine**, and Wine is **LGPL-2.1-or-later**. They
 are not ours in the sense that matters to the licence: they are somebody else's
-program with twenty-nine patches of ours applied, and both halves of that sentence
+program with thirty patches of ours applied, and both halves of that sentence
 carry obligations.
 
 The last is the **unix half** of `winebus`: nine of these are PE files that go
@@ -27,7 +27,7 @@ not only in the repository.
 - Source tree: the wine source of **CrossOver 26.3.0.39832**, revision
   **`wine-11.0-8726-g2e2f5fca349`**, which is the build string
   `engine-controller-built-for.json` records beside these files.
-- Patches applied on top, all twenty-nine of them ours:
+- Patches applied on top, all thirty of them ours:
   - **`mgvf-0002`** — `winebus.sys` names the bus a device is on in its
     compatible ids, so `BTHENUM` is there for a client to find.
   - **`mgvf-0003`** — `setupapi.dll` answers `CM_Get_Parent` for HID children,
@@ -120,11 +120,15 @@ not only in the repository.
   - **`mgvf-0032`** — `winebus.so` tells SDL, before it starts, not to open a
     pad the hidraw route already owns, so SDL's own driver stops holding a
     second handle to it and writing a keep-alive the seize refuses.
+  - **`mgvf-0033`** — `winebus.so` asks a DualSense on Bluetooth that it holds
+    to turn itself off after a stretch with no stick, trigger or button input,
+    20 minutes unless a registry value says otherwise. It does nothing once wine
+    has exited, and inside wine it is not measured yet.
 - Built by `scripts/build-controller-bus.sh` in the repository below, which also
   strips the binaries and proves that the strip changed nothing a loader reads.
 
-The twenty-nine patch files are published, in full, as
-`source-patches/mgvf-0002-*.patch` … `mgvf-0032-*.patch` in
+The thirty patch files are published, in full, as
+`source-patches/mgvf-0002-*.patch` … `mgvf-0033-*.patch` in
 
 > **<https://github.com/MathiasKowoll/MacGameVideoFix>**
 
@@ -136,7 +140,7 @@ specific to this project, and anyone carrying a patched Wine is welcome to them.
 The LGPL asks that whoever receives these binaries can get the source they were
 built from. Both halves are public and neither is behind us: Wine's source at
 the revision above is CodeWeavers' published CrossOver source for 26.3.0.39832,
-and the twenty-nine patches are in the repository named above. Anyone who cannot
+and the thirty patches are in the repository named above. Anyone who cannot
 obtain either should ask through that repository's issues and it will be
 provided.
 
@@ -154,7 +158,7 @@ for.
 
 | file | bytes | sha256 |
 | --- | --- | --- |
-| `engine-controller-winebus.sys` | 77,824 | `2a75c10dda2c360a95362e83c836711078e01fa5dbd73f78f034f845af42e812` |
+| `engine-controller-winebus.sys` | 77,824 | `be3a5d0f33ad31123fe70d010031b35f814ddeec2ba7b09a28b2ac24e75b5008` |
 | `engine-controller-setupapi.dll` | 462,848 | `9806fae23e1b0ee8effc22212992b115e1896381139c0f4e4be44eade2347a1a` |
 | `engine-controller-ntoskrnl.exe` | 393,216 | `9231cb23bd73e0ccbaca37f1293eb2d75ad42bb34c7b9d139ff76d1c812893a8` |
 | `engine-controller-hidclass.sys` | 53,248 | `31876ac61a5d6276abd1af7a89871417032f098840d05b3b665b886ba61c1998` |
@@ -163,8 +167,8 @@ for.
 | `engine-controller-xinput1_3.dll` | 57,344 | `286fa2ea480ba4bb8689eb09d729966b7a475ea3466b42cd62e51a89fe02a4aa` |
 | `engine-controller-xinput1_4.dll` | 61,440 | `ea593dd4008217aa577993605ecb9ed10c9c3c56627664dbe8d95ef5fa2304c0` |
 | `engine-controller-xinputuap.dll` | 61,440 | `009e0f4dafc30a798f48b311059979d374292a542d529fda6e5f3de01645c199` |
-| `engine-controller-winebus.so` | 66,544 | `3c189b39c486f38f61268074e739e9d3d7ab5b96eb288a70e75efaa9e6d20c3b` |
-| `engine-controller-built-for.json` | 425 | `4f83d6612d8d04ba212f3e9838eb393948995d3bf3d58cc423468efb304329b7` |
+| `engine-controller-winebus.so` | 66,608 | `6e1f22198ef688f996da41851efe9d45ce4c3b853950ddcb8bed04c20f94b152` |
+| `engine-controller-built-for.json` | 435 | `61d917b751faf014eeaa9991c61418a2c2dae6b3b85021649bb2201c12b0a516` |
 
 The same bytes ship in the repository as `runtime/engine-controller-*` and, laid
 out the way an engine is, as `runtime/engine-payload-controller/wine/x86_64-windows/`

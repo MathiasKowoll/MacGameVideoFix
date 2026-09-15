@@ -1,0 +1,445 @@
+winebus: turn off a pad nobody is using.
+
+A DualSense that connects over Bluetooth while wine already holds it gets no
+macOS GameController plugin, so macOS's 900 s idle cut never applies to it,
+and in every such connection retained the pad did not turn itself off after
+its usual eleven minutes either. Left alone it runs flat.
+
+WHAT WAS MEASURED, from macOS's and Steam's own logs:
+
+- 2026-09-12/13: connected at 23:28:10 with a game holding it; the game and
+  Steam were gone by 00:07:48; the pad dropped by itself at 03:21:07 and the
+  next connection reported 0 % battery -- 3 h 13 min with, very likely, no
+  wine process left;
+- 2026-09-13: the same, for 27 minutes after wine exited at 22:15:44;
+- 2026-09-14, a pad macOS was driving: off by itself after 686 s.
+
+THE MECHANISM, measured on 2026-09-14 on a DualSense Edge (054c:0df2) over
+Bluetooth with no wine running: IOHIDDeviceSetReport with feature report
+0x08 of 48 bytes -- 08 02, zeros, and the Bluetooth CRC-32 (seed 0x53 over the
+first 44 bytes) little-endian in the last four, e0 ef a2 23 for this content.
+Opened shared it returned 0 and bluetoothd logged the pad's own disconnect
+(HID reason 431, ACL 10719) 63 ms after the Set report; opened with
+kIOHIDOptionsTypeSeizeDevice, as winebus opens it, it returned 0 and the
+disconnect came 64 ms after. Both times the light went out and the pad stayed
+off until PS was pressed.
+
+THE CHANGE, in bus_iohid.c. A started DualSense on Bluetooth that this
+process holds seized is sent that report once, after IdlePowerOffMinutes (a
+REG_DWORD per model key beside SeizeDevice; absent: 20, 0: never, otherwise
+clamped to 5..240) with no stick, trigger or button input. Activity is
+measured against the last report that counted: sticks and triggers when they
+move more than 4, the button bytes on any change, the counter bits of the
+short 0x01 masked off, gyro, accelerometer, battery and touchpad ignored.
+The report is sent after iohid_cs is released, with the IOHIDDeviceRef
+retained, so a pad turning itself off cannot hold up iohid_device_stop. The
+request is not repeated; a reconnect is a new device with a fresh clock. A
+FIXME, visible without +hid, says when it acts and what IOKit returned.
+
+NOT CLAIMED: that it was measured inside wine;
+that a game takes the pad back after PS reconnects it; that a pad held still
+in the hand, or used only for motion or the touchpad, is in use; anything
+after wine exits, which is where the reported drain happened.
+
+---
+--- a/dlls/winebus.sys/unixlib.h
++++ b/dlls/winebus.sys/unixlib.h
+@@ -56,6 +56,8 @@
+     /* MGVF mgvf-0006: -1 when the device's key says nothing, so that the
+      * default can differ per device rather than being a single global one. */
+     INT seize;
++    /* MGVF mgvf-0033: IdlePowerOffMinutes, -1 when the key says nothing. */
++    INT idle_power_off_minutes;
+ };
+ 
+ struct bus_options
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -1522,6 +1522,7 @@
+     device->pid = pid;
+     device->hidraw = -1;
+     device->seize = -1;
++    device->idle_power_off_minutes = -1; /* MGVF mgvf-0033 */
+ 
+     LIST_FOR_EACH_ENTRY(next, &options.devices, struct device_options, entry)
+         if (next->vid > vid || (next->vid == vid && next->pid > pid)) break;
+@@ -1555,6 +1556,8 @@
+         static const UNICODE_STRING hidraw = RTL_CONSTANT_STRING(L"Hidraw");
+         /* MGVF mgvf-0006 */
+         static const UNICODE_STRING seize = RTL_CONSTANT_STRING(L"SeizeDevice");
++        /* MGVF mgvf-0033 */
++        static const UNICODE_STRING idle_power_off = RTL_CONSTANT_STRING(L"IdlePowerOffMinutes");
+         static const UNICODE_STRING backslash = RTL_CONSTANT_STRING(L"\\");
+         struct device_options *device;
+         UNICODE_STRING name_str;
+@@ -1601,6 +1604,12 @@
+             device->seize = *(DWORD *)info->Data;
+         if (device->seize != -1) TRACE("- %04x/%04x: %sseizing the device from the host\n", device->vid, device->pid, device->seize ? "" : "not ");
+ 
++        /* MGVF mgvf-0033: read here for the same reason as SeizeDevice; the
++         * unix side decides, clamps and applies it (bus_iohid.c). */
++        if (!NtQueryValueKey(subkey, &idle_power_off, KeyValuePartialInformation, info, sizeof(buffer), &size) && info->Type == REG_DWORD)
++            device->idle_power_off_minutes = *(DWORD *)info->Data;
++        if (device->idle_power_off_minutes != -1) TRACE("- %04x/%04x: IdlePowerOffMinutes %u\n", device->vid, device->pid, device->idle_power_off_minutes);
++
+         NtClose(subkey);
+     }
+ 
+--- a/dlls/winebus.sys/bus_iohid.c
++++ b/dlls/winebus.sys/bus_iohid.c
+@@ -84,6 +84,8 @@
+ #endif /* __APPLE__ */
+ 
+ #include <pthread.h>
++#include <stdlib.h>
++#include <time.h>
+ 
+ #include "ntstatus.h"
+ #define WIN32_NO_STATUS
+@@ -116,6 +118,24 @@
+     /* MGVF mgvf-0006: the options the device was opened with, so that the
+      * close is the mirror of the open. */
+     IOOptionBits open_options;
++    /* MGVF mgvf-0033: turning off a pad nobody is using. idle_limit_ns is 0
++     * where it does not apply. idle_armed is set when the device is started,
++     * because only a started device has an input callback to reset the clock.
++     * Start and stop run on the PE side's thread (unix_device_start and
++     * unix_device_stop) and write the clock, the flags and idle_armed without
++     * iohid_cs; everything else is read and written on the bus thread: the
++     * input callback runs inside CFRunLoopRunInMode, and the idle check between
++     * two calls. The check skips a clock newer than its own reading, so a start
++     * that lands during a check is not taken for an idle pad. */
++    WORD vid, pid;
++    UInt64 idle_limit_ns;
++    UInt64 last_activity_ns;
++    UInt64 power_off_request_ns;
++    BOOL idle_armed;
++    BOOL activity_ref_valid;
++    BOOL power_off_requested;
++    BOOL power_off_ignored_logged;
++    uint8_t activity_ref[10];
+ };
+ 
+ static inline struct iohid_device *impl_from_unix_device(struct unix_device *iface)
+@@ -146,13 +166,105 @@
+     if (num)
+         CFNumberGetValue(num, kCFNumberIntType, &dwNum);
+     return dwNum;
++}
++
++/* MGVF mgvf-0033: what counts as someone using a DualSense on Bluetooth.
++ *
++ * Only sticks, triggers and buttons, compared with the last report that
++ * counted -- not with the previous report, because the sticks of a pad lying
++ * on a table jitter all the time. Normalised into ten bytes: four sticks,
++ * two triggers, four button bytes.
++ *
++ * The 78-byte 0x31 (id, header, X Y Z Rz, L2 R2, sequence, buttons): sticks
++ * 2..5, triggers 6..7, buttons 9, 10, 11 and 12. Byte 11 is taken whole.
++ * In every seized trace read for this (hid-090147, hid-203611 and hid-114844
++ * on 054c:0df2, hid-175158 on 054c:0ce6; 2855, 2861, 522 and 3721 decoded
++ * reports) none of its eight bits changed while the sticks and the other
++ * buttons were still, so masking it gains nothing and would drop whatever an
++ * Edge keeps in its upper bits. Byte 12 is counted too: the raw 0x31 is in
++ * 33 traces (1569 to 111642 reports each, both models) and byte 12 never
++ * changed in any of them, so it costs no false activity. Only bits 0x01 and
++ * 0x02 of byte 11 ever changed in those traces; no trace has an Edge Fn
++ * button or back paddle pressed, so where the Edge reports those is not
++ * measured -- counting bytes 11 and 12 whole covers both places.
++ *
++ * The 10-byte 0x01 the pad sends until a feature report is read from it
++ * (id, X Y Z Rz, buttons[3], L2 R2): sticks 1..4, triggers 8..9, buttons 5, 6
++ * and 7 & 0x03. The rest of byte 7 is a counter -- bits 2 to 5 toggled on
++ * every report in hid-090147 -- and unmasked it counted 1572 false changes in
++ * one minute there.
++ *
++ * Gyro, accelerometer, timestamps, battery and the touchpad are ignored. So a
++ * pad held perfectly still in the hand, or used only for motion aiming or
++ * touch gestures, is a pad nobody is using. A stick or trigger counts when it
++ * moves more than 4 from the reference: in the idle minutes of hid-175158 and
++ * hid-114844 no stick moved more than 2 from it, and in play in hid-203611 the
++ * same rule fired 400 to 1700 times a minute. */
++#define IOHID_ACTIVITY_DEADBAND 4
++#define IOHID_NSEC_PER_SEC 1000000000ull
++
++static BOOL dualsense_activity_snapshot(uint8_t *out, const uint8_t *report, CFIndex length)
++{
++    if (length >= 13 && report[0] == 0x31)
++    {
++        memcpy(out, report + 2, 6);
++        out[6] = report[9];
++        out[7] = report[10];
++        out[8] = report[11];
++        out[9] = report[12];
++        return TRUE;
++    }
++    if (length == 10 && report[0] == 0x01)
++    {
++        memcpy(out, report + 1, 4);
++        out[4] = report[8];
++        out[5] = report[9];
++        out[6] = report[5];
++        out[7] = report[6];
++        out[8] = report[7] & 0x03;
++        out[9] = 0;
++        return TRUE;
++    }
++    return FALSE;
+ }
+ 
++static void iohid_device_note_input(struct iohid_device *impl, const uint8_t *report, CFIndex length)
++{
++    uint8_t snapshot[sizeof(impl->activity_ref)];
++    UInt64 now;
++    int i;
++
++    if (!impl->idle_armed) return;
++    if (!dualsense_activity_snapshot(snapshot, report, length)) return;
++
++    if (impl->activity_ref_valid)
++    {
++        for (i = 0; i < 6; i++)
++            if (abs((int)snapshot[i] - (int)impl->activity_ref[i]) > IOHID_ACTIVITY_DEADBAND) break;
++        if (i == 6 && !memcmp(snapshot + 6, impl->activity_ref + 6, 4)) return;
++    }
++
++    memcpy(impl->activity_ref, snapshot, sizeof(snapshot));
++    impl->activity_ref_valid = TRUE;
++    now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
++
++    if (impl->power_off_requested && !impl->power_off_ignored_logged)
++    {
++        TRACE("DualSense %04x:%04x: input again %u s after the power-off request and no removal;"
++              " the pad did not turn off, and it is not asked again until it reconnects\n",
++              impl->vid, impl->pid, (unsigned int)((now - impl->power_off_request_ns) / IOHID_NSEC_PER_SEC));
++        impl->power_off_ignored_logged = TRUE;
++    }
++    impl->last_activity_ns = now;
++}
++
+ static void handle_IOHIDDeviceIOHIDReportCallback(void *context,
+         IOReturn result, void *sender, IOHIDReportType type,
+         uint32_t reportID, uint8_t *report, CFIndex report_length)
+ {
+     struct unix_device *iface = (struct unix_device *)context;
++    /* MGVF mgvf-0033 */
++    iohid_device_note_input(impl_from_unix_device(iface), report, report_length);
+     bus_event_queue_input_report(&event_queue, iface, report, report_length);
+ }
+ 
+@@ -170,6 +282,23 @@
+     length = CFNumberToDWORD(num);
+     impl->buffer = malloc(length);
+ 
++    /* MGVF mgvf-0033: the idle clock starts with the device, and before the
++     * callback that resets it. A copy of the pad main.c never starts has no
++     * callback, and would otherwise look untouched however much it is played.
++     * A stop and start of the same device without an IOKit removal starts
++     * fresh as well: asked again, with no stale reference. */
++    if (impl->idle_limit_ns)
++    {
++        impl->activity_ref_valid = FALSE;
++        impl->power_off_requested = FALSE;
++        impl->power_off_ignored_logged = FALSE;
++        impl->last_activity_ns = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
++        impl->idle_armed = TRUE;
++        TRACE("DualSense %04x:%04x held by this process over Bluetooth: asking it to turn itself off"
++              " after %u s without stick, trigger or button input\n",
++              impl->vid, impl->pid, (unsigned int)(impl->idle_limit_ns / IOHID_NSEC_PER_SEC));
++    }
++
+     IOHIDDeviceRegisterInputReportCallback(impl->device, impl->buffer, length, handle_IOHIDDeviceIOHIDReportCallback, iface);
+     return STATUS_SUCCESS;
+ }
+@@ -178,6 +307,7 @@
+ {
+     struct iohid_device *impl = impl_from_unix_device(iface);
+ 
++    impl->idle_armed = FALSE; /* MGVF mgvf-0033 */
+     IOHIDDeviceRegisterInputReportCallback(impl->device, NULL, 0, NULL, NULL);
+ 
+     pthread_mutex_lock(&iohid_cs);
+@@ -351,6 +481,163 @@
+     return seize;
+ }
+ 
++/* MGVF mgvf-0033: turn off a pad nobody is using.
++ *
++ * THE FAULT. A DualSense that connects over Bluetooth while this process
++ * already holds the match gets no macOS GameController plugin, so neither
++ * macOS's 900 s idle cut (mgvf-0006's header) nor, in the connections
++ * retained, the pad's own power-off after about eleven minutes happens to it.
++ * Measured from macOS's and Steam's own logs: on 2026-09-12/13 such a pad
++ * connected at 23:28:10, the game and Steam were gone by 00:07:48, and the pad
++ * ran on until 03:21:07, when it dropped by itself and the next connection
++ * reported 0 % battery -- 3 h 13 min with, very likely, no wine process left.
++ * On 2026-09-13 the same happened for 27 minutes after wine exited at
++ * 22:15:44. So the drain that was reported happened after this process was
++ * gone, and nothing in this file could have prevented it. What this file can
++ * do is not let the same pad sit untouched for hours while a game still holds
++ * it.
++ *
++ * THE MECHANISM, measured on 2026-09-14 on a DualSense Edge (054c:0df2) over
++ * Bluetooth with no wine running: feature report 0x08 of 48 bytes -- 0x08,
++ * 0x02, zeros, and the Bluetooth CRC-32 (seed byte 0x53 and the first 44
++ * bytes) little-endian in the last four -- sent with IOHIDDeviceSetReport
++ * returned 0, and 63 ms (shared open) and 64 ms (seized open, as here) later
++ * bluetoothd logged the pad's own disconnect, HID reason 431 / ACL 10719. The
++ * light went out and the pad did not come back until PS was pressed. The CRC
++ * tail for this content is e0 ef a2 23, the tail mgvf-0005 appended to
++ * libScePad's write of the same report on 2026-09-08. dualsensectl sends the
++ * same report as its power-off. A plain DualSense 054c:0ce6 did the same, 62 ms.
++ *
++ * THE RULE. While this process holds a DualSense on Bluetooth with
++ * kIOHIDOptionsTypeSeizeDevice and the device has been started, a pad with no
++ * stick, trigger or button input (see dualsense_activity_snapshot) for the
++ * limit is sent that report once. Once: a failed or ignored request is not
++ * repeated every ten seconds, and a reconnect is a new device with a fresh
++ * clock. A pad opened shared keeps macOS's own cut and is left alone. The
++ * clock is CLOCK_UPTIME_RAW, which does not advance while the Mac sleeps;
++ * macOS disconnects a Bluetooth pad on sleep anyway.
++ *
++ *   HKLM\System\CurrentControlSet\Services\winebus\Devices\<vid>/<pid>
++ *     IdlePowerOffMinutes  REG_DWORD  absent: 20 for 054c/0ce6 and 054c/0df2.
++ *                                     0: never. Otherwise clamped to 5..240.
++ *
++ * The 20 is a reasoned default, not a measurement: above the pad's own
++ * power-off (686 s, measured once, on a pad macOS was driving) and above
++ * macOS's 900 s cut, so a held pad is never turned off sooner than one macOS
++ * drives would have been. The value is ignored for any other device: the
++ * report is a DualSense's. */
++#define IOHID_IDLE_POWER_OFF_DEFAULT_MINUTES 20
++#define IOHID_IDLE_POWER_OFF_MIN_MINUTES 5
++#define IOHID_IDLE_POWER_OFF_MAX_MINUTES 240
++#define IOHID_IDLE_CHECK_INTERVAL_NS (10 * IOHID_NSEC_PER_SEC)
++#define DUALSENSE_BT_POWER_OFF_ID 0x08
++#define DUALSENSE_BT_POWER_OFF_LEN 48
++
++static UInt64 idle_power_off_limit_ns(const struct device_desc *desc, IOOptionBits open_options)
++{
++    const struct device_options *device;
++    UINT minutes = IOHID_IDLE_POWER_OFF_DEFAULT_MINUTES;
++
++    if (desc->bus_type != BUS_TYPE_BLUETOOTH || !is_dualsense_gamepad(desc->vid, desc->pid)) return 0;
++    if (open_options != kIOHIDOptionsTypeSeizeDevice) return 0;
++
++    if (options) LIST_FOR_EACH_ENTRY(device, &options->devices, struct device_options, entry)
++    {
++        if (device->vid != desc->vid) continue;
++        if (device->pid != -1 && device->pid != desc->pid) continue;
++        if (device->idle_power_off_minutes == -1) continue;
++        minutes = (UINT)device->idle_power_off_minutes;
++        break;
++    }
++
++    if (!minutes) return 0;
++    if (minutes < IOHID_IDLE_POWER_OFF_MIN_MINUTES) minutes = IOHID_IDLE_POWER_OFF_MIN_MINUTES;
++    if (minutes > IOHID_IDLE_POWER_OFF_MAX_MINUTES) minutes = IOHID_IDLE_POWER_OFF_MAX_MINUTES;
++    return (UInt64)minutes * 60 * IOHID_NSEC_PER_SEC;
++}
++
++/* zlib's CRC-32, bit by bit. The unix half has neither ntdll's
++ * RtlComputeCrc32 nor dualsense_usb.c, which is built into the PE half only,
++ * so the one feature report written from here carries its own. */
++static UInt32 iohid_crc32(UInt32 crc, const uint8_t *data, size_t len)
++{
++    int bit;
++
++    crc = ~crc;
++    while (len--)
++    {
++        crc ^= *data++;
++        for (bit = 0; bit < 8; bit++) crc = (crc >> 1) ^ (0xedb88320 & (0 - (crc & 1)));
++    }
++    return ~crc;
++}
++
++static IOReturn dualsense_bt_request_power_off(IOHIDDeviceRef device)
++{
++    static const uint8_t seed = 0x53;
++    uint8_t report[DUALSENSE_BT_POWER_OFF_LEN] = {DUALSENSE_BT_POWER_OFF_ID, 0x02};
++    UInt32 crc;
++
++    crc = iohid_crc32(0, &seed, 1);
++    crc = iohid_crc32(crc, report, DUALSENSE_BT_POWER_OFF_LEN - 4);
++    report[DUALSENSE_BT_POWER_OFF_LEN - 4] = crc;
++    report[DUALSENSE_BT_POWER_OFF_LEN - 3] = crc >> 8;
++    report[DUALSENSE_BT_POWER_OFF_LEN - 2] = crc >> 16;
++    report[DUALSENSE_BT_POWER_OFF_LEN - 1] = crc >> 24;
++
++    return IOHIDDeviceSetReport(device, kIOHIDReportTypeFeature, DUALSENSE_BT_POWER_OFF_ID,
++                                report, sizeof(report));
++}
++
++/* Called from the bus loop on every pass, and does its work at most every ten
++ * seconds. The list is walked under iohid_cs, but the report is sent after it
++ * is released: a Bluetooth feature write to a pad that is turning itself off
++ * must not keep iohid_device_stop, which takes the lock, waiting behind it.
++ * The IOHIDDeviceRef is retained across that window, and nothing of the
++ * iohid_device is touched once the lock is gone. */
++static void iohid_power_off_idle_pads(void)
++{
++    static UInt64 next_check_ns;
++    struct iohid_device *impl;
++    UInt64 now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
++
++    if (now < next_check_ns) return;
++    next_check_ns = now + IOHID_IDLE_CHECK_INTERVAL_NS;
++
++    for (;;)
++    {
++        IOHIDDeviceRef device = NULL;
++        unsigned int idle_s = 0;
++        WORD vid = 0, pid = 0;
++        IOReturn ret;
++
++        pthread_mutex_lock(&iohid_cs);
++        LIST_FOR_EACH_ENTRY(impl, &device_list, struct iohid_device, unix_device.entry)
++        {
++            if (!impl->idle_armed || impl->power_off_requested) continue;
++            /* started on the PE side after now was read: not idle, and not a
++             * subtraction that wraps */
++            if (impl->last_activity_ns >= now) continue;
++            if (now - impl->last_activity_ns < impl->idle_limit_ns) continue;
++            impl->power_off_requested = TRUE;
++            impl->power_off_request_ns = now;
++            idle_s = (now - impl->last_activity_ns) / IOHID_NSEC_PER_SEC;
++            vid = impl->vid;
++            pid = impl->pid;
++            device = impl->device;
++            CFRetain(device);
++            break;
++        }
++        pthread_mutex_unlock(&iohid_cs);
++        if (!device) break;
++
++        ret = dualsense_bt_request_power_off(device);
++        FIXME("DualSense %04x:%04x had no input for %u s while this process held it;"
++              " asking it to turn itself off (feature 0x08): %#x\n", vid, pid, idle_s, ret);
++        CFRelease(device);
++    }
++}
++
+ static void handle_DeviceMatchingCallback(void *context, IOReturn result, void *sender, IOHIDDeviceRef IOHIDDevice)
+ {
+     struct device_desc desc =
+@@ -433,6 +720,11 @@
+     impl->device = IOHIDDevice;
+     impl->buffer = NULL;
+     impl->open_options = open_options;
++    /* MGVF mgvf-0033: decided here, where the transport and the open are
++     * known; armed when the device is started. */
++    impl->vid = desc.vid;
++    impl->pid = desc.pid;
++    impl->idle_limit_ns = idle_power_off_limit_ns(&desc, open_options);
+ 
+     bus_event_queue_device_created(&event_queue, &impl->unix_device, &desc);
+ }
+@@ -489,6 +781,7 @@
+ 
+     do
+     {
++        iohid_power_off_idle_pads(); /* MGVF mgvf-0033 */
+         if (bus_event_queue_pop(&event_queue, result)) return STATUS_PENDING;
+         pthread_mutex_lock(&iohid_cs);
+         ret = CFRunLoopRunInMode(kCFRunLoopDefaultMode, 10, TRUE);

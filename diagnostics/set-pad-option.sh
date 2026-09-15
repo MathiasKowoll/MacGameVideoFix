@@ -11,7 +11,13 @@
 # VibrationMode, VibrationGain, XInputRumble, XInputRumbleInterval,
 # XInputRumbleDryRun, XInputRumbleDeadband, XInputRumbleRide,
 # XInputRumbleHapticPath, XInputRumbleMotorPower, XInputRumbleRideBand,
-# XInputRumbleStubButton, LightbarColour, PlayerLights, LightbarRelease.
+# XInputRumbleStubButton, LightbarColour, PlayerLights, LightbarRelease,
+# IdlePowerOffMinutes.
+#
+# IdlePowerOffMinutes (mgvf-0033) is minutes, in decimal: a DualSense on
+# Bluetooth that this bottle holds is asked to turn itself off after that long
+# with no stick, trigger or button input. Absent: 20. 0: never. Anything else is
+# clamped to 5..240. It is read as the bottle's wine starts, like SeizeDevice.
 #
 # XInputRumbleMotorPower carries a BYTE and not a switch: 0 to 255 is written
 # into the motor power field with the bit that claims it, and 256 or above -- or

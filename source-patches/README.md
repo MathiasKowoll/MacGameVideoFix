@@ -921,6 +921,87 @@ Not claimed:
   DualSense `054c:0ce6`, and whether it sees a pad inside winedevice.exe at all
   is not measured.
 
+### mgvf-0033 — turn off a pad nobody is using *(ours)*
+
+A DualSense that connects over Bluetooth while wine already holds it gets no
+macOS GameController plugin. So macOS's 900 s idle cut never applies to it, and
+neither, in every such connection retained, does the pad's own power-off after
+about eleven minutes. It is left to run flat.
+
+What was measured, from macOS's and Steam's own logs:
+- 2026-09-12/13: the pad connected at 23:28:10 with a game holding it. The game
+  and Steam were gone by 00:07:48. The pad dropped by itself at 03:21:07, and
+  the next connection reported 0 % battery: 3 h 13 min with, very likely, no
+  wine process left;
+- 2026-09-13: the same pad stayed up 27 minutes after wine exited at 22:15:44;
+- 2026-09-14, a pad macOS was driving: it turned itself off after 686 s.
+
+The mechanism, measured on 2026-09-14 on a DualSense Edge (`054c:0df2`) over
+Bluetooth with no wine running. The report was sent with
+`IOHIDDeviceSetReport`: feature `0x08`, 48 bytes, `08 02`, zeros, and the
+Bluetooth CRC-32 (seed `0x53` over the first 44 bytes) little-endian in the last
+four. For this content the tail is `e0 ef a2 23`, the tail mgvf-0005 appended to
+libScePad's own write of this report on 2026-09-08.
+- opened shared: the call returned 0, and bluetoothd logged the pad's own
+  disconnect (HID reason 431, ACL 10719) 63 ms after the Set report. The light
+  went off and the pad stayed off;
+- opened with `kIOHIDOptionsTypeSeizeDevice`, as winebus opens it: the call
+  returned 0, the disconnect came 64 ms after, and the pad stayed off;
+- a plain DualSense (`054c:0ce6`), opened shared: the disconnect came 62 ms
+  after the Set report, its light went off and it stayed off.
+
+THE CHANGE, in `bus_iohid.c`. A started DualSense on Bluetooth that this process
+holds seized is sent that report **once**, after a limit with no stick, trigger
+or button input. What counts is measured against the last report that counted,
+not the previous one, because the sticks of a pad on a table jitter:
+- 78-byte `0x31`: sticks 2..5 and triggers 6..7 when they move more than 4;
+  button bytes 9, 10, 11 and 12 on any change. Byte 11 is taken whole: in the
+  seized traces `hid-090147`, `hid-203611`, `hid-114844` (`0df2`) and
+  `hid-175158` (`0ce6`), none of its bits changed while the pad was still.
+  Byte 12 is in every trace that dumps the raw `0x31` (33 traces, 1,569 to
+  111,642 reports each) and never changed, so counting it costs nothing. Only
+  bits `0x01` and `0x02` of byte 11 ever changed in those traces: no trace has
+  an Edge Fn button or back paddle pressed, so where the Edge reports them is
+  not measured yet, and counting bytes 11 and 12 whole covers both;
+- 10-byte `0x01`: sticks 1..4, triggers 8..9, buttons 5, 6 and `7 & 0x03`. The
+  rest of byte 7 is a counter: bits 2 to 5 toggled on every report in
+  `hid-090147`.
+
+Gyro, accelerometer, timestamps, battery and the touchpad do not count. The
+report is sent after `iohid_cs` is released, so a pad turning itself off
+cannot hold up device removal. The request is marked sent even when it fails,
+so it is never repeated every ten seconds; a reconnect is a new device with a
+fresh clock. A pad opened shared keeps macOS's own cut and is left alone.
+
+    HKLM\System\CurrentControlSet\Services\winebus\Devices\<vid>/<pid>
+      IdlePowerOffMinutes  REG_DWORD  absent: 20 for 054c/0ce6 and 054c/0df2.
+                                      0: never. Otherwise clamped to 5..240.
+
+The value is read per model key, like `SeizeDevice`, and ignored for any other
+device. The 20 is a reasoned default, not a measurement: above the pad's own
+686 s and macOS's 900 s, so a held pad is never turned off sooner than one macOS
+drives.
+
+Logging. When it acts, a FIXME, visible without `+hid`, of the form
+`DualSense 054c:0df2 had no input for <N> s while this process held it; asking
+it to turn itself off (feature 0x08): <IOReturn>` (not seen in a run yet). With
+`+hid`, a trace at start with the
+limit, and one if input comes back after the request with no removal (the pad
+did not turn off).
+
+Not claimed:
+
+- that this was measured inside wine: the build, the FIXME and the pad dropping
+  within seconds of it are not measured yet;
+- that a game takes the pad back after PS reconnects it. The re-seize is the
+  known connect-while-held path; what each title does with a removal and
+  re-arrival is not measured;
+- that the pad is in use when it is only held: a pad held still in the hand for
+  20 minutes, or used only for motion aiming or the touchpad, counts as unused;
+- anything after wine exits, which is where the reported drain happened. This
+  patch does nothing then. RaccoonBot's watcher is meant to cover that while it is running (not measured yet on a live pad);
+  MacGamePadFix users without RaccoonBot are covered only while a game runs.
+
 ## If another of their patches is ever needed
 
 The remaining 31 are not applied here, and several address titles this project

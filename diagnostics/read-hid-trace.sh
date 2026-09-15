@@ -27,6 +27,9 @@
 #                                      lightbar and player lights, and whether
 #                                      the driver read and rewrote them
 #   whether SDL left the pad alone  -- mgvf-0032's hint line
+#   whether an idle pad was turned  -- mgvf-0033; the limit at start, the
+#   off                                request (a FIXME, so it is there without
+#                                      +hid too), and input after it
 #
 # IT REFUSES AN EMPTY TRACE. A log with no trace:hid lines reads exactly like a
 # pad that did nothing: every count comes out zero and looks like a finding.
@@ -220,6 +223,16 @@ say "mgvf-0032: did SDL leave the hidraw pads alone?"
 /usr/bin/grep -a "SDL will not open" "$L" | tail -2 | sed 's/^/  /'
 /usr/bin/grep -a "SDL may still open\|too many hidraw devices for SDL" "$L" | tail -2 | sed 's/^/  /'
 /usr/bin/grep -aq "SDL will not open\|SDL may still open" "$L" || echo "  no hint line -- no key with Hidraw set, or a build before mgvf-0032"
+
+say "mgvf-0033: was an idle pad asked to turn itself off?"
+printf '  armed (limit at start)      : '; /usr/bin/grep -ac "asking it to turn itself off after" "$L"
+printf '  requests sent               : '; /usr/bin/grep -ac "asking it to turn itself off (feature 0x08)" "$L"
+printf '  input again, no removal     : '; /usr/bin/grep -ac "the pad did not turn off" "$L"
+/usr/bin/grep -a "IdlePowerOffMinutes" "$L" | tail -2 | sed 's/^/  /'
+/usr/bin/grep -a "asking it to turn itself off after" "$L" | tail -2 | sed 's/^/  /'
+/usr/bin/grep -a "asking it to turn itself off (feature 0x08)" "$L" | tail -2 | sed 's/^/  /'
+/usr/bin/grep -a "the pad did not turn off" "$L" | tail -2 | sed 's/^/  /'
+/usr/bin/grep -aq "asking it to turn itself off after" "$L" || echo "  not armed -- no seized DualSense on Bluetooth was started, IdlePowerOffMinutes is 0, or a build before mgvf-0033"
 
 say "mgvf-0023: did the motor power field go out, and with what in it?"
 python3 - "$L" <<'PY4'

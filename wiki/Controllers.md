@@ -165,6 +165,16 @@ taking the pad from macOS:
   connected before the bottle started — before Steam, for a Steam game. Turn
   the pad on, or reconnect it, after the game is running.
 
+**A pad on Bluetooth that turns itself off.** While a game holds a DualSense on
+Bluetooth, the driver asks it to turn off after 20 minutes (by default) with no stick,
+trigger or button input, because a pad that connected while the game was
+running is never turned off by macOS and once ran flat overnight. Moving only
+the gyro or the touchpad does not count as use. Press PS to turn it back on.
+The time is per pad model in the bottle's registry (`IdlePowerOffMinutes`, 0
+to never do it). Not measured yet inside a game; on the Edge and on a plain DualSense with
+nothing but macOS running, the same request turned the pad off within a tenth of a second.
+It does nothing after the game and Steam have exited.
+
 **Frames.** Turn the trace on for the title and send the log; it measures the
 cost of every write and whether the pad's input stream is disturbed.
 
