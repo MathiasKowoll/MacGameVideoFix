@@ -273,11 +273,36 @@ reachable() {
 # opened. And here there is one key PER EXECUTABLE: a package can be five games
 # deep, so a partial answer is the dangerous one -- four titles playing and one
 # silently without cutscenes still has to read as broken.
+#
+# It reads user.reg while no wineserver is alive for the bottle, and asks the
+# registry only while one is. A live server flushes that file on its own
+# schedule, so then a key just written may not be on disk yet and the bottle is
+# asked. With no server the file is the whole registry, and asking would start
+# wine in a bottle where nothing runs -- which a launch that follows then joins,
+# as bottles.sh records above bottle_server_alive. A bottle that cannot run
+# reg.exe is judged by its file as well when no server holds it: its keys are on
+# disk, which is the case reachable() is there to protect. When the file cannot
+# answer for one executable, the whole bottle is asked, as before.
 override_ok() {
-  local b cx exe seen=0
+  local b cx exe alive disk rc seen=0
   while read -r b; do
     [ -n "$b" ] || continue
+    # Before either way of reading, because [4/4] skips a bottle that no
+    # installed CrossOver matches, and the two halves must judge the same bottles.
     cx="$(crossover_for_bottle "$b")" || continue
+    alive=2; disk=2
+    bottle_server_alive "$b" && alive=0 || alive=$?
+    if [ "$alive" = 1 ]; then
+      disk=0
+      for exe in "${EXE_NAMES[@]}"; do
+        rc=0
+        user_reg_has_value "$b" "Software\\Wine\\AppDefaults\\$exe\\DllOverrides" \
+          dinput8 || rc=$?
+        if [ "$rc" = 1 ]; then return 1; fi
+        if [ "$rc" != 0 ]; then disk=2; break; fi
+      done
+    fi
+    if [ "$disk" = 0 ]; then seen=$((seen + 1)); continue; fi
     reachable "$b" "$cx" || continue
     seen=$((seen + 1))
     for exe in "${EXE_NAMES[@]}"; do
@@ -293,6 +318,10 @@ case "$MODE" in
 --status)
   # The wine calls cost a wineserver, so they only happen once the file pair has
   # already answered `installed` -- that is, only for a package that is patched.
+  # Even then override_ok reads user.reg instead while no wineserver is up for
+  # the bottle. It asks when a server is up, and also when the server check or
+  # the file cannot answer for any executable -- and in that last case the
+  # queries can start a wineserver in a bottle where none was running.
   if is_ours "$LIVE" && [ -f "$REAL" ]; then
     if override_ok; then echo installed; else echo broken; fi
   elif is_ours "$LIVE"; then echo broken

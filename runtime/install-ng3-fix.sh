@@ -116,8 +116,10 @@ if [ "${MGVF_STATUS_ONLY:-0}" = 1 ]; then ACTION=--status; fi
 
 EXE="NINJA GAIDEN 3 Razor's Edge.exe"
 SYS="$BOTTLE/drive_c/windows/system32"
-REG="$BOTTLE/user.reg"
-KEY="[Software\\\\Wine\\\\AppDefaults\\\\$EXE\\\\DllOverrides]"
+# The override's key under HKEY_CURRENT_USER, spelled as reg.exe takes it. One
+# spelling for both readers: reg.exe is handed it behind HKEY_CURRENT_USER below,
+# and user_reg_has_value encodes it the way user.reg writes it.
+REG_KEY="Software\\Wine\\AppDefaults\\$EXE\\DllOverrides"
 DLLS="d3d9.dll qasf.dll quartz.dll winegstreamer.dll"
 
 # The registry is asked, not edited.
@@ -131,7 +133,8 @@ DLLS="d3d9.dll qasf.dll quartz.dll winegstreamer.dll"
 # requirement to bring the bottle down -- which for a launcher means quitting
 # Steam and ending the prefix before it can even tell a user whether their game
 # needs the fix.
-# bottles.sh carries crossover_for_bottle. Sourced BEFORE this file's own
+# bottles.sh carries crossover_for_bottle, and the two functions --status uses to
+# answer from user.reg without starting wine. Sourced BEFORE this file's own
 # helpers so that anything defined here still wins -- this script is shipped
 # standalone as well, so it must work whether or not that file is beside it.
 [ -f "$HERE/bottles.sh" ] && . "$HERE/bottles.sh"
@@ -208,7 +211,7 @@ reachable() {
     >/dev/null 2>&1
 }
 
-KEY="HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$EXE\\DllOverrides"
+KEY="HKEY_CURRENT_USER\\$REG_KEY"
 
 override_present() {
   local cx="$1"
@@ -285,14 +288,54 @@ status() {
     [ -f "$SYS/$d" ] && [ -f "$HERE/ng3-$d" ] && cmp -s "$SYS/$d" "$HERE/ng3-$d" && n=$((n+1))
   done
 
-  # Ask the bottle. If it cannot answer -- no CrossOver that matches its engine,
-  # or a prefix that will not run reg.exe -- fall back to reading user.reg,
-  # which is stale while a server is up but is better than calling an
-  # unanswerable question a missing key.
-  if cx="$(find_crossover)" && reachable "$BOTTLE" "$cx" && override_present "$cx"; then
+  # Read the file while no wineserver is alive for the bottle; ask the bottle
+  # while one is, or when the server check or the file cannot answer.
+  #
+  # Asking starts wine in a bottle where nothing runs, and a status check cannot
+  # afford that: RaccoonBot asks this on every start of the app, and on
+  # 2026-09-14 a game launched about five seconds after one such question joined
+  # the prefix it had brought up and lost its HID trace's winebus lines and its
+  # per-title registry write. bottles.sh has the whole account above
+  # bottle_server_alive.
+  #
+  # With no server, user.reg is the bottle's whole registry, so the file gives
+  # the answer reg.exe would. With a server, the registry lives in that server
+  # and the file can lag it, so the bottle is asked, which joins the running
+  # server rather than starting one. The gap between the check and the query is
+  # not closed here: a server that exits inside it is started again by the
+  # query, as every query started one before.
+  #
+  # When bottles.sh is not beside this script neither function exists, and the
+  # bottle is asked as it always was.
+  local alive=2 disk=2
+  if command -v bottle_server_alive >/dev/null 2>&1; then
+    bottle_server_alive "$BOTTLE" && alive=0 || alive=$?
+    if [ "$alive" = 1 ]; then
+      user_reg_has_value "$BOTTLE" "$REG_KEY" "*d3d9" && disk=0 || disk=$?
+    fi
+  fi
+
+  # Ask the bottle when the file could not answer. If the bottle cannot answer
+  # either -- no CrossOver that matches its engine, or a prefix that will not
+  # run reg.exe -- fall back to reading user.reg even with a server up, which is
+  # stale but better than calling an unanswerable question a missing key.
+  #
+  # That fallback used to be a grep for AppDefaults followed by one backslash and
+  # the executable. user.reg writes two backslashes there, so it never matched:
+  # run against a copy of a user.reg holding this very key on 2026-09-14, it
+  # found nothing. It also asked only for the key, where reg.exe asks for the
+  # *d3d9 value; user_reg_has_value asks what reg.exe asks.
+  if [ "$disk" = 0 ]; then
+    key=1
+  elif [ "$disk" = 1 ]; then
+    key=0
+  elif cx="$(find_crossover)" && reachable "$BOTTLE" "$cx" && override_present "$cx"; then
     key=1
   elif ! cx="$(find_crossover)" || ! reachable "$BOTTLE" "$cx"; then
-    grep -q "AppDefaults\\\\$EXE" "$REG" 2>/dev/null && key=1
+    if command -v user_reg_has_value >/dev/null 2>&1 \
+       && user_reg_has_value "$BOTTLE" "$REG_KEY" "*d3d9"; then
+      key=1
+    fi
   fi
 
   # The same four words the other eleven installers answer with, so a launcher

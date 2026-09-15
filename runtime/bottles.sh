@@ -194,3 +194,117 @@ find_bottle_dir() {
   fi
   printf '%s' "${hits%$'\n'}"
 }
+
+# IS A WINESERVER ALIVE FOR THIS BOTTLE, answered without starting one.
+#
+# Every installer here reads the registry by asking reg.exe, and in a bottle
+# where nothing runs, asking starts wine: wineserver, services.exe,
+# winedevice.exe and plugplay.exe, which stay up for seconds after reg.exe has
+# answered. Measured on 2026-09-14: RaccoonBot asks install-ng3-fix.sh --status
+# on every start of the app, and a game launched about five seconds later joined
+# the prefix that question had brought up. The launch lost its HID trace's
+# winebus lines and its per-title registry write, and the live wineserver's
+# environment still carried the status run's MGVF_EXE and MGVF_STATUS_ONLY. A
+# status check that brings a bottle up changes the launch that follows it, so
+# the installers answer from user.reg whenever no server holds the bottle.
+#
+# server_dir_of, held_by and has_server are copied unchanged from
+# diagnostics/capture-hid-trace.sh, which says why each is written the way it
+# is. In short: wine keeps one server directory per prefix, named after the
+# prefix's device and inode in lowercase hex, and every process of that prefix
+# holds files open in it, so lsof on it names that bottle's processes and no
+# other bottle's. Checked here on 2026-09-14 against RaccoonBot's Steam bottle
+# while a game ran in it: the derived directory was held by that bottle's
+# wineserver, its services and the game.
+server_dir_of() {  # server_dir_of <bottle dir>
+  local dev ino
+  read -r dev ino <<<"$(stat -f '%d %i' "$1" 2>/dev/null)"
+  [ -n "${dev:-}" ] && [ -n "${ino:-}" ] || return 1
+  printf '/private/tmp/.wine-%s/server-%x-%x\n' "$(id -u)" "$dev" "$ino"
+}
+
+# One "pid name" line per process holding the directory. -F prints a p line,
+# a c line and then f lines for every open file; only the first two are wanted.
+held_by() {  # held_by <server dir>
+  [ -d "$1" ] || return 0
+  /usr/sbin/lsof -Fpc +D "$1" 2>/dev/null |
+    awk '/^p/ { pid = substr($0, 2) } /^c/ { print pid " " substr($0, 2) }'
+}
+
+# Matched on the prefix: support-bundle.sh records engines whose server binary
+# is wineserver-x86 or wineserver-arm64, and an exact name would miss those.
+has_server() {  # has_server <held_by output>
+  /usr/bin/grep -Eq '^[0-9]+ wineserver' <<<"$1"
+}
+
+# 0 when a wineserver holds the bottle, 1 when none does, 2 when this cannot
+# tell. A caller must never read 2 as 1: the one thing 1 is used for is trusting
+# user.reg, and a live server can hold keys the file does not have yet.
+#
+# held_by's own status is ignored on purpose. lsof exits 1 when it finds nothing,
+# and under pipefail that 1 is what held_by returns, so a bottle with no server
+# would otherwise end a `set -e` caller rather than answer.
+bottle_server_alive() {  # bottle_server_alive <bottle dir>
+  local server held
+  [ -x /usr/sbin/lsof ] || return 2
+  server="$(server_dir_of "$1")" || return 2
+  held="$(held_by "$server")" || true
+  if has_server "$held"; then return 0; fi
+  return 1
+}
+
+# WHETHER HKEY_CURRENT_USER HOLDS A VALUE, read from the bottle's user.reg.
+#
+# Only an answer while bottle_server_alive says 1. A live server holds the
+# registry in memory and saves the file on a period of its own (save_period in
+# wine's server/registry.c), so the file can lag what reg.exe would say. With no
+# server the file is the whole registry. Wine saves it by writing a temporary
+# file and renaming it over user.reg (save_branch, same file), so a reader never
+# meets one half written.
+#
+# The key is given as reg.exe takes it under HKCU, with single backslashes, and
+# the value by its name. Both are compared the way wine writes them. A key is a
+# header line, [Software\\Wine\\AppDefaults\\<exe>\\DllOverrides] followed by a
+# timestamp; a value is a line beginning "<name>"=. dump_strW in server/unicode.c
+# puts a backslash before every backslash, before [ and ] in a key name, and
+# before " in a value name. Registry names are case-insensitive, so the
+# comparison is too. Outside printable ASCII, dump_strW writes escapes that this
+# does not reproduce, so such a name answers 2 instead of a false absent.
+#
+# 0 present, 1 absent, 2 the file cannot answer: missing, unreadable, or a name
+# this does not encode.
+user_reg_has_value() {  # user_reg_has_value <bottle dir> <key under HKCU> <value name>
+  local reg="$1/user.reg" rc=0
+  [ -f "$reg" ] && [ -r "$reg" ] || return 2
+  MGVF_REG_KEY="$2" MGVF_REG_VALUE="$3" LC_ALL=C /usr/bin/awk '
+    function enc(s, specials,   out, i, c) {
+      out = ""
+      for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c < " " || c > "~") { bad = 1; return "" }
+        if (index(specials, c)) out = out "\\"
+        out = out c
+      }
+      return out
+    }
+    BEGIN {
+      bad = 0; found = 0; inside = 0
+      key = "[" tolower(enc(ENVIRON["MGVF_REG_KEY"], "\\[]")) "]"
+      val = "\"" tolower(enc(ENVIRON["MGVF_REG_VALUE"], "\\\"")) "\"="
+      if (bad) exit
+    }
+    /^\[/ {
+      line = tolower($0)
+      inside = (line == key || substr(line, 1, length(key) + 1) == key " ")
+      next
+    }
+    inside && substr(tolower($0), 1, length(val)) == val { found = 1; exit }
+    END {
+      if (bad) exit 3
+      if (found) exit 0
+      exit 1
+    }
+  ' "$reg" || rc=$?
+  case "$rc" in 0|1) return "$rc" ;; esac
+  return 2
+}

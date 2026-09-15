@@ -258,20 +258,37 @@ reachable() {
 # long time recorded as broken on stable CrossOver -- the fix was not running in
 # any of those measurements, and nothing said so.
 #
-# It asks the registry rather than reading user.reg, because wineserver flushes
-# that file when it feels like it and a lazy flush reads as a missing key.
+# It reads user.reg while no wineserver is alive for the bottle, and asks the
+# registry only while one is. A live server flushes that file when it feels like
+# it, so then a lazy flush reads as a missing key and the bottle is asked. With
+# no server the file is the whole registry, and asking would start wine in a
+# bottle where nothing runs -- which a launch that follows then joins, as
+# bottles.sh records above bottle_server_alive. A bottle that cannot run reg.exe
+# is judged by its file as well when no server holds it: its keys are on disk,
+# which is the case reachable() is there to protect. A file that cannot answer
+# falls back to asking, as before.
 override_ok() {
-  local b cx seen=0
+  local b cx alive disk seen=0
   while read -r b; do
     [ -n "$b" ] || continue
+    # Before either way of reading, because [4/4] skips a bottle that no
+    # installed CrossOver matches, and the two halves must judge the same bottles.
     cx="$(crossover_for_bottle "$b")" || continue
-    reachable "$b" "$cx" || continue
-    seen=$((seen + 1))
     # Symmetric with [4/4]: that step writes the key into EVERY candidate
     # bottle, on purpose, because the user may switch bottles between runs. So
     # one bottle holding it is not the question -- the question is whether any
     # candidate is missing it, because that is the run where the bridge silently
     # does not load.
+    alive=2; disk=2
+    bottle_server_alive "$b" && alive=0 || alive=$?
+    if [ "$alive" = 1 ]; then
+      user_reg_has_value "$b" "Software\\Wine\\AppDefaults\\$EXE_NAME\\DllOverrides" \
+        dinput8 && disk=0 || disk=$?
+    fi
+    if [ "$disk" = 1 ]; then return 1; fi
+    if [ "$disk" = 0 ]; then seen=$((seen + 1)); continue; fi
+    reachable "$b" "$cx" || continue
+    seen=$((seen + 1))
     wine_in_bottle "$b" "$cx" --cx-app reg.exe query \
       "HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\$EXE_NAME\\DllOverrides" \
       /v dinput8 >/dev/null 2>&1 || return 1
@@ -283,6 +300,10 @@ case "$MODE" in
 --status)
   # The wine call costs a wineserver, so it is only made once the file pair has
   # already answered `installed` -- that is, only for a game that is patched.
+  # Even then override_ok reads user.reg instead while no wineserver is up for
+  # the bottle. It asks when a server is up, and also when the server check or
+  # the file cannot answer -- and in that last case the query can start a
+  # wineserver in a bottle where none was running.
   if is_ours "$LIVE" && [ -f "$REAL" ]; then
     if override_ok; then echo installed; else echo broken; fi
   elif is_ours "$LIVE"; then echo broken
