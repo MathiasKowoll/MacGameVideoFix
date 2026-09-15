@@ -30,6 +30,9 @@
 #   whether an idle pad was turned  -- mgvf-0033; the limit at start, the
 #   off                                request (a FIXME, so it is there without
 #                                      +hid too), and input after it
+#   shared or seized                -- mgvf-0034; shared unless SeizeDevice 1
+#   the lights sent again           -- mgvf-0035; how many lights-only packets
+#                                      of ours went out, and how many failed
 #
 # IT REFUSES AN EMPTY TRACE. A log with no trace:hid lines reads exactly like a
 # pad that did nothing: every count comes out zero and looks like a finding.
@@ -232,7 +235,20 @@ printf '  input again, no removal     : '; /usr/bin/grep -ac "the pad did not tu
 /usr/bin/grep -a "asking it to turn itself off after" "$L" | tail -2 | sed 's/^/  /'
 /usr/bin/grep -a "asking it to turn itself off (feature 0x08)" "$L" | tail -2 | sed 's/^/  /'
 /usr/bin/grep -a "the pad did not turn off" "$L" | tail -2 | sed 's/^/  /'
-/usr/bin/grep -aq "asking it to turn itself off after" "$L" || echo "  not armed -- no seized DualSense on Bluetooth was started, IdlePowerOffMinutes is 0, or a build before mgvf-0033"
+/usr/bin/grep -aq "asking it to turn itself off after" "$L" || echo "  not armed -- no seized DualSense on Bluetooth was started (since mgvf-0034 only SeizeDevice 1 seizes), IdlePowerOffMinutes is 0, or a build before mgvf-0033"
+
+say "mgvf-0034: was the pad shared or seized?"
+printf '  opened shared               : '; /usr/bin/grep -ac "shared with macOS" "$L"
+printf '  seized                      : '; /usr/bin/grep -ac "Seized HID device" "$L"
+printf '  seize refused, shared       : '; /usr/bin/grep -ac "Failed to seize HID device" "$L"
+/usr/bin/grep -a "seizing the device from the host" "$L" | tail -2 | sed 's/^/  /'
+
+say "mgvf-0035: were the chosen lights sent again?"
+printf '  lights-only packets of ours : '; /usr/bin/grep -ac "set the lights again (packet of ours" "$L"
+printf '  of them failed              : '; /usr/bin/grep -ac "the lights could not be set again" "$L"
+/usr/bin/grep -a "set the lights again (packet of ours" "$L" | head -1 | sed 's/^/  first: /'
+/usr/bin/grep -a "set the lights again (packet of ours" "$L" | tail -1 | sed 's/^/  last:  /'
+/usr/bin/grep -aq "set the lights again (packet of ours" "$L" || echo "  none -- no colour or pattern chosen, no client packet carried the lights yet, the pad is on a cable, or a build before mgvf-0035"
 
 say "mgvf-0023: did the motor power field go out, and with what in it?"
 python3 - "$L" <<'PY4'

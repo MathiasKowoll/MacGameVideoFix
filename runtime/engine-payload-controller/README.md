@@ -189,9 +189,10 @@ a running title, so the first use belongs in a `+hid` trace.
 
 ## Taking the pad away from macOS
 
-**On by default, and it costs something.** This is the one thing in this set
-that changes what macOS can do while a bottle is up, so it is written out
-plainly.
+**Off by default since `mgvf-0034`, and it costs something when it is on.**
+This is the one thing in this set that can change what macOS can do while a
+bottle is up, so it is written out plainly; what changed with `mgvf-0034` is at
+the end of this section.
 
 macOS drives a connected DualSense itself. WindowServer's
 `com.apple.GameController.HID:DualSense` driver opens the pad every time it
@@ -277,29 +278,35 @@ connections each way. **Turn the pad on, or reconnect it, after the game is
 running.** That was seen on automatic reconnects; a deliberate power cycle was
 not separately timed.
 
-**What it applies to.** Only a **DualSense** (`054c:0ce6`, `054c:0df2`) that
-arrived over **Bluetooth**, which is where the timeouts were counted. A pad on
-a cable, a DualShock 4 and every other device are opened shared, exactly as
-before. Keyboards and mice cannot be reached by this at all: winebus refuses
-everything that is not a joystick or a gamepad before it opens anything. And if
-the seizing open fails — another process holds the device exclusively already —
-winebus falls back to the shared open and the pad still works.
+**Off by default since `mgvf-0034`: a pad is shared unless its key asks for the
+seize.** Everything above describes the seize, and it is still there for
+whoever sets the value; nobody gets it without doing so. What was measured with
+the pad shared, a DualSense Edge over Bluetooth on 2026-09-14 and 2026-09-15:
+three sessions of play, of 8, 25 and 34 minutes, with no *"Unable to send BT
+output report"*, no *"exclusive access"* and no idle cut during play; a 24-hour
+Bluetooth log in which each of seven disconnects had a cause — four followed a
+power-off request, three were macOS's idle cut, all three after play had ended;
+and, by the user, the PS button, the lights and the rumble working. Sharing has
+one measured cost: macOS repaints the lightbar whenever the front application
+changes, which `mgvf-0035` answers by sending a chosen colour again every two
+seconds (see *The lights a user chose*).
+
+**What the value can reach.** Keyboards and mice cannot be reached by it at
+all: winebus refuses everything that is not a joystick or a gamepad before it
+opens anything. And if the seizing open fails — another process holds the
+device exclusively already — winebus falls back to the shared open and the pad
+still works.
 
     HKLM\System\CurrentControlSet\Services\winebus\Devices\<vid>/<pid>
-        SeizeDevice    REG_DWORD   absent: as above. 0: share the pad with
-                                   macOS, as before this patch. 1: seize it.
+        SeizeDevice    REG_DWORD   absent or 0: share the pad with macOS.
+                                   1: seize it.
 
 The key is the one `UsbEmulation` and winebus's own `Hidraw` live under, named
 after the pad's real ids in lower-case hex with a slash — `054c/0ce6`,
-`054c/0df2`. **Unlike `UsbEmulation` this one is on by default** for the pads
-above, because it was written against the drops seen under a shared open on
-2026-09-08; that it prevents them is not measured. Set it to `0` if you would
-rather share the pad; set it to `1` on some other pad if you have measured the
-same timeouts and want to try it. A key that already says `1` for a DualSense
-changes nothing, because absent means the same; only `0` turns the seize off.
-One bottle here carries an explicit `1` under both `054c/0ce6` and `054c/0df2`,
-present since at least 2026-09-12 and of unknown origin. It is read once, when
-the bottle's wine starts — not per connect, as `UsbEmulation` is — so a change
+`054c/0df2`. Set it to `1` if you would rather wine had the pad to itself while
+a bottle is up; the costs are the ones above. A key that already says `0`
+changes nothing now, because absent means the same. It is read once, when the
+bottle's wine starts — not per connect, as `UsbEmulation` is — so a change
 applies on the next start of the bottle.
 
 **Not yet measured:** that the seize *stops* any drop. What was measured on
@@ -475,11 +482,14 @@ touch the idle disconnect.
 
 ## Turning off a pad nobody is using
 
-`mgvf-0033`, in `winebus.so`, and **on by default**. A DualSense that connects
-over Bluetooth while wine already holds it gets no GameController plugin, so
-macOS's 900 s cut above never applies to it, and in the connections retained
-the pad did not turn itself off either. On 2026-09-12/13 one ran on for 3 h
-13 min, until it went flat; the game and Steam had exited long before.
+`mgvf-0033`, in `winebus.so`. **Since `mgvf-0034` it acts only on a pad whose
+key says `SeizeDevice 1`**, because a shared pad is left to macOS's own idle
+cut, which was measured to act on it once play ends. What follows is the seized
+case. A DualSense that connects over Bluetooth while wine already holds it
+seized gets no GameController plugin, so macOS's 900 s cut above never applies
+to it, and in the connections retained the pad did not turn itself off either.
+On 2026-09-12/13 one ran on for 3 h 13 min, until it went flat; the game and
+Steam had exited long before.
 
 With the patch, a DualSense on Bluetooth that this process has opened with
 `kIOHIDOptionsTypeSeizeDevice` and started is sent feature report `0x08` — `08

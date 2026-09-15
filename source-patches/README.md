@@ -78,8 +78,10 @@ about the bus, it lets one pad lie about it, per device, off by default, for
 the two consumers that turned out not to want the truth. **`mgvf-0006` is ours
 too**, from the same day and the same set, and is the first of ours to touch
 the unix half of a driver rather than the PE half: it stops wine and macOS
-writing to the same pad at once. Unlike `mgvf-0005` it is **on by default**,
-because it repairs a defect rather than offering a behaviour. **`mgvf-0007` is
+writing to the same pad at once. Unlike `mgvf-0005` it was **on by default**,
+because it was taken to repair a defect rather than offer a behaviour; that it
+repaired one was never measured, and since `mgvf-0034` it is off unless a
+registry value asks for it. **`mgvf-0007` is
 ours too**, and is the only one of the set that exists because of another one
 of ours: it is the bill for `mgvf-0005`'s lie, and takes back out of a report
 the audio settings a client asks for only because it has been told the pad is
@@ -291,9 +293,11 @@ timed.
 Scoped to what was measured and no wider — a DualSense (`054c:0ce6`,
 `054c:0df2`) that arrived over Bluetooth — with `SeizeDevice` under
 `HKLM\System\CurrentControlSet\Services\winebus\Devices\<vid>/<pid>` to
-decide it either way for any device. **On by default** for those pads, unlike
-`mgvf-0005`'s `UsbEmulation`, because it was written against the drops seen
-under a shared open on 2026-09-08; that it prevents them is not measured.
+decide it either way for any device. It was **on by default** for those pads
+until `mgvf-0034`, because it was written against the drops seen under a shared
+open on 2026-09-08; that it prevents them was never measured. Since
+`mgvf-0034` it is off unless the value is non-zero — see that section for what
+was measured with the pad shared.
 winebus refuses everything that is not a joystick or a gamepad before it opens
 anything, so no value under that key can seize a keyboard or a mouse.
 
@@ -1001,6 +1005,71 @@ Not claimed:
 - anything after wine exits, which is where the reported drain happened. This
   patch does nothing then. RaccoonBot's watcher is meant to cover that while it is running (not measured yet on a live pad);
   MacGamePadFix users without RaccoonBot are covered only while a game runs.
+
+### mgvf-0034 — share the pad with macOS unless its key asks for the seize *(ours)*
+
+`mgvf-0006` seized a DualSense on Bluetooth by default. From this patch on,
+**no device is seized unless its `SeizeDevice` value is non-zero**; `0`, or no
+value, opens it shared, as winebus did before `mgvf-0006`. The value keeps its
+meaning and its key. A shared open is now traced — *"Opened HID device … shared
+with macOS"* — beside the seize's own line, so a `+hid` trace says which open a
+pad got.
+
+Why: that the seize prevented the 2026-09-08 drops was never measured, and its
+costs were — macOS's idle cut in the middle of a game, and a pad macOS cannot
+use while a bottle is up. What was measured with `SeizeDevice 0` on a DualSense
+Edge over Bluetooth, on 2026-09-14 and 2026-09-15:
+
+- three sessions of play, of 8, 25 and 34 minutes, with no *"Unable to send BT
+  output report"*, no *"exclusive access"* and no idle cut during play;
+- a 24-hour Bluetooth log in which each of seven disconnects had a cause: four
+  followed a power-off request, three were macOS's idle cut, all three after
+  play had ended — so a session left behind does not keep a shared pad awake;
+- by the user, in the 34-minute session: the PS button, the lights and the
+  rumble working;
+- macOS's plugin attached at both of that session's connects, including a
+  reconnect while wine already held the pad shared.
+
+What follows from it: macOS repaints the lightbar of a shared pad, which
+`mgvf-0035` answers; `mgvf-0033` acts only on a seized pad, so by default it no
+longer acts, and macOS's own idle cut turns off a shared pad nobody is using.
+
+Not claimed: that sharing causes no drop anywhere — one pad, one Mac, three
+sessions and one day; its frame cost; anything about the 2026-09-08 timeouts,
+whose log is gone.
+
+### mgvf-0035 — send the lights a user chose again *(ours)*
+
+`mgvf-0031` rewrites the colour in a client's own light packets and adds none of
+its own. With the pad shared that is not enough: **macOS repaints the lightbar
+whenever the front application changes.** Measured on 2026-09-15 in Mortal
+Shell 2 under Steam Input, red chosen, `hid-122915.log` beside macOS's log (the
+clocks tied by the disconnect, to 0.01 s): Steam's colour was rewritten to red
+at 12:30:00.37, and gamecontrollerd applied its own at 12:30:00.91 as the game
+came to the front. Nobody wrote lights again for 16 minutes and the user saw
+macOS's colour. After a reconnect the order was the other way round — macOS at
+12:46:37.20, the rewritten Steam packet at 12:46:39.18 — and the user saw red.
+
+So once a packet carrying the user's lights has gone to a pad on Bluetooth, a
+**lights-only packet** of ours goes to it whenever two seconds pass with none.
+It enables only the fields the user chose, carries the player pattern with the
+instant bit, and has every other byte zero, both motors included, so no rumble
+is started or stopped by it. The pad's own input is the clock, under the lock
+the client writes hold, so no thread is added and a pad that sends nothing is
+not written to. Nothing is sent before the first client packet carrying the
+lights, so a title nobody writes lights for still gets no packet of ours. Two
+seconds was the user's choice: after macOS repaints, its colour can show for up
+to that long, for one 78-byte write every two seconds on a link that drains
+about 65 a second.
+
+Tested on the host, section `(t)` of `dualsense-descriptors/usb_emu_test.c`:
+the packet on both routes, byte for byte; that the vibration rewrite finds
+nothing in it at any mode or gain; that the lights rewrite finds it already
+carrying the user's values; and which packets count as carrying them.
+
+Not claimed: that it has run on a pad yet; its frame cost; that the instant bit
+keeps a re-sent pattern from fading in again; that up to two seconds of macOS's
+colour after a repaint is invisible.
 
 ## If another of their patches is ever needed
 

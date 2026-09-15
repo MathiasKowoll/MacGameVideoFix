@@ -1,0 +1,114 @@
+winebus: share a DualSense with macOS unless its key asks for the seize.
+
+mgvf-0006 opened a DualSense on Bluetooth with kIOHIDOptionsTypeSeizeDevice by
+default, written against the link drops seen under a shared open on
+2026-09-08. That the seize prevented them was never measured, and its own
+costs were: macOS's 900 s idle cut lands in the middle of a game, because a
+seized pad shows macOS's plugin no input, and macOS and its applications lose
+the pad for as long as the bottle is up.
+
+WHAT WAS MEASURED with SeizeDevice 0, a DualSense Edge (054c:0df2) over
+Bluetooth, on 2026-09-14 and 2026-09-15:
+
+- three sessions of play, of 8, 25 and 34 minutes: no "Unable to send BT
+  output report", no "device is exclusive access" and no idle cut during play.
+  The plugin's idle clock reset with the input the trace showed;
+- a 24-hour Bluetooth log, from 11:18 to 11:18: seven disconnects, each with a
+  cause. Four followed a feature 0x08 power-off request (ACL 10719); three
+  were macOS's idle cut (10722), each well after play had ended, so a session
+  left behind does not keep a shared pad awake;
+- the 34-minute session, by the user: the PS button, the lights and the rumble
+  work. Its one disconnect came from the pad's side (HID reason 431), and the
+  pad came back with the game still running;
+- macOS's plugin attached at both of that session's connects, the reconnect
+  included, while wine already held the pad shared.
+
+THE CHANGE, in bus_iohid.c. want_seize's default is FALSE for every device.
+The value is unchanged in meaning: 0 opens shared, non-zero seizes, and it
+still decides it for any device its key names. A shared open is now traced
+("Opened HID device ... shared with macOS"), the counterpart of the seize's
+own line, so a trace says which open a pad got; RaccoonBot also looks for
+that string to tell an engine that shares by default.
+
+WHAT FOLLOWS FROM IT:
+
+- macOS repaints the lightbar of a shared pad whenever the front application
+  changes, which undoes mgvf-0031's one rewritten colour. mgvf-0035 answers
+  that;
+- mgvf-0033's power-off acts only on a seized pad, so by default it does
+  nothing; macOS's own idle cut turns off a shared pad nobody is using;
+- a pad on a cable was never seized, and nothing changes for it.
+
+NOT CLAIMED: that sharing causes no drop anywhere -- one pad, one Mac, three
+sessions and one day; that the frame cost of a shared open is the same, which
+was not measured; anything about the 2026-09-08 timeouts, whose log is gone.
+
+---
+--- a/dlls/winebus.sys/bus_iohid.c
++++ b/dlls/winebus.sys/bus_iohid.c
+@@ -445,17 +445,32 @@
+  * a registry value says so:
+  *
+  *   HKLM\System\CurrentControlSet\Services\winebus\Devices\<vid>/<pid>
+- *     SeizeDevice  REG_DWORD  absent: the default above. 0: open shared, as
+- *                             before. Non-zero: seize.
++ *     SeizeDevice  REG_DWORD  absent: open shared (mgvf-0034). 0: open shared.
++ *                             Non-zero: seize.
+  *
+- * Unlike mgvf-0005's UsbEmulation this one is ON by default for the pads it
+- * covers, because it was written against the drops seen under a shared open
+- * on 2026-09-08. That it prevents them is not measured; under the seize no
+- * kIOReturnTimeout was logged in the seven disconnect windows checked. The
+- * value is there for the two people the default is wrong for -- a DualSense
+- * owner who would rather share the pad with macOS, and the owner of some
+- * other pad who has measured the same timeouts and wants to try it.
++ * MGVF mgvf-0034: the default is SHARED for every pad, a DualSense on
++ * Bluetooth included, and only a non-zero SeizeDevice seizes. From mgvf-0006
++ * until 2026-09-15 the seize was on by default for the pads above, written
++ * against the drops seen under a shared open on 2026-09-08; that it prevented
++ * them was never measured. What was measured with SeizeDevice 0 on a DualSense
++ * Edge over Bluetooth, on 2026-09-14 and 2026-09-15:
+  *
++ *   - three sessions of play (8, 25 and 34 minutes) with no "Unable to send",
++ *     no "exclusive access" and no idle cut during play;
++ *   - a 24-hour Bluetooth log in which each of seven disconnects had a cause:
++ *     four followed a power-off request, three were macOS's idle cut, all
++ *     three after play had ended -- so a session left behind does not keep
++ *     the pad awake;
++ *   - by the user, in the 34-minute session: the PS button, the lights and
++ *     the rumble working.
++ *
++ * The seize's own costs are measured above: the idle cut in the middle of a
++ * game, and a pad macOS cannot use while a bottle holds it. Sharing has one
++ * measured cost of its own, answered in mgvf-0035: macOS repaints the lightbar
++ * whenever the front application changes. And mgvf-0033's power-off acts only
++ * on a seized pad, so by default it no longer acts; macOS's idle cut is what
++ * turns off a shared pad nobody is using.
++ *
+  * The value cannot reach a keyboard or a mouse: the enumeration below refuses
+  * everything that is not a joystick or a gamepad before it ever opens
+  * anything, so the widest this can be turned on for is a game controller.
+@@ -463,9 +478,8 @@
+ static BOOL want_seize(const struct device_desc *desc)
+ {
+     const struct device_options *device;
+-    BOOL seize;
+-
+-    seize = desc->bus_type == BUS_TYPE_BLUETOOTH && is_dualsense_gamepad(desc->vid, desc->pid);
++    /* MGVF mgvf-0034: nothing is seized unless its key asks, see above */
++    BOOL seize = FALSE;
+ 
+     /* The per-device options the PE side read at driver start, handed to this
+      * bus in bus_options at init. An entry with no SeizeDevice value leaves
+@@ -697,6 +711,11 @@
+         ERR("Failed to open HID device %p (vid %04x, pid %04x)\n", IOHIDDevice, desc.vid, desc.pid);
+         return;
+     }
++    /* MGVF mgvf-0034: the counterpart of the seize's line, so a trace says
++     * which open a pad got; RaccoonBot also asks this string whether an engine
++     * shares by default. */
++    if (!open_options)
++        TRACE("Opened HID device %p (vid %04x, pid %04x) shared with macOS\n", IOHIDDevice, desc.vid, desc.pid);
+     IOHIDDeviceScheduleWithRunLoop(IOHIDDevice, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+ 
+     str = IOHIDDeviceGetProperty(IOHIDDevice, CFSTR(kIOHIDManufacturerKey));

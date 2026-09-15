@@ -33,13 +33,12 @@
 # reports to it, wine opened the same pad shared and wrote its own, and macOS's
 # writes then time out. Measured from macOS's own log on 2026-09-08, where link
 # drops followed; that the contention caused them, and that the seize prevents
-# them, was never measured. So wine now SEIZES a DualSense
-# that arrived over Bluetooth, and that costs what it says: while a bottle
-# holds the pad, macOS and its own applications cannot use it. The pad comes
-# back when the bottle shuts down. It also starves macOS's own 900 s idle
-# disconnect of input, so a pad connected before the bottle started is cut by
-# macOS about 15 minutes after the last input macOS saw. A registry value turns
-# it off per device --
+# them, was never measured. So wine SEIZED a DualSense that arrived over
+# Bluetooth, which cost what it says: while a bottle held the pad, macOS and its
+# own applications could not use it, and macOS's own 900 s idle disconnect was
+# starved of input and cut the pad in the middle of a game. Since mgvf-0034 the
+# pad is SHARED by default, measured over three sessions and a day without a
+# drop during play, and a registry value asks for the seize per device --
 # see runtime/engine-payload-controller/README.md.
 #
 # Same shape as install-engine-media.sh, same rules: it writes into the ENGINE,

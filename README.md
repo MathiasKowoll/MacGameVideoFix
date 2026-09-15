@@ -501,14 +501,17 @@ scripts/install-controller-build.sh
 ```
 
 These two produce a second engine set, and it is **optional**: ten files from
-the same tree with thirty patches of ours applied — `winebus.sys`,
+the same tree with thirty-two patches of ours applied — `winebus.sys`,
 `setupapi.dll`, `ntoskrnl.exe`, `hidclass.sys`, the five `xinput` DLLs, and
-`winebus.so`, the unix half of winebus. The newest three are `mgvf-0031`, a
+`winebus.so`, the unix half of winebus. The newest are `mgvf-0031`, a
 lightbar colour and player number chosen per pad model and put into the light
 changes a client already sends; `mgvf-0032`, which keeps wine's SDL bus from
-opening a pad the hidraw route owns; and `mgvf-0033`, which asks a Bluetooth
-DualSense that wine holds to turn itself off after 20 minutes (by default) with no stick,
-trigger or button input. What none of them has been measured to do is in
+opening a pad the hidraw route owns; `mgvf-0033`, which asks a Bluetooth
+DualSense that wine holds seized to turn itself off after 20 minutes (by default) with no stick,
+trigger or button input; `mgvf-0034`, which shares the pad with macOS by
+default instead of seizing it; and `mgvf-0035`, which sends a chosen colour
+again every two seconds, because macOS repaints the lightbar of a pad it
+shares. What none of them has been measured to do is in
 `source-patches/README.md`.
 
 **It has two halves.** `mgvf-0002`, `mgvf-0003` and `mgvf-0004` let a Windows
@@ -533,16 +536,19 @@ Link drops followed in that log. That the contention caused them, and that the
 seize prevents them, is **not measured**, and the log can no longer be re-read;
 what is measured since is that holding the PS button for about five seconds
 drops a Bluetooth DualSense from the pad's own side, with or without wine.
-wine now **seizes** such a pad, and
-that costs exactly what it sounds like: **while a bottle holds the pad, macOS
-and its own applications cannot use it**, and it is released when the bottle
-closes. It has a second, unintended cost: macOS disconnects a Bluetooth pad
+wine **seized** such a pad by default until `mgvf-0034`, and
+that cost exactly what it sounds like: **while a bottle held the pad, macOS
+and its own applications could not use it**, until the bottle
+closed. It had a second, unintended cost: macOS disconnects a Bluetooth pad
 900 seconds after the last input it saw, and a seized pad shows it none, so a
-pad connected before the bottle started is cut by macOS about fifteen minutes
-after the last input macOS saw; one that reconnected while the game was running
-was not (seen on automatic reconnects).
-On by default for a DualSense on Bluetooth, and only for that; a
-registry value turns it off per device.
+pad connected before the bottle started was cut by macOS about fifteen minutes
+after the last input macOS saw, in the middle of a game.
+**Since `mgvf-0034` the pad is shared by default**, and a registry value asks
+for the seize per device. Shared, a DualSense Edge on Bluetooth went through
+three sessions of play and a day of Bluetooth log with no drop during play,
+macOS's idle cut acted only after play had ended, and the PS button, the lights
+and the rumble worked. macOS does repaint a shared pad's lightbar when the front
+application changes, which is why `mgvf-0035` sends a chosen colour again.
 
 That claim is the right one to make while a game runs: two programs writing
 to one pad over one Bluetooth pipe is the anomaly, and of the two the game

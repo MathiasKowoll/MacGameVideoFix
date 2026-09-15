@@ -1,0 +1,285 @@
+winebus: send the lights a user chose again, because macOS repaints them.
+
+mgvf-0031 rewrites the colour in a client's own light packets and adds no
+packet of its own. With the pad seized that was enough. With the pad shared
+(mgvf-0034) it is not.
+
+WHAT WAS MEASURED on 2026-09-15, Mortal Shell 2 under Steam Input, a DualSense
+Edge on Bluetooth with SeizeDevice 0 and a red lightbar chosen (hid-122915.log
+beside macOS's own log; the two clocks were tied by the disconnect, bluetoothd
+12:46:26.620 against the trace's removal, and the reconnect agreed within
+0.01 s):
+
+- 12:30:00.37: Steam's light packet rewritten to ff0000, after the release
+  (status 0);
+- 12:30:00.91: gamecontrollerd "Applying light color ... active application"
+  as the game became the front application. The user saw the colour
+  unchanged, and no client wrote lights again for 16 minutes;
+- after a reconnect, gamecontrollerd painted at 12:46:37.20 and the rewritten
+  Steam packet went out at 12:46:39.18, last; the user saw red;
+- gamecontrollerd applied a colour again at every later change of front
+  application, whoever it was.
+
+Nothing on this side can see macOS's writes, so the lights are re-asserted.
+
+THE CHANGE:
+
+- dualsense_usb.c, pure and tested: dualsense_bt_lights_report and
+  dualsense_usb_lights_report build a lights-only packet -- flag1 enables only
+  the fields the user chose, those carry the user's values (the player pattern
+  with the instant bit), every other byte is zero, both motors included, and
+  the Bluetooth form is signed. dualsense_lights_carried says whether a packet
+  going to the pad carries a chosen field.
+- main.c: dualsense_lights_fixup stamps dualsense_lights_sent when the packet
+  it has just rewritten carries the user's lights to a pad on Bluetooth.
+  process_hid_report, under ext->cs like every client write, sends the
+  lights-only packet whenever DUALSENSE_LIGHTS_REASSERT_MS, 2000, have passed
+  since the last packet carrying them. The emulated route sends it as a
+  48-byte 0x02 through the same translation as the release.
+
+WHY THESE RULES:
+
+- two seconds was the user's choice: after macOS repaints, its colour can
+  show for up to that long. It costs one 78-byte write every two seconds on a
+  link measured to drain about 65 a second;
+- nothing before the first client packet carrying the lights, which keeps
+  mgvf-0031's rule that a title nobody writes lights for gets no packet of
+  ours, and keeps the release ahead of any colour;
+- the pad's own input is the clock, so a pad that sends nothing is not written
+  to, and no thread is added;
+- Bluetooth only, the transport the repaint was measured on;
+- zero motors, so no rumble is started or stopped: the vibration rewrite finds
+  nothing in the packet at any mode or gain, which the host test holds.
+
+NOT CLAIMED: that this has run on a pad yet; its frame cost; that the instant
+bit keeps a re-sent pattern from fading in again; that a lightbar macOS paints
+between two packets is invisible -- up to two seconds of it is expected.
+
+Host test: dualsense-descriptors/usb_emu_test.c, section (t).
+
+---
+--- a/dlls/winebus.sys/dualsense_usb.h
++++ b/dlls/winebus.sys/dualsense_usb.h
+@@ -517,4 +517,31 @@
+ unsigned int dualsense_usb_lights_release_report(unsigned char *out, unsigned int out_size,
+                                                  unsigned int len);
+ 
++/* MGVF mgvf-0035: a pad shared with macOS has its lightbar repainted by macOS
++ * whenever the front application changes (gamecontrollerd, measured on
++ * 2026-09-15: 0.54 s after a rewritten colour of ours, which then stayed
++ * overwritten for the 16 minutes nobody wrote lights again). So once a packet
++ * carrying the user's lights has gone to a pad on Bluetooth, the lights go to
++ * it again whenever none has gone for this long. Two seconds was the user's
++ * choice: macOS's colour can show for up to that long after it repaints, for
++ * one 78-byte write every two seconds on a link that drains about 65 a second. */
++#define DUALSENSE_LIGHTS_REASSERT_MS 2000
++
++/* The lights-only packet: flag1 enables only the fields the user chose, those
++ * fields carry the user's values -- the player byte with the instant bit --
++ * and every other byte is zero, both motors included. Bluetooth: a signed
++ * 78-byte 0x31 with the header 31 00 10. USB: a 0x02 of len bytes
++ * (DUALSENSE_USB_OUTPUT_LIGHTS_MIN..64) for the emulated route, which
++ * translates and signs it itself. Each returns the bytes written, or 0 --
++ * also when nothing is chosen. */
++unsigned int dualsense_bt_lights_report(unsigned char *out, unsigned int out_size,
++                                        const struct dualsense_lights *lights, dualsense_crc32_fn crc32);
++unsigned int dualsense_usb_lights_report(unsigned char *out, unsigned int out_size,
++                                         const struct dualsense_lights *lights, unsigned int len);
++
++/* Whether a packet carries a field the user chose: a 78-byte 0x31 or a
++ * 48..64-byte 0x02 whose flag1 enables the lightbar while a colour is chosen,
++ * or the player LEDs while a pattern is. */
++int dualsense_lights_carried(const unsigned char *report, unsigned int len, const struct dualsense_lights *lights);
++
+ #endif /* __WINEBUS_DUALSENSE_USB_H */
+--- a/dlls/winebus.sys/dualsense_usb.c
++++ b/dlls/winebus.sys/dualsense_usb.c
+@@ -874,3 +874,74 @@
+     out[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_LIGHTBAR_SETUP] = DUALSENSE_LIGHTBAR_SETUP_LIGHT_OUT;
+     return len;
+ }
++
++/* MGVF mgvf-0035: the lights a user chose, as a packet of our own.
++ *
++ * Only the fields the user chose are enabled and set; flag0, flag2 and both
++ * motors stay zero, so mgvf-0009's rewrite finds nothing in it and no rumble is
++ * started or stopped by it. The player byte carries the instant bit, so that a
++ * pattern sent again every few seconds does not replay its fade -- whether the
++ * pad would replay it without the bit is not measured. */
++static void dualsense_lights_set(unsigned char *common, const struct dualsense_lights *lights)
++{
++    if (lights->bar)
++    {
++        common[DUALSENSE_COMMON_FLAG1] |= DUALSENSE_FLAG1_LIGHTBAR;
++        memcpy(common + DUALSENSE_COMMON_LIGHTBAR, lights->rgb, 3);
++    }
++    if (lights->player)
++    {
++        common[DUALSENSE_COMMON_FLAG1] |= DUALSENSE_FLAG1_PLAYER_LEDS;
++        common[DUALSENSE_COMMON_PLAYER_LEDS] = DUALSENSE_PLAYER_LEDS_INSTANT | lights->pattern;
++    }
++}
++
++unsigned int dualsense_bt_lights_report(unsigned char *out, unsigned int out_size,
++                                        const struct dualsense_lights *lights, dualsense_crc32_fn crc32)
++{
++    static const unsigned char seed = DUALSENSE_CRC_SEED_OUTPUT;
++    unsigned int crc;
++
++    if (out_size < DUALSENSE_BT_REPORT_LEN || !dualsense_lights_wanted(lights)) return 0;
++    memset(out, 0, DUALSENSE_BT_REPORT_LEN);
++    out[0] = DUALSENSE_BT_REPORT_ID;
++    out[1] = 0x00;
++    out[2] = 0x10;
++    dualsense_lights_set(out + DUALSENSE_BT_COMMON, lights);
++
++    crc = crc32(0, &seed, 1);
++    crc = crc32(crc, out, DUALSENSE_BT_REPORT_LEN - DUALSENSE_CRC_TAIL);
++    dualsense_store_crc(out + DUALSENSE_BT_REPORT_LEN - DUALSENSE_CRC_TAIL, crc);
++    return DUALSENSE_BT_REPORT_LEN;
++}
++
++unsigned int dualsense_usb_lights_report(unsigned char *out, unsigned int out_size,
++                                         const struct dualsense_lights *lights, unsigned int len)
++{
++    if (len < DUALSENSE_USB_OUTPUT_LIGHTS_MIN || len > DUALSENSE_USB_OUTPUT_MAX || out_size < len) return 0;
++    if (!dualsense_lights_wanted(lights)) return 0;
++    memset(out, 0, len);
++    out[0] = DUALSENSE_USB_OUTPUT_ID;
++    dualsense_lights_set(out + DUALSENSE_USB_COMMON, lights);
++    return len;
++}
++
++/* Whether a packet going to the pad carries a field the user chose: a 78-byte
++ * 0x31 or a 48..64-byte 0x02 whose flag1 enables the lightbar while a colour is
++ * chosen, or the player LEDs while a pattern is. Asked AFTER the rewrite, so
++ * such a packet carries the user's values and not the client's. */
++int dualsense_lights_carried(const unsigned char *report, unsigned int len, const struct dualsense_lights *lights)
++{
++    unsigned char flag1, wanted = 0;
++
++    if (lights->bar) wanted |= DUALSENSE_FLAG1_LIGHTBAR;
++    if (lights->player) wanted |= DUALSENSE_FLAG1_PLAYER_LEDS;
++    if (len == DUALSENSE_BT_REPORT_LEN && report[0] == DUALSENSE_BT_REPORT_ID)
++        flag1 = report[DUALSENSE_BT_COMMON + DUALSENSE_COMMON_FLAG1];
++    else if (len >= DUALSENSE_USB_OUTPUT_LIGHTS_MIN && len <= DUALSENSE_USB_OUTPUT_MAX
++             && report[0] == DUALSENSE_USB_OUTPUT_ID)
++        flag1 = report[DUALSENSE_USB_COMMON + DUALSENSE_COMMON_FLAG1];
++    else
++        return 0;
++    return !!(flag1 & wanted);
++}
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -130,6 +130,10 @@
+      * extension and starts at 0 again. */
+     struct dualsense_lights dualsense_lights;
+     LONG dualsense_lights_released;
++    /* MGVF mgvf-0035: GetTickCount | 1 when a packet carrying the chosen lights
++     * last went to a pad on Bluetooth, 0 before the first one this arrival.
++     * 32 bits for the reason haptics_client_seen gives. */
++    LONG dualsense_lights_sent;
+     /* MGVF mgvf-0010: the two report ids the haptics collection was given, or
+      * zero when it was not offered -- which is every device but a DualSense
+      * whose key asks for it, and a DualSense whose descriptor already uses
+@@ -505,6 +509,7 @@
+         struct dualsense_lights none = DUALSENSE_LIGHTS_NONE;
+         ext->dualsense_lights = lights ? *lights : none;
+         ext->dualsense_lights_released = 0;
++        ext->dualsense_lights_sent = 0; /* MGVF mgvf-0035 */
+     }
+     list_init(&ext->reports);
+ 
+@@ -975,6 +980,8 @@
+     RtlFreeHeap(GetProcessHeap(), 0, report);
+     return TRUE;
+ }
++
++static void dualsense_lights_reassert(DEVICE_OBJECT *device); /* MGVF mgvf-0035 */
+ 
+ static void process_hid_report(DEVICE_OBJECT *device, BYTE *report_buf, DWORD report_len)
+ {
+@@ -1080,6 +1087,9 @@
+         return;
+     }
+ 
++    /* MGVF mgvf-0035: 0 for every device nobody has sent chosen lights to */
++    if (ext->dualsense_lights_sent) dualsense_lights_reassert(device);
++
+     if (!ext->collection_desc.ReportIDs[0].ReportID) last_report = ext->last_reports[0];
+     else last_report = ext->last_reports[last_buf[0]];
+     if (!last_report)
+@@ -2723,6 +2733,11 @@
+               change.rgb_before[0], change.rgb_before[1], change.rgb_before[2],
+               change.rgb_after[0], change.rgb_after[1], change.rgb_after[2],
+               change.player_before, change.player_after);
++    /* MGVF mgvf-0035: asked after the rewrite, so a packet that carries a
++     * chosen field carries the user's value, whether or not a byte changed.
++     * Only on Bluetooth, the one transport the repaint was measured on. */
++    if (dualsense_speaks_bluetooth(ext) && dualsense_lights_carried(report, len, &ext->dualsense_lights))
++        InterlockedExchange(&ext->dualsense_lights_sent, (LONG)(GetTickCount() | 1));
+     return changed;
+ }
+ 
+@@ -2736,6 +2751,61 @@
+     if (status)
+         WARN("device %p: the client's packet carrying the lightbar release could not be written, status %#lx --"
+              " it is not tried again until the pad next arrives\n", device, status);
++}
++
++/* MGVF mgvf-0035: the lights a user chose, sent again.
++ *
++ * mgvf-0034 opens the pad shared, and macOS then repaints its lightbar
++ * whenever the front application changes: measured on 2026-09-15, 0.54 s
++ * after mgvf-0031 had rewritten Steam's colour at a game's start, and nobody
++ * wrote lights again for 16 minutes, so the user saw macOS's colour and not
++ * theirs. Nothing on this side can see macOS's writes, so the lights are
++ * re-asserted instead: once a packet carrying them has gone to the pad, a
++ * lights-only packet of ours goes whenever DUALSENSE_LIGHTS_REASSERT_MS pass
++ * with none.
++ *
++ * Called from process_hid_report under ext->cs, which the client write paths
++ * hold too, so this never interleaves with a client's packet; the pad's own
++ * input, about 65 reports a second on Bluetooth, is the clock, and a pad that
++ * sends nothing is not written to. Not before the first packet carrying the
++ * lights, which keeps mgvf-0031's rule that a title nobody writes lights for
++ * gets no packet of ours, and keeps the release ahead of any colour. A packet
++ * that fails is not retried sooner: the next attempt is the next interval. */
++static void dualsense_lights_reassert(DEVICE_OBJECT *device)
++{
++    struct device_extension *ext = (struct device_extension *)device->DeviceExtension;
++    BYTE buffer[DUALSENSE_BT_REPORT_LEN];
++    HID_XFER_PACKET out = {.reportBuffer = buffer};
++    IO_STATUS_BLOCK io = {0};
++    DWORD sent = (DWORD)ext->dualsense_lights_sent;
++
++    if (!sent || (DWORD)(GetTickCount() - sent) < DUALSENSE_LIGHTS_REASSERT_MS) return;
++    InterlockedExchange(&ext->dualsense_lights_sent, (LONG)(GetTickCount() | 1));
++
++    if (ext->report_fixups & HIDRAW_FIXUP_DUALSENSE_USB)
++    {
++        /* the emulated route: a 0x02 of a DualSense's 48 bytes, which the
++         * translation turns into a signed 0x31 with the next sequence */
++        out.reportId = DUALSENSE_USB_OUTPUT_ID;
++        if (!(out.reportBufferLen = dualsense_usb_lights_report(buffer, sizeof(buffer), &ext->dualsense_lights, 48)))
++            return;
++        dualsense_usb_set_output_report(device, &out, &io);
++    }
++    else
++    {
++        out.reportId = DUALSENSE_BT_REPORT_ID;
++        if (!(out.reportBufferLen = dualsense_bt_lights_report(buffer, sizeof(buffer), &ext->dualsense_lights,
++                                                               dualsense_crc32)))
++            return;
++        unix_device_set_output_report(device, &out, &io);
++    }
++    TRACE("device %p: set the lights again (packet of ours, Bluetooth) -- lightbar %s%02x%02x%02x, player %s%#x,"
++          " status %#lx\n", device, ext->dualsense_lights.bar ? "" : "as the client asks, not ",
++          ext->dualsense_lights.rgb[0], ext->dualsense_lights.rgb[1], ext->dualsense_lights.rgb[2],
++          ext->dualsense_lights.player ? "" : "as the client asks, not ", ext->dualsense_lights.pattern, io.Status);
++    if (io.Status)
++        WARN("device %p: the lights could not be set again, status %#lx -- tried again in %u ms\n",
++             device, io.Status, DUALSENSE_LIGHTS_REASSERT_MS);
+ }
+ 
+ /* MGVF mgvf-0009: a client that knows the pad is on Bluetooth and writes the
