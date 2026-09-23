@@ -147,6 +147,9 @@ done
 # match it. Listing them by name would be worse: the list has changed three
 # times and every copy of it is another place to forget.
 cp "$ROOT/runtime/install-engine-controller.sh" "$RES/"
+# Not a payload, only numbers rewritten in the engine's own files, so it
+# travels alone. make-engine-copy.sh finds it flat in Resources.
+cp "$ROOT/runtime/install-engine-vcruntime.sh" "$RES/"
 for f in "$ROOT"/runtime/engine-controller-*; do
   [ -f "$f" ] && cp "$f" "$RES/"
 done

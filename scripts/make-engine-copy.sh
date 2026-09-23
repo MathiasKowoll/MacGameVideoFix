@@ -29,6 +29,10 @@
 # D3DMetal 4 over the engine's apple_gptk -- with BOTH halves backed up, which is
 # more than the launchers here do, so that reverting really reverts.
 #
+# It also raises the version the builtin C++ runtime DLLs report, so Unreal
+# 5.6's bootstrapper stops asking for a redistributable that is already there
+# -- numbers only, see install-engine-vcruntime.sh.
+#
 # WHAT DOES NOT GO IN. Nothing of Apple's is carried by this project. --gptk
 # names a directory already on the machine; without it the copy keeps the
 # toolkit CrossOver shipped.
@@ -62,6 +66,16 @@ elif [ -f "$HERE/install-engine-controller.sh" ]; then
   CONTROLLER_INSTALLER="$HERE/install-engine-controller.sh"
 else
   CONTROLLER_INSTALLER=""
+fi
+# The runtime-version change, in both layouts too. Absent only in an older
+# payload; the engine is complete without it, and still shows Unreal 5.6's
+# Visual C++ dialog.
+if [ -f "$HERE/../runtime/install-engine-vcruntime.sh" ]; then
+  VCRUNTIME_INSTALLER="$(cd "$HERE/.." && pwd)/runtime/install-engine-vcruntime.sh"
+elif [ -f "$HERE/install-engine-vcruntime.sh" ]; then
+  VCRUNTIME_INSTALLER="$HERE/install-engine-vcruntime.sh"
+else
+  VCRUNTIME_INSTALLER=""
 fi
 FROM="/Applications/CrossOver.app"
 ARCHIVE=""
@@ -295,6 +309,21 @@ elif [ -z "$CONTROLLER_INSTALLER" ]; then
   say "      not in this payload -- the engine is complete without it"
 else
   "$CONTROLLER_INSTALLER" "$DEST" 2>&1 | sed 's/^/      /'
+fi
+
+# --- 4b. the version the builtin C++ runtime reports ---------------------------
+#
+# Numbers only: the five builtin msvcp140/vcruntime140_1 DLLs that carry a
+# version resource report the bottles' Visual C++ runtime (14.51.36247) instead
+# of 14.42.34433. Unreal 5.6's bootstrapper reads that version and, five builds
+# short, asks for the redistributable on every launch -- the game ran either
+# way. No code and no load order changes; install-engine-vcruntime.sh says what
+# it could affect and keeps every original for --restore.
+say "[4b/7] runtime version"
+if [ -z "$VCRUNTIME_INSTALLER" ]; then
+  say "      not in this payload -- the engine is complete without it"
+else
+  "$VCRUNTIME_INSTALLER" "$DEST" 2>&1 | sed 's/^/      /'
 fi
 
 # --- 5. the toolkit, if a source was named -----------------------------------
