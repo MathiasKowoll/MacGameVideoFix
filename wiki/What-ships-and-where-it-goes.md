@@ -33,6 +33,7 @@ refuses a release where the shipped copy differs.
 | `fmod-tmnt.dll` | `d3d12-guards.c` | TMNT: Splintered Fate |
 | `OpenColorIO_2_3-tormented.dll` | `d3d12-guards.c` | Tormented Souls 2 |
 | `NvCloth_x64-resonance.dll` | `shader-floor-fix.c` | RESONANCE: A Plague Tale Legacy |
+| `PxFoundation_x64-ctl.dll` | `ctl-window-fix.c` | CONTROL Resonant |
 
 **Where they go:** into the game's own folder, beside the executable, with the
 game's original renamed to `<name>_real.dll`. The installer for each title

@@ -149,6 +149,11 @@ GAMES = [
      "Fatal error: Shader Model 6.7 is not supported", "Shader model floor lowered in memory; HDR10 off in ENGINESETTINGS",
      "D3DMetal", "12", MEASURED,
      "Plays at the desktop resolution with HDR10 off -- its cutscenes have never been visible", "Resonance-A-Plague-Tale-Legacy"),
+    ("CONTROL Resonant", "Northlight, Remedy in-house",
+     "Windows light up in flat violet, cyan and yellow",
+     "The window-interior shader kept from drawing; Metal 4 off",
+     "D3DMetal", "12", MEASURED,
+     "Plays with Metal 4 off; lit rooms behind windows show as dark glass", "Control-Resonant"),
 ]
 
 HEAD = ("| Game | Engine | Symptom | Fix | Backend | DX | GPTK | Motor | CrossOver | Status |\n"
@@ -443,6 +448,7 @@ CODEC = {
     "Wo Long: Fallen Dynasty": NONE,
     "Nioh 3": NONE,
     "RESONANCE: A PLAGUE TALE LEGACY": NONE,
+    "CONTROL Resonant": NONE,
     "Beast of Reincarnation": NONE,
     "Life is Strange: Reunion": NONE,
     "Life is Strange: Double Exposure": NONE,
@@ -716,6 +722,9 @@ GPTK_BY_TITLE = {
     "Wo Long: Fallen Dynasty": "4.0b2",
     "TMNT: Splintered Fate": "4.0b2",
     "Tormented Souls 2": "4.0b2",
+    # With Metal 4 off (D3DM_MTL4=0). With it on, faces and hair render as
+    # NaN-black boxes; that is a toolkit setting, not a different generation.
+    "CONTROL Resonant": "4.0b2",
     "DYNASTY WARRIORS: ORIGINS": "4.0b2",
     # Was recorded as running on 4.0b2 under Wine 27 and dying on the same
     # toolkit under Wine 26.3. It was not the Wine: the registry override its

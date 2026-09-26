@@ -138,6 +138,7 @@ videos".
 | [RESIDENT EVIL 3](RE-Engine-VC1.md) | RE Engine | Crashes when a video plays | The same staged VC-1 codec, unchanged | D3DMetal | 12 | not measured | Stock | 26.3, our winegstreamer | Fixed |
 | [NINJA GAIDEN 4](Ninja-Gaiden-4.md) | Koei Tecmo, in-house | Says the VP9 codec is missing, then exits | Staged Matroska demuxer, and the MFT gate answered | D3DMetal | 12 | **3.0 only** -- on 4.0b2 nothing is ever presented: the game runs blind, every `Present` succeeds, the window stays black | Stock | 26.3, our winegstreamer | Fixed |
 | [RESONANCE: A PLAGUE TALE LEGACY](Resonance-A-Plague-Tale-Legacy.md) | Asobo, in-house | Fatal error: Shader Model 6.7 is not supported | Shader model floor lowered in memory; HDR10 off in ENGINESETTINGS | D3DMetal | 12 | not measured | Stock | 26.3, our winegstreamer | Plays at the desktop resolution with HDR10 off -- its cutscenes have never been visible |
+| [CONTROL Resonant](Control-Resonant.md) | Northlight, Remedy in-house | Windows light up in flat violet, cyan and yellow | The window-interior shader kept from drawing; Metal 4 off | D3DMetal | 12 | 4.0b2 | Stock | 26.3, our winegstreamer | Plays with Metal 4 off; lit rooms behind windows show as dark glass |
 
 **One engine, and update its toolkit.** The supported engine is stable
 CrossOver 26.3.0.39832 and nothing else: the winegstreamer pair this project

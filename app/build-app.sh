@@ -66,7 +66,8 @@ cp "$ROOT/runtime/install-nioh-bridge.sh" "$ROOT/runtime/install-nioh3-bridge.sh
    "$ROOT/runtime/install-tmnt-fix.sh" \
    "$ROOT/runtime/install-tormented-fix.sh" \
    "$ROOT/runtime/install-ng4-fix.sh" \
-    "$ROOT/runtime/install-resonance-fix.sh" "$ROOT/runtime/NvCloth_x64-resonance.dll" "$RES/"
+    "$ROOT/runtime/install-resonance-fix.sh" "$ROOT/runtime/NvCloth_x64-resonance.dll" \
+    "$ROOT/runtime/install-ctl-fix.sh" "$RES/"
 cp "$ROOT/runtime/stage-codecs.sh" "$RES/"
 
 # NINJA GAIDEN 3 travels in the app even though the app does not offer it.
@@ -164,7 +165,7 @@ chmod +x "$RES/transcode-movies.sh" "$RES/pak-hide-videos.py" \
          "$RES/install-nioh3-bridge.sh" "$RES/install-nier-bridge.sh" \
          "$RES/install-kh-bridge.sh" "$RES/install-tmnt-fix.sh" \
          "$RES/install-tormented-fix.sh" "$RES/install-ng4-fix.sh" \
-    "$RES/install-resonance-fix.sh"
+    "$RES/install-resonance-fix.sh" "$RES/install-ctl-fix.sh"
 
 # The runtime patch: the installer resolves the proxy and the PE reader next to
 # itself, so all three have to land in the same folder.
@@ -182,7 +183,7 @@ chmod +x "$RES/install-runtime-fix.sh" "$RES/install-dwo-bridge.sh" "$RES/pe.pl"
 # than failing the build, so the app is still usable for the other.
 for dll in libogg_64.dll libxess.dll GfeSDK.dll amd_ags_x64-nioh3.dll dinput8-nier.dll \
            dinput8-kh.dll fmod-tmnt.dll \
-           OpenColorIO_2_3-tormented.dll dstorage-ng4.dll; do
+           OpenColorIO_2_3-tormented.dll dstorage-ng4.dll PxFoundation_x64-ctl.dll; do
   if [ -f "$ROOT/runtime/$dll" ]; then
     cp "$ROOT/runtime/$dll" "$RES/"
   else

@@ -27,6 +27,14 @@
       "env": {},
       "symptom": "Freezes after a while, anywhere"
     },
+    "CONTROLResonant.exe": {
+      "title": "CONTROL Resonant",
+      "backend": "d3dmetal",
+      "codec": "",
+      "gptk": "",
+      "env": {},
+      "symptom": "Windows light up in flat violet, cyan and yellow"
+    },
     "DevilMayCry5.exe": {
       "title": "Devil May Cry 5",
       "backend": "d3dmetal",
