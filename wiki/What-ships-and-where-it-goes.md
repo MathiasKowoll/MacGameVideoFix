@@ -34,6 +34,7 @@ refuses a release where the shipped copy differs.
 | `OpenColorIO_2_3-tormented.dll` | `d3d12-guards.c` | Tormented Souls 2 |
 | `NvCloth_x64-resonance.dll` | `shader-floor-fix.c` | RESONANCE: A Plague Tale Legacy |
 | `PxFoundation_x64-ctl.dll` | `ctl-window-fix.c` | CONTROL Resonant |
+| `amd_fidelityfx_loader_dx12-w3.dll` | `w3-streamout-fix.c` | The Witcher 3: Wild Hunt |
 
 **Where they go:** into the game's own folder, beside the executable, with the
 game's original renamed to `<name>_real.dll`. The installer for each title

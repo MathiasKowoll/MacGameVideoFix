@@ -39,6 +39,7 @@ engine of ours are the ones where that was not enough.
 | [NINJA GAIDEN 4](Ninja-Gaiden-4.md) | Koei Tecmo, in-house | Says the VP9 codec is missing, then exits | Staged Matroska demuxer, and the MFT gate answered | D3DMetal | 12 | **3.0 only** -- on 4.0b2 nothing is ever presented: the game runs blind, every `Present` succeeds, the window stays black | Stock | 26.3, our winegstreamer | Fixed |
 | [RESONANCE: A PLAGUE TALE LEGACY](Resonance-A-Plague-Tale-Legacy.md) | Asobo, in-house | Fatal error: Shader Model 6.7 is not supported | Shader model floor lowered in memory; HDR10 off in ENGINESETTINGS | D3DMetal | 12 | not measured | Stock | 26.3, our winegstreamer | Plays at the desktop resolution with HDR10 off -- its cutscenes have never been visible |
 | [CONTROL Resonant](Control-Resonant.md) | Northlight, Remedy in-house | Windows light up in flat violet, cyan and yellow | The window-interior shader kept from drawing; Metal 4 off | D3DMetal | 12 | 4.0b2 | Stock | 26.3, our winegstreamer | Plays with Metal 4 off; lit rooms behind windows show as dark glass |
+| [The Witcher 3: Wild Hunt](The-Witcher-3.md) | REDengine 3 | Black screen at start; DLSS said to be unsupported | The stream-output pipeline refused; Streamline's Wine check answered | D3DMetal | 12 | 4.0b2 | Stock | 26.3, our winegstreamer | Reaches the menu and plays; DLSS works, frame generation does not |
 
 **One engine, and update its toolkit.** The supported engine is stable
 CrossOver 26.3.0.39832 and nothing else: the winegstreamer pair this project
@@ -243,12 +244,13 @@ to prefer our file at all.
 | [NINJA GAIDEN 4](Ninja-Gaiden-4.md) | D3DMetal | 12 | **3.0 only** -- on 4.0b2 nothing is ever presented: the game runs blind, every `Present` succeeds, the window stays black | `dstorage.dll` | `dstorage_real.dll` | `ng4-observe.c` | `libgstmatroska` | `BEAST_FORCE_NV12`, `BEAST_REFUSE_D3D_MANAGER`, `NG4_ANSWER_MFT`, `NG4_CAPS_LIKE_3`, `NG4_CPU_DECOMP`, `NG4_FAKE_OPTIONS17`, `NG4_FLIP_MODEL`, `NG4_FORCE_PATCH`, `NG4_FORCE_WINDOWED`, `NG4_NO_D3D11_PATCH`, `NG4_NO_TEARING`, `NG4_NO_WAITABLE`, `NG4_PAINT_TEST`, `NG4_PATCH_D3D12`, `NG4_REFUSE_DSTORAGE`, `NG4_SELECT_STREAM`, `NG4_SMALL_STAGING`, `NG4_WATCH_CAPS`, `NG4_WATCH_D3D12_RESOURCES`, `NG4_WATCH_MOVIE_COPY`, `NG4_WATCH_PRESENT`, `NG4_WITHHOLD_D3D_FROM_MFT` | — |
 | [RESONANCE: A PLAGUE TALE LEGACY](Resonance-A-Plague-Tale-Legacy.md) | D3DMetal | 12 | not measured | `NvCloth_x64.dll` | `NvCloth_x64_real.dll` | `shader-floor-fix.c` | — | — | — |
 | [CONTROL Resonant](Control-Resonant.md) | D3DMetal | 12 | 4.0b2 | `PxFoundation_x64.dll` | `PxFoundation_x64_real.dll` | `ctl-window-fix.c` | — | — | — |
+| [The Witcher 3: Wild Hunt](The-Witcher-3.md) | D3DMetal | 12 | 4.0b2 | `amd_fidelityfx_loader_dx12.dll` | `amd_fidelityfx_loader_dx12_real.dll` | `w3-streamout-fix.c` | — | — | — |
 
 **Carrier** is the DLL the fix rides on -- one the game already loads, chosen
 because it has nothing to do with video. **Kept as** is what the original is
 renamed to; where the carrier is a DLL Wine implements itself, that original is
 a copy taken from your own CrossOver and nothing is redistributed. **Bridge** is
-the source the shipped proxy was built from: 7 sources serve every title
+the source the shipped proxy was built from: 8 sources serve every title
 here, so a fault found in one is often already fixed in the others.
 
 **Registry** says whether Wine has to be told to prefer our DLL. 3 fixes

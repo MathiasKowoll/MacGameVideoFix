@@ -154,6 +154,11 @@ GAMES = [
      "The window-interior shader kept from drawing; Metal 4 off",
      "D3DMetal", "12", MEASURED,
      "Plays with Metal 4 off; lit rooms behind windows show as dark glass", "Control-Resonant"),
+    ("The Witcher 3: Wild Hunt", "REDengine 3",
+     "Black screen at start; DLSS said to be unsupported",
+     "The stream-output pipeline refused; Streamline's Wine check answered",
+     "D3DMetal", "12", MEASURED,
+     "Reaches the menu and plays; DLSS works, frame generation does not", "The-Witcher-3"),
 ]
 
 HEAD = ("| Game | Engine | Symptom | Fix | Backend | DX | GPTK | Motor | CrossOver | Status |\n"
@@ -449,6 +454,7 @@ CODEC = {
     "Nioh 3": NONE,
     "RESONANCE: A PLAGUE TALE LEGACY": NONE,
     "CONTROL Resonant": NONE,
+    "The Witcher 3: Wild Hunt": NONE,
     "Beast of Reincarnation": NONE,
     "Life is Strange: Reunion": NONE,
     "Life is Strange: Double Exposure": NONE,
@@ -725,6 +731,7 @@ GPTK_BY_TITLE = {
     # With Metal 4 off (D3DM_MTL4=0). With it on, faces and hair render as
     # NaN-black boxes; that is a toolkit setting, not a different generation.
     "CONTROL Resonant": "4.0b2",
+    "The Witcher 3: Wild Hunt": "4.0b2",
     "DYNASTY WARRIORS: ORIGINS": "4.0b2",
     # Was recorded as running on 4.0b2 under Wine 27 and dying on the same
     # toolkit under Wine 26.3. It was not the Wine: the registry override its

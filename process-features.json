@@ -163,6 +163,14 @@
       "env": {},
       "symptom": "Fatal error before the first frame"
     },
+    "witcher3.exe": {
+      "title": "The Witcher 3: Wild Hunt",
+      "backend": "d3dmetal",
+      "codec": "",
+      "gptk": "",
+      "env": {},
+      "symptom": "Black screen at start; DLSS said to be unsupported"
+    },
     "WoLong.exe": {
       "title": "Wo Long: Fallen Dynasty",
       "backend": "d3dmetal",

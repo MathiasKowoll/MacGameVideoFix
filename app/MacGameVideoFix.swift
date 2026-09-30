@@ -211,6 +211,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
     case ninjaGaiden4
     case resonance
     case controlResonant
+    case witcher3
 
     var id: String { rawValue }
 
@@ -236,6 +237,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .ninjaGaiden3:       return "NINJA GAIDEN 3: Razor's Edge"
         case .resonance:          return "RESONANCE: A PLAGUE TALE LEGACY"
         case .controlResonant:    return "CONTROL Resonant"
+        case .witcher3:           return "The Witcher 3: Wild Hunt"
         }
     }
 
@@ -260,6 +262,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .ninjaGaiden3:       return "Will not start: \"Insufficient VRAM\""
         case .resonance:          return "Refuses to start: Shader Model 6.7 not supported"
         case .controlResonant:    return "Windows light up in flat violet, cyan and yellow"
+        case .witcher3:           return "Black screen at start; DLSS said to be unsupported"
         }
     }
 
@@ -287,7 +290,18 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .ninjaGaiden3:       return "NINJA GAIDEN 3 Razor's Edge.exe"
         case .resonance:          return "Resonance.exe"
         case .controlResonant:    return "CONTROLResonant.exe"
+        case .witcher3:           return "witcher3.exe"
         case .tormentedSouls2:    return "TormentedSouls2.exe"
+        }
+    }
+
+    /// Where the executable sits under the game folder. The name alone is the
+    /// identity a launcher matches a process on; this is only where to look.
+    /// The Witcher 3 keeps it two folders down, in bin/x64_dx12.
+    var executablePath: String? {
+        switch self {
+        case .witcher3: return "bin/x64_dx12/witcher3.exe"
+        default:        return executable
         }
     }
 
@@ -311,6 +325,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
             return "the folder holding Resonance.exe"
         case .controlResonant:
             return "the folder holding CONTROLResonant.exe"
+        case .witcher3:
+            return "the game folder, the one holding bin"
         default:               return "the game folder, the one with Engine inside"
         }
     }
@@ -345,6 +361,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
             return "…/steamapps/common/Resonance A Plague Tale Legacy"
         case .controlResonant:
             return "…/steamapps/common/CONTROL Resonant"
+        case .witcher3:
+            return "…/steamapps/common/The Witcher 3"
         }
     }
 
@@ -362,6 +380,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .ninjaGaiden4:                        return [.videoBridge]
         case .ninjaGaiden3:                        return [.bottleDriver]
         case .controlResonant:                     return [.shaderFix]
+        case .witcher3:                            return [.guardCall]
         default:                                 return [.runtime]
         }
     }
@@ -413,6 +432,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .ninjaGaiden3:    return "install-ng3-fix.sh"
         case .resonance:       return "install-resonance-fix.sh"
         case .controlResonant: return "install-ctl-fix.sh"
+        case .witcher3:        return "install-w3-fix.sh"
         default:               return "install-runtime-fix.sh"
         }
     }
@@ -498,8 +518,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
             || self == .kingdomHearts28 || self == .kingdomHearts1525
             || self == .tmntSplinteredFate || self == .tormentedSouls2
             || self == .ninjaGaiden4 || self == .resonance
-            || self == .ninjaGaiden3 || self == .controlResonant {
-            guard let exe = executable else { return nil }
+            || self == .ninjaGaiden3 || self == .controlResonant || self == .witcher3 {
+            guard let exe = executablePath else { return nil }
             var candidates = [url]
             if let subs = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
                 candidates += subs
@@ -598,6 +618,10 @@ enum Title {
         for c in candidates
         where fm.fileExists(atPath: c.appendingPathComponent("CONTROLResonant.exe").path) {
             return .bridgeGame(c, .controlResonant)
+        }
+        for c in candidates
+        where fm.fileExists(atPath: c.appendingPathComponent("bin/x64_dx12/witcher3.exe").path) {
+            return .bridgeGame(c, .witcher3)
         }
         if let g = GameFolder.locate(from: url) { return .unrealVP9(g) }
         return nil
@@ -3865,9 +3889,9 @@ extension SupportedGame {
         case .dynastyWarriors, .personaStrikers, .nioh, .nioh2, .nioh3,
              .nierReplicant, .woLong, .kingdomHearts28, .kingdomHearts1525,
              .tmntSplinteredFate, .tormentedSouls2, .ninjaGaiden4,
-             .ninjaGaiden3, .resonance, .controlResonant:
+             .ninjaGaiden3, .resonance, .controlResonant, .witcher3:
             return FileManager.default.fileExists(
-                atPath: folder.appendingPathComponent(exe).path)
+                atPath: folder.appendingPathComponent(executablePath ?? exe).path)
         default:
             return GameFolder(root: folder).hasExecutable(exe)
         }

@@ -64,6 +64,7 @@ resolutions and nothing else, and a laptop display has none.
 | [**NINJA GAIDEN 4**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Ninja-Gaiden-4) | Says the VP9 codec is missing, then exits | 26.3, our winegstreamer | Stock | Fixed |
 | [**RESONANCE: A PLAGUE TALE LEGACY**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Resonance-A-Plague-Tale-Legacy) | Fatal error: Shader Model 6.7 is not supported | 26.3, our winegstreamer | Stock | Plays at the desktop resolution with HDR10 off -- its cutscenes have never been visible |
 | [**CONTROL Resonant**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Control-Resonant) | Windows light up in flat violet, cyan and yellow | 26.3, our winegstreamer | Stock | Plays with Metal 4 off; lit rooms behind windows show as dark glass |
+| [**The Witcher 3: Wild Hunt**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/The-Witcher-3) | Black screen at start; DLSS said to be unsupported | 26.3, our winegstreamer | Stock | Reaches the menu and plays; DLSS works, frame generation does not |
 
 <!-- readme-games:end -->
 
