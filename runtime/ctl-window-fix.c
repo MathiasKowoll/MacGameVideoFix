@@ -17,8 +17,9 @@
  *
  * So this hides interiorPS: every pipeline built with it is created with each
  * render target's write mask at 0. The windows are dark glass; nothing else in
- * the frame changes. A game update that changes the shader changes its hash,
- * and this then matches nothing and does nothing.
+ * the frame changes. The shader is found by its entry-point name, so a game
+ * update that recompiles it is still matched; one that renames it is matched
+ * by nothing, and then this does nothing.
  *
  * WHERE IT HOOKS. NVIDIA Streamline hides the title's own device, so this
  * creates a device of its own once d3d12.dll is loaded, patches the pipeline
@@ -36,8 +37,12 @@
 
 #define LOG_PATH "C:\\ctl-window-fix.log"
 
-/* FNV-1a of interiorPS's whole DXBC container, as CONTROL Resonant ships it. */
-static const unsigned long long hidden[] = { 0xcc6f0f9fb056f7f5ULL };
+/* The entry point hidden. It is matched by name in the shader's PSV0 part,
+ * whose string table holds it NUL-terminated: a game update recompiles the
+ * shader and changes every byte a hash would see, and the name survives that.
+ * The 2026-10-01 update did exactly this to the first version of this fix,
+ * which matched FNV-1a 0xcc6f0f9fb056f7f5. */
+static const char hidden_entry[] = "interiorPS";
 
 static FILE *logf_;
 static LONG muted, unmatched;
@@ -65,13 +70,30 @@ static BOOL readable(const void *p, SIZE_T n)
     return (const char *)p + n <= (const char *)mi.BaseAddress + mi.RegionSize;
 }
 
-static BOOL is_hidden(const void *code, SIZE_T len)
+/* A DXBC container: "DXBC", 16-byte digest, version, total size, part count,
+ * then one offset per part; each part is a fourcc and a size. */
+static BOOL is_hidden(const void *code, SIZE_T len, unsigned long long *hash)
 {
-    unsigned long long h;
-    size_t i;
-    if (!readable(code, 4) || memcmp(code, "DXBC", 4) != 0 || !readable(code, len)) return FALSE;
-    h = fnv(code, len);
-    for (i = 0; i < sizeof(hidden) / sizeof(hidden[0]); i++) if (hidden[i] == h) return TRUE;
+    const unsigned char *c = code;
+    UINT parts, i;
+    if (!readable(code, 32) || memcmp(code, "DXBC", 4) != 0 || !readable(code, len)) return FALSE;
+    parts = *(const UINT *)(c + 28);
+    if (parts > 64 || 32 + 4 * (SIZE_T)parts > len) return FALSE;
+    for (i = 0; i < parts; i++)
+    {
+        UINT off = *(const UINT *)(c + 32 + 4 * i), size, j;
+        const SIZE_T n = sizeof(hidden_entry);           /* the name and its NUL */
+        if ((SIZE_T)off + 8 > len || memcmp(c + off, "PSV0", 4) != 0) continue;
+        size = *(const UINT *)(c + off + 4);
+        if ((SIZE_T)off + 8 + size > len) return FALSE;
+        for (j = 1; j + n <= size; j++)
+            if (c[off + 8 + j - 1] == 0 && memcmp(c + off + 8 + j, hidden_entry, n) == 0)
+            {
+                *hash = fnv(c, len);
+                return TRUE;
+            }
+        return FALSE;
+    }
     return FALSE;
 }
 
@@ -115,7 +137,8 @@ static create_fn real_gfx, real_stream;
  * on x64: the pixel shader at 24, the blend description at 120. */
 static HRESULT WINAPI my_gfx(void *dev, const void *desc, REFIID iid, void **out)
 {
-    if (desc && is_hidden(*(void *const *)((const char *)desc + 24), *(const SIZE_T *)((const char *)desc + 32)))
+    unsigned long long h;
+    if (desc && is_hidden(*(void *const *)((const char *)desc + 24), *(const SIZE_T *)((const char *)desc + 32), &h))
     {
         /* sizeof(D3D12_GRAPHICS_PIPELINE_STATE_DESC) on x64: no more is read. */
         char copy[656];
@@ -124,7 +147,7 @@ static HRESULT WINAPI my_gfx(void *dev, const void *desc, REFIID iid, void **out
         mute(copy + 120);
         hr = real_gfx(dev, copy, iid, out);
         InterlockedIncrement(&muted);
-        logline("interiorPS hidden (graphics) -> %08lx", (unsigned long)hr);
+        logline("interiorPS %016llx hidden (graphics) -> %08lx", h, (unsigned long)hr);
         return hr;
     }
     return real_gfx(dev, desc, iid, out);
@@ -136,6 +159,7 @@ static HRESULT WINAPI my_stream(void *dev, const void *desc, REFIID iid, void **
 {
     SIZE_T size, off;
     const char *st;
+    unsigned long long h;
     if (!desc) return real_stream(dev, desc, iid, out);
     size = *(const SIZE_T *)desc;
     st = *(const char *const *)((const char *)desc + 8);
@@ -143,7 +167,7 @@ static HRESULT WINAPI my_stream(void *dev, const void *desc, REFIID iid, void **
     for (off = 0; off + 24 <= size; off += 8)
     {
         if (*(const UINT *)(st + off) != 2) continue;
-        if (!is_hidden(*(const void *const *)(st + off + 8), *(const SIZE_T *)(st + off + 16))) break;
+        if (!is_hidden(*(const void *const *)(st + off + 8), *(const SIZE_T *)(st + off + 16), &h)) break;
         {
             char *copy = HeapAlloc(GetProcessHeap(), 0, size), *b;
             SIZE_T d2[2];
@@ -157,7 +181,7 @@ static HRESULT WINAPI my_stream(void *dev, const void *desc, REFIID iid, void **
             hr = real_stream(dev, d2, iid, out);
             HeapFree(GetProcessHeap(), 0, copy);
             if (b) InterlockedIncrement(&muted);
-            logline("interiorPS %s -> %08lx", b ? "hidden" : "found, but no blend state to mute", (unsigned long)hr);
+            logline("interiorPS %016llx %s -> %08lx", h, b ? "hidden" : "found, but no blend state to mute", (unsigned long)hr);
             return hr;
         }
     }

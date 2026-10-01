@@ -44,8 +44,12 @@ does the one thing that measured clean for a whole session: it keeps
 `interiorPS` from drawing. Every pipeline built with it is created with each
 render target's write mask at 0. The rest of the frame is untouched.
 
-The match is on a hash of the whole shader. An update that changes the shader
-changes the hash, and the DLL then matches nothing and does nothing.
+The shader is matched by its entry-point name, `interiorPS`, read from the
+string table in its PSV0 part. The first version matched a hash of the whole
+shader, and the 2026-10-01 update recompiled it (`cc6f0f9fb056f7f5` became
+`0da4d718f1d70142`): the windows came back and the log said 0 pipelines hidden.
+Matched by name, the same build hid all four of the new pipelines. An update that
+renames the shader is matched by nothing, and the DLL then does nothing.
 
 ## Where it hooks
 
