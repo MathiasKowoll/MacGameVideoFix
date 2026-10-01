@@ -75,4 +75,8 @@ its five exports are forwarded to the renamed original. It logs to
 Or pick the game in the app. Run it again after a game update or a file
 verification, because either one puts the original DLL back.
 
-Recommended in game: HDR off, NVIDIA Reflex off, frame generation off.
+Recommended in game: HDR off, NVIDIA Reflex off, frame generation off, VSync
+off. Cap the frame rate in the launcher at 70, which holds a flat 60 on a
+ProMotion display; an uncapped rate between two of the display's slots runs
+faster on average and feels uneven. Measured 2026-09-30 on an M4 Max: 60 fps,
+smooth, with DLSS and ray tracing on.
