@@ -490,6 +490,10 @@ static const GUID IID_IMF2DBuffer_ =
     { 0x7dc9d5f9, 0x9ed9, 0x44ec, { 0x9b, 0xbf, 0x06, 0x00, 0xbb, 0x58, 0x9f, 0xbb } };
 static const GUID IID_IUnknown_ =
     { 0x00000000, 0x0000, 0x0000, { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+/* UE5.5 Electra queries the output buffer for IMF2DBuffer2, not just
+ * IMF2DBuffer; answering only the latter makes it drop the frame / deref null. */
+static const GUID IID_IMF2DBuffer2_ =
+    { 0x33ae5ea6, 0x4316, 0x436f, { 0x8d, 0xdd, 0xd7, 0x3d, 0x22, 0xf8, 0x29, 0xec } };
 
 /* IMFMediaBuffer: Lock 3, Unlock 4, GetCurrentLength 5. */
 struct two_d
@@ -504,7 +508,7 @@ static HRESULT WINAPI td_QueryInterface(void *self, const GUID *iid, void **out)
 {
     struct two_d *td = (struct two_d *)self;
     if (!out) return E_POINTER;
-    if (IsEqualGUID(iid, &IID_IMF2DBuffer_) || IsEqualGUID(iid, &IID_IUnknown_))
+    if (IsEqualGUID(iid, &IID_IMF2DBuffer_) || IsEqualGUID(iid, &IID_IMF2DBuffer2_) || IsEqualGUID(iid, &IID_IUnknown_))
     {
         InterlockedIncrement(&td->refs);
         *out = self;
@@ -600,12 +604,52 @@ static HRESULT WINAPI td_ContiguousCopyFrom(void *self, const BYTE *src, DWORD s
     return S_OK;
 }
 
-static void *two_d_vtbl[10] =
+/* IMF2DBuffer2 adds Lock2DSize (slot 10) and Copy2DTo (slot 11). Electra's
+ * software path calls Lock2DSize to read the frame. */
+static HRESULT WINAPI td_Lock2DSize(void *self, int lockFlags, BYTE **scanline0,
+                                    LONG *pitch, BYTE **bufferStart, DWORD *bufferLength)
+{
+    struct two_d *td = (struct two_d *)self;
+    HRESULT (WINAPI *lock)(void *, BYTE **, DWORD *, DWORD *) =
+        (HRESULT (WINAPI *)(void *, BYTE **, DWORD *, DWORD *))(*(void ***)td->inner)[3];
+    BYTE *data = NULL; DWORD max = 0, cur = 0;
+    HRESULT hr = lock(td->inner, &data, &max, &cur);
+    (void)lockFlags;
+    if (FAILED(hr)) return hr;
+    td->locked = data;
+    if (scanline0)    *scanline0 = data;
+    if (pitch)        *pitch = (LONG)frame_w;
+    if (bufferStart)  *bufferStart = data;
+    if (bufferLength) *bufferLength = max;
+    return S_OK;
+}
+
+static HRESULT WINAPI td_Copy2DTo(void *self, void *dest)
+{
+    BYTE *src = NULL; LONG spitch = 0;
+    DWORD bytes = frame_w * frame_h * 3 / 2;
+    HRESULT hr = td_Lock2D(self, &src, &spitch);
+    if (FAILED(hr)) return hr;
+    {
+        BYTE *dst = NULL; LONG dpitch = 0;
+        HRESULT (WINAPI *dlock)(void *, BYTE **, LONG *) =
+            (HRESULT (WINAPI *)(void *, BYTE **, LONG *))(*(void ***)dest)[3];
+        HRESULT (WINAPI *dunlock)(void *) =
+            (HRESULT (WINAPI *)(void *))(*(void ***)dest)[4];
+        hr = dlock(dest, &dst, &dpitch);
+        if (SUCCEEDED(hr)) { CopyMemory(dst, src, bytes); dunlock(dest); }
+    }
+    td_Unlock2D(self);
+    return hr;
+}
+
+static void *two_d_vtbl[12] =
 {
     (void *)td_QueryInterface, (void *)td_AddRef, (void *)td_Release,
     (void *)td_Lock2D, (void *)td_Unlock2D, (void *)td_GetScanline0AndPitch,
     (void *)td_IsContiguousFormat, (void *)td_GetContiguousLength,
-    (void *)td_ContiguousCopyTo, (void *)td_ContiguousCopyFrom
+    (void *)td_ContiguousCopyTo, (void *)td_ContiguousCopyFrom,
+    (void *)td_Lock2DSize, (void *)td_Copy2DTo
 };
 
 /* The buffer's own QueryInterface, patched once on its shared vtable. */
@@ -622,7 +666,7 @@ static HRESULT WINAPI my_buffer_QueryInterface(void *self, const GUID *iid, void
         if (out) *out = NULL;
         return E_NOINTERFACE;
     }
-    if (iid && IsEqualGUID(iid, &IID_IMF2DBuffer_))
+    if (iid && (IsEqualGUID(iid, &IID_IMF2DBuffer_) || IsEqualGUID(iid, &IID_IMF2DBuffer2_)))
     {
         HRESULT hr = real_buffer_QI(self, iid, out);
         if (SUCCEEDED(hr)) return hr;          /* already 2D: leave it alone */
@@ -704,6 +748,24 @@ static BOOL poke(BYTE *at, const BYTE *expect, const BYTE *with, const char *wha
     return TRUE;
 }
 
+/* True if [p, p+n) is committed memory with the requested access. Used to
+ * validate a build-specific resolved pointer before touching it, so a wrong
+ * offset on an unrecognized build is skipped instead of faulting. */
+static BOOL mgvf_mem_ok(const void *p, SIZE_T n, BOOL need_write)
+{
+    MEMORY_BASIC_INFORMATION mbi;
+    const DWORD rd = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY
+                   | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    const DWORD wr = PAGE_READWRITE | PAGE_WRITECOPY
+                   | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    if (!p) return FALSE;
+    if (VirtualQuery(p, &mbi, sizeof(mbi)) != sizeof(mbi)) return FALSE;
+    if (mbi.State != MEM_COMMIT) return FALSE;
+    if (mbi.Protect & PAGE_GUARD) return FALSE;
+    if (!(mbi.Protect & (need_write ? wr : rd))) return FALSE;
+    return (const BYTE *)p + n <= (const BYTE *)mbi.BaseAddress + mbi.RegionSize;
+}
+
 static void force_electra_software(void)
 {
     BYTE *base = (BYTE *)GetModuleHandleA(NULL);
@@ -716,8 +778,16 @@ static void force_electra_software(void)
     if (poke(base + RVA_ISSW_GATE,  want_call, make_true, "IsSoftware (outer gate)")) done++;
 
     {
-        int *cvar = *(int **)(base + RVA_CVAR_PTR);
-        if (cvar)
+        /* RVA_CVAR_PTR is build-specific. On a build it does not match, the read
+         * below yields a garbage pointer and writing through it faults the
+         * RHIThread (deterministic 0x1790178018031801 on Halo: Campaign Evolved,
+         * UE5.5). Validate the memory before touching it; a mismatched build can
+         * still force the path via Engine.ini
+         * ([SystemSettings] Electra.Win.H264UseOldOutputPath=1). */
+        int *cvar = NULL;
+        if (mgvf_mem_ok(base + RVA_CVAR_PTR, sizeof(void *), FALSE))
+            cvar = *(int **)(base + RVA_CVAR_PTR);
+        if (mgvf_mem_ok(cvar, 2 * sizeof(int), TRUE))
         {
             cvar[0] = 1;
             cvar[1] = 1;
@@ -725,7 +795,8 @@ static void force_electra_software(void)
             done++;
         }
         else
-            logf_("  console variable not resolved yet");
+            logf_("  console variable not resolved (build mismatch); set it via "
+                  "Engine.ini Electra.Win.H264UseOldOutputPath=1");
     }
     if (!done)
         logf_("nothing was patched -- this build does not match the offsets");
