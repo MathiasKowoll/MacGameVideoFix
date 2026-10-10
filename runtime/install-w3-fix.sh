@@ -136,7 +136,20 @@ if [ ! -e "$X64" ] && [ ! -L "$X64" ]; then
 fi
 
 if is_ours "$LIVE" && [ -f "$REAL" ]; then
-  echo "the fix is already installed, nothing to do"
+  if cmp -s "$LIVE" "$PROXY"; then
+    echo "the fix is already installed, nothing to do"
+    x64_state
+    exit 0
+  fi
+  # An older build of our proxy. Replace it, and only it: the game's own DLL
+  # stays where it was saved. Refused unless the saved copy is genuinely the
+  # game's, so this step can never put a proxy where the original belongs.
+  if looks_like_ours "$REAL"; then
+    echo "error: $REAL is not the game's own DLL. Verify the game files in Steam or GOG, then run this again." >&2
+    exit 1
+  fi
+  cp "$PROXY" "$LIVE.new" && mv -f "$LIVE.new" "$LIVE" || { rm -f "$LIVE.new"; echo "error: could not update the proxy" >&2; exit 1; }
+  echo "updated: an older build of the fix was installed; it is now this release's"
   x64_state
   exit 0
 fi
