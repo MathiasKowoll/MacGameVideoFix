@@ -37,13 +37,40 @@ The game itself decides. Before it creates Streamline it asks `ntdll` for
 follows from that: `slSetD3DDevice` answers error 21, "not initialised", and
 the menu reports DLSS unsupported.
 
-The game asks for `wine_get_version` in five places. Only the call in front of
-Streamline is answered "no such function"; it is recognised by the instructions
-that follow it, not by an address. The other four still see Wine, because what
-they change is not known. With that one answer, `slInit` returns 0, Streamline
+The game asks for `wine_get_version` in five places (six after the 2026-10-08
+update). Only the call in front of Streamline is answered "no such function";
+it is recognised by the instructions that follow it, not by an address. The
+update moved the register that code compares (r14 became r13), so the match
+now accepts any register. The other calls still see Wine. With that one answer, `slInit` returns 0, Streamline
 loads `sl.common` and `sl.dlss`, reports DLSS and Ray Reconstruction as
 supported, and DLSS runs through D3DMetal's MetalFX path and looks right.
 Frame generation does not work.
+
+## Ray tracing
+
+Since the 2026-10-08 update the menu shows ray tracing off, even with
+`EnableRT=true` in the settings. D3DMetal is not what says no: it offers the
+game DXR tier 1.1.
+
+The game decides again. One of its other Wine checks, the call that returns to
+`witcher3.exe+0x1ee5630`, turns ray tracing off. Measured 2026-10-09 on
+D3DMetal 4.0b2: answer that one call "no such function" and the ray-tracing
+options come back. This fix does not do that, because ray tracing then
+cannot run:
+
+- The game builds a ray-tracing pipeline that grows as content streams in. One
+  of its shaders uses a 64-bit atomic compare-exchange. Metal refuses to
+  compile it: `Encountered unlowered function call to
+  air.atomic.global.cmpxchg.weak.i64` (measured on an M4 Max).
+- D3DMetal then aborts. The game shows a crash report, or hangs on the loading
+  screen when the abort lands on a compile thread.
+- Nothing in the menu avoids it. Global illumination cannot be turned off while
+  ray tracing is on, and the game creates the same pipelines whatever the
+  ray-tracing settings say. Refusing that pipeline makes the game crash instead.
+
+On the 2026-09-30 build ray tracing ran on the same engine and toolkit, so that
+shader appears to have come with the update. Ray tracing needs D3DMetal to
+handle 64-bit compare-exchange, which is Apple's to do.
 
 ## bin/x64
 

@@ -158,7 +158,7 @@ GAMES = [
      "Black screen at start; DLSS said to be unsupported",
      "The stream-output pipeline refused; Streamline's Wine check answered",
      "D3DMetal", "12", MEASURED,
-     "Reaches the menu and plays; DLSS works, frame generation does not", "The-Witcher-3"),
+     "Reaches the menu and plays; DLSS works, frame generation does not. Ray tracing stays off since the game's 2026-10-08 update: one of its ray-tracing shaders uses a 64-bit atomic compare-exchange that Metal refuses to compile (measured on an M4 Max)", "The-Witcher-3"),
 ]
 
 HEAD = ("| Game | Engine | Symptom | Fix | Backend | DX | GPTK | Motor | CrossOver | Status |\n"
