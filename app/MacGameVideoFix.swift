@@ -212,6 +212,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
     case resonance
     case controlResonant
     case witcher3
+    case spiderMan2
 
     var id: String { rawValue }
 
@@ -238,6 +239,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .resonance:          return "RESONANCE: A PLAGUE TALE LEGACY"
         case .controlResonant:    return "CONTROL Resonant"
         case .witcher3:           return "The Witcher 3: Wild Hunt"
+        case .spiderMan2:         return "Marvel's Spider-Man 2"
         }
     }
 
@@ -263,6 +265,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .resonance:          return "Refuses to start: Shader Model 6.7 not supported"
         case .controlResonant:    return "Windows light up in flat violet, cyan and yellow"
         case .witcher3:           return "Black screen at start; DLSS said to be unsupported"
+        case .spiderMan2:         return "Characters stay in a T-pose"
         }
     }
 
@@ -291,6 +294,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .resonance:          return "Resonance.exe"
         case .controlResonant:    return "CONTROLResonant.exe"
         case .witcher3:           return "witcher3.exe"
+        case .spiderMan2:         return "Spider-Man2.exe"
         case .tormentedSouls2:    return "TormentedSouls2.exe"
         }
     }
@@ -325,6 +329,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
             return "the folder holding Resonance.exe"
         case .controlResonant:
             return "the folder holding CONTROLResonant.exe"
+        case .spiderMan2:
+            return "the folder holding Spider-Man2.exe"
         case .witcher3:
             return "the game folder, the one holding bin"
         default:               return "the game folder, the one with Engine inside"
@@ -363,6 +369,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
             return "…/steamapps/common/CONTROL Resonant"
         case .witcher3:
             return "…/steamapps/common/The Witcher 3"
+        case .spiderMan2:
+            return "…/steamapps/common/Marvel's Spider-Man 2"
         }
     }
 
@@ -379,7 +387,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         // frames it then gets are ordinary.
         case .ninjaGaiden4:                        return [.videoBridge]
         case .ninjaGaiden3:                        return [.bottleDriver]
-        case .controlResonant:                     return [.shaderFix]
+        case .controlResonant, .spiderMan2:        return [.shaderFix]
         case .witcher3:                            return [.guardCall]
         default:                                 return [.runtime]
         }
@@ -433,6 +441,9 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .resonance:       return "install-resonance-fix.sh"
         case .controlResonant: return "install-ctl-fix.sh"
         case .witcher3:        return "install-w3-fix.sh"
+        /* Rebuilds two shaders from the user's own exe with Microsoft's shader
+         * tools, which it fetches once; the DLL makes one wide view raw. */
+        case .spiderMan2:      return "install-sm2-fix.sh"
         default:               return "install-runtime-fix.sh"
         }
     }
@@ -518,7 +529,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
             || self == .kingdomHearts28 || self == .kingdomHearts1525
             || self == .tmntSplinteredFate || self == .tormentedSouls2
             || self == .ninjaGaiden4 || self == .resonance
-            || self == .ninjaGaiden3 || self == .controlResonant || self == .witcher3 {
+            || self == .ninjaGaiden3 || self == .controlResonant || self == .witcher3
+            || self == .spiderMan2 {
             guard let exe = executablePath else { return nil }
             var candidates = [url]
             if let subs = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
@@ -623,6 +635,10 @@ enum Title {
         where fm.fileExists(atPath: c.appendingPathComponent("bin/x64_dx12/witcher3.exe").path) {
             return .bridgeGame(c, .witcher3)
         }
+        for c in candidates
+        where fm.fileExists(atPath: c.appendingPathComponent("Spider-Man2.exe").path) {
+            return .bridgeGame(c, .spiderMan2)
+        }
         if let g = GameFolder.locate(from: url) { return .unrealVP9(g) }
         return nil
     }
@@ -640,9 +656,9 @@ enum Mode: String, CaseIterable, Identifiable {
     /// Nothing goes in the game's folder at all. The other three each add a DLL
     /// beside the game, and saying that of this one would be false.
     case bottleDriver
-    /// Stop one shader from drawing. The toolkit gets it wrong, and nothing
-    /// that draws it right is available, so the pipelines built with it are
-    /// created writing nothing.
+    /// Shaders the toolkit gets wrong: kept from drawing when nothing that
+    /// draws them right is available (CONTROL Resonant), or replaced with
+    /// corrected copies built on this Mac from the user's own game (Spider-Man 2).
     case shaderFix
 
     var id: String { rawValue }
@@ -675,9 +691,10 @@ enum Mode: String, CaseIterable, Identifiable {
                  + "bottle's own system32 and this executable alone is told to "
                  + "prefer them, so no other title in the same bottle changes."
         case .shaderFix:
-            return "Adds one small DLL beside the game's own. One shader draws "
-                 + "wrong under D3DMetal; this keeps it from drawing, and the "
-                 + "rest of the frame is untouched."
+            return "Adds a small DLL beside the game's own. Shaders that D3DMetal "
+                 + "gets wrong are kept from drawing, or replaced with corrected "
+                 + "copies built on this Mac from your own game; the rest of the "
+                 + "frame is untouched."
         }
     }
 }
@@ -3889,7 +3906,7 @@ extension SupportedGame {
         case .dynastyWarriors, .personaStrikers, .nioh, .nioh2, .nioh3,
              .nierReplicant, .woLong, .kingdomHearts28, .kingdomHearts1525,
              .tmntSplinteredFate, .tormentedSouls2, .ninjaGaiden4,
-             .ninjaGaiden3, .resonance, .controlResonant, .witcher3:
+             .ninjaGaiden3, .resonance, .controlResonant, .witcher3, .spiderMan2:
             return FileManager.default.fileExists(
                 atPath: folder.appendingPathComponent(executablePath ?? exe).path)
         default:
@@ -6003,7 +6020,7 @@ struct ContentView: View {
         case .videoBridge: return "Install the DLL that carries frames from the decoder to the renderer."
         case .guardCall:   return "Install the DLL that answers the call which ends the process."
         case .bottleDriver: return "Install the driver and filters into the bottle, for this game only."
-        case .shaderFix:   return "Install the DLL that keeps the misdrawn shader from drawing."
+        case .shaderFix:   return "Install the DLL that hides or replaces the shaders D3DMetal gets wrong."
         }
     }
 

@@ -706,6 +706,13 @@ if you want them, because theirs is where they are maintained.
   theirs as well; `source-patches/README.md` says which. How the two projects
   differ, and what each reaches that the other cannot, is in
   [Findings](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Findings#the-staged-codecs-and-where-they-come-from).
+- **[SpiderMan2Fix](https://github.com/macprotips/SpiderMan2Fix) by macprotips.**
+  The Spider-Man 2 fix is theirs. They found that D3DMetal reads and writes
+  typed buffers only up to element 2^28, made the game's wide views raw and
+  rewrote the four shaders that use them, and their code ships here unchanged
+  in what it does. What this project adds is a carrier that needs no DLL
+  override, and a barrier after the volumetric fog copy that removed the
+  sandstorm stage's black blocks. The barrier follows vkd3d-proton's.
 - [DXMT](https://github.com/3Shain/dxmt) and
   [vkd3d-proton](https://github.com/HansKristian-Work/vkd3d-proton), whose
   source made the root cause legible.
