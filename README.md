@@ -713,6 +713,11 @@ if you want them, because theirs is where they are maintained.
   in what it does. What this project adds is a carrier that needs no DLL
   override, and a barrier after the volumetric fog copy that removed the
   sandstorm stage's black blocks. The barrier follows vkd3d-proton's.
+- **The God of War fix** comes from a r/macgaming post, "God Of War 2018 White
+  Dot Fix (through Crossover)". Its author found the EQUAL depth test behind the
+  white specks with a d3d11.dll proxy, and showed that GREATER_EQUAL removes
+  them. This project makes the same change without a DLL override and without
+  copying DXMT's d3d11.dll.
 - [DXMT](https://github.com/3Shain/dxmt) and
   [vkd3d-proton](https://github.com/HansKristian-Work/vkd3d-proton), whose
   source made the root cause legible.
