@@ -59,6 +59,14 @@
       "env": {},
       "symptom": "Video never starts; sound only"
     },
+    "GoW.exe": {
+      "title": "God of War",
+      "backend": "dxmt",
+      "codec": "",
+      "gptk": "",
+      "env": {},
+      "symptom": "White specks on characters in dim light"
+    },
     "Iris-Win64-Shipping.exe": {
       "title": "Life is Strange: Reunion",
       "backend": "d3dmetal",
@@ -146,6 +154,14 @@
       "gptk": "",
       "env": {},
       "symptom": "Fatal error: Shader Model 6.7 is not supported"
+    },
+    "Spider-Man2.exe": {
+      "title": "Marvel's Spider-Man 2",
+      "backend": "d3dmetal",
+      "codec": "",
+      "gptk": "",
+      "env": {},
+      "symptom": "Characters stay in a T-pose; the symbiote breaks; brief black blocks in the sandstorm"
     },
     "TMNTSF.exe": {
       "title": "TMNT: Splintered Fate",

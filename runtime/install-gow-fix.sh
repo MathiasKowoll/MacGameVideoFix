@@ -9,8 +9,8 @@
 # White specks cover the characters in dim light: the G-buffer pass tests depth
 # with EQUAL against a prepass, and the translated shaders do not reproduce the
 # prepass depth to the last bit. The fix creates that depth test as
-# GREATER_EQUAL; see gow-depth-fix.c. Measured on DXMT under Rosetta: specks
-# without it, none with it.
+# GREATER_EQUAL; see gow-depth-fix.c. Measured on DXMT under Rosetta and under
+# FEX: specks without it, none with it.
 #
 # It rides on libSceJobManager.dll, which the game imports and no runner ships,
 # so no DLL override is needed under any launcher, and nothing is copied out of

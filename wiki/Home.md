@@ -140,6 +140,8 @@ videos".
 | [RESONANCE: A PLAGUE TALE LEGACY](Resonance-A-Plague-Tale-Legacy.md) | Asobo, in-house | Fatal error: Shader Model 6.7 is not supported | Shader model floor lowered in memory; HDR10 off in ENGINESETTINGS | D3DMetal | 12 | not measured | Stock | 26.3, our winegstreamer | Plays at the desktop resolution with HDR10 off -- its cutscenes have never been visible |
 | [CONTROL Resonant](Control-Resonant.md) | Northlight, Remedy in-house | Windows light up in flat violet, cyan and yellow | The window-interior shader kept from drawing; Metal 4 off | D3DMetal | 12 | 4.0b2 | Stock | 26.3, our winegstreamer | Plays with Metal 4 off; lit rooms behind windows show as dark glass |
 | [The Witcher 3: Wild Hunt](The-Witcher-3.md) | REDengine 3 | Black screen at start; DLSS said to be unsupported | The stream-output pipeline refused; Streamline's Wine check answered | D3DMetal | 12 | 4.0b2 | Stock | 26.3, our winegstreamer | Reaches the menu and plays; DLSS works, frame generation does not. Ray tracing stays off since the game's 2026-10-08 update: one of its ray-tracing shaders uses a 64-bit atomic compare-exchange that Metal refuses to compile (measured on an M4 Max) |
+| [Marvel's Spider-Man 2](Spider-Man-2.md) | Insomniac, in-house | Characters stay in a T-pose; the symbiote breaks; brief black blocks in the sandstorm | macprotips' raw views for the 2 GB mesh pool, and a barrier after the fog copy | D3DMetal | 12 | 4.0b2 | Stock | Preview 27, through NotProton | Fixed -- T-pose and symbiote; the black blocks were not seen again in a session with the barrier |
+| [God of War](God-of-War.md) | Santa Monica, in-house | White specks on characters in dim light | The EQUAL depth test after the prepass created as GREATER_EQUAL | **DXMT** | 11 | not measured | Stock | Preview 27, through NotProton | Fixed under Rosetta and under FEX; D3DMetal not measured |
 
 **One engine, and update its toolkit.** The supported engine is stable
 CrossOver 26.3.0.39832 and nothing else: the winegstreamer pair this project
@@ -194,10 +196,10 @@ D3DMetal with the D3D12 renderer, which is also what keeps PSO precompilation
 -- `-dx11` dodges some of these faults and costs permanent shader-compilation
 stutter.
 
-**Which CrossOver, and one answer for every row.** Every measurement here was
-taken on stable CrossOver 26.3, on an engine carrying this project's
-winegstreamer, and the column says exactly that on every row because it is the
-same answer on every row. Both halves of it are load-bearing: the version is
+**Which CrossOver.** Every measurement here was taken on stable CrossOver 26.3,
+on an engine carrying this project's winegstreamer, except the two rows the
+next paragraph but one names, and the column says so row by row. Both halves of
+it are load-bearing: the version is
 stable 26.3, and the engine carries this project's winegstreamer rather than
 the one CodeWeavers ships. What a fix needs an engine to carry is a different
 question, and the Motor column answers it per row.
@@ -208,6 +210,11 @@ patched without winegstreamer could have worked on it, and the rest were out of
 the equation. The findings below that mention it are kept, because they record
 what was measured and a deleted measurement is not a correction. They are
 history. None of them is guidance about where to run a game.
+
+**Two rows were measured on Preview 27, through NotProton:** Marvel's
+Spider-Man 2 and God of War. Their fixes sit in the game folder and need
+nothing from the engine, which is exactly the kind of title Preview could
+always run, so their CrossOver cell names where the runs were made.
 
 **The KINGDOM HEARTS 2.8 package holds three entries, not two** -- Dream Drop
 Distance, 0.2 Birth by Sleep and the Back Cover film -- and they do not share a
@@ -268,7 +275,7 @@ so Stock there is read off the mechanism rather than established. That is not a
 smaller claim than Stock; it is an untested one, and the column says which rows
 it applies to. It is not a statement about the CrossOver cell beside it. That
 cell records what the runs were made on -- stable 26.3 with this project's
-winegstreamer in the engine, on every row -- and Motor records what a fix needs
+winegstreamer in the engine, on all but two rows -- and Motor records what a fix needs
 an engine to carry. A row reading Stock in one and our winegstreamer in the
 other is not two claims in contradiction: the runs were made on the engine this
 project supports, and Stock says the fix does not depend on it.

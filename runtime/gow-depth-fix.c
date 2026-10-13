@@ -21,6 +21,10 @@
  * changes. Every EQUAL state seen is logged with its write mask and stencil use,
  * so a second one would show up rather than be changed unnoticed.
  *
+ * Measured with DXMT on CrossOver Preview 27: specks without it and none with it,
+ * under Rosetta (x86_64 DXMT) and under FEX (aarch64 DXMT) alike. The game creates
+ * the state about forty times, always the same kind. D3DMetal is not measured.
+ *
  * The risk the poster names: something drawn after the prepass that was not in
  * it, in front of a character, would now draw through. Watch for that.
  *

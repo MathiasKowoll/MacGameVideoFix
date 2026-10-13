@@ -40,6 +40,11 @@ import sys
 # cell names it as a place a title runs. The past-tense findings in the note
 # below that mention it are kept as history and marked as history.
 MEASURED = "26.3, our winegstreamer"
+# Two titles were run on CrossOver Preview 27, through NotProton, and not on
+# 26.3. Their fixes sit in the game folder and need nothing from the engine
+# (Motor: Stock), so the cell says where the runs were made, as it does for
+# every other row. It is not a return of Preview as an engine for the rest.
+NOTPROTON_PREVIEW = "Preview 27, through NotProton"
 
 GAMES = [
     ("METAL GEAR SOLID: Peace Walker", "Konami, Master Collection",
@@ -159,6 +164,16 @@ GAMES = [
      "The stream-output pipeline refused; Streamline's Wine check answered",
      "D3DMetal", "12", MEASURED,
      "Reaches the menu and plays; DLSS works, frame generation does not. Ray tracing stays off since the game's 2026-10-08 update: one of its ray-tracing shaders uses a 64-bit atomic compare-exchange that Metal refuses to compile (measured on an M4 Max)", "The-Witcher-3"),
+    ("Marvel's Spider-Man 2", "Insomniac, in-house",
+     "Characters stay in a T-pose; the symbiote breaks; brief black blocks in the sandstorm",
+     "macprotips' raw views for the 2 GB mesh pool, and a barrier after the fog copy",
+     "D3DMetal", "12", NOTPROTON_PREVIEW,
+     "Fixed -- T-pose and symbiote; the black blocks were not seen again in a session with the barrier", "Spider-Man-2"),
+    ("God of War", "Santa Monica, in-house",
+     "White specks on characters in dim light",
+     "The EQUAL depth test after the prepass created as GREATER_EQUAL",
+     "**DXMT**", "11", NOTPROTON_PREVIEW,
+     "Fixed under Rosetta and under FEX; D3DMetal not measured", "God-of-War"),
 ]
 
 HEAD = ("| Game | Engine | Symptom | Fix | Backend | DX | GPTK | Motor | CrossOver | Status |\n"
@@ -220,10 +235,10 @@ D3DMetal with the D3D12 renderer, which is also what keeps PSO precompilation
 -- `-dx11` dodges some of these faults and costs permanent shader-compilation
 stutter.
 
-**Which CrossOver, and one answer for every row.** Every measurement here was
-taken on stable CrossOver 26.3, on an engine carrying this project's
-winegstreamer, and the column says exactly that on every row because it is the
-same answer on every row. Both halves of it are load-bearing: the version is
+**Which CrossOver.** Every measurement here was taken on stable CrossOver 26.3,
+on an engine carrying this project's winegstreamer, except the two rows the
+next paragraph but one names, and the column says so row by row. Both halves of
+it are load-bearing: the version is
 stable 26.3, and the engine carries this project's winegstreamer rather than
 the one CodeWeavers ships. What a fix needs an engine to carry is a different
 question, and the Motor column answers it per row.
@@ -234,6 +249,11 @@ patched without winegstreamer could have worked on it, and the rest were out of
 the equation. The findings below that mention it are kept, because they record
 what was measured and a deleted measurement is not a correction. They are
 history. None of them is guidance about where to run a game.
+
+**Two rows were measured on Preview 27, through NotProton:** Marvel's
+Spider-Man 2 and God of War. Their fixes sit in the game folder and need
+nothing from the engine, which is exactly the kind of title Preview could
+always run, so their CrossOver cell names where the runs were made.
 
 **The KINGDOM HEARTS 2.8 package holds three entries, not two** -- Dream Drop
 Distance, 0.2 Birth by Sleep and the Back Cover film -- and they do not share a
@@ -294,7 +314,7 @@ so Stock there is read off the mechanism rather than established. That is not a
 smaller claim than Stock; it is an untested one, and the column says which rows
 it applies to. It is not a statement about the CrossOver cell beside it. That
 cell records what the runs were made on -- stable 26.3 with this project's
-winegstreamer in the engine, on every row -- and Motor records what a fix needs
+winegstreamer in the engine, on all but two rows -- and Motor records what a fix needs
 an engine to carry. A row reading Stock in one and our winegstreamer in the
 other is not two claims in contradiction: the runs were made on the engine this
 project supports, and Stock says the fix does not depend on it.
@@ -455,6 +475,8 @@ CODEC = {
     "RESONANCE: A PLAGUE TALE LEGACY": NONE,
     "CONTROL Resonant": NONE,
     "The Witcher 3: Wild Hunt": NONE,
+    "Marvel's Spider-Man 2": NONE,
+    "God of War": NONE,
     "Beast of Reincarnation": NONE,
     "Life is Strange: Reunion": NONE,
     "Life is Strange: Double Exposure": NONE,
@@ -732,6 +754,9 @@ GPTK_BY_TITLE = {
     # NaN-black boxes; that is a toolkit setting, not a different generation.
     "CONTROL Resonant": "4.0b2",
     "The Witcher 3: Wild Hunt": "4.0b2",
+    # The toolkit CrossOver Preview 27 loads by default; the fault and the fix
+    # are about typed buffer views on M1-M4, not about the generation.
+    "Marvel's Spider-Man 2": "4.0b2",
     "DYNASTY WARRIORS: ORIGINS": "4.0b2",
     # Was recorded as running on 4.0b2 under Wine 27 and dying on the same
     # toolkit under Wine 26.3. It was not the Wine: the registry override its

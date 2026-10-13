@@ -65,6 +65,8 @@ resolutions and nothing else, and a laptop display has none.
 | [**RESONANCE: A PLAGUE TALE LEGACY**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Resonance-A-Plague-Tale-Legacy) | Fatal error: Shader Model 6.7 is not supported | 26.3, our winegstreamer | Stock | Plays at the desktop resolution with HDR10 off -- its cutscenes have never been visible |
 | [**CONTROL Resonant**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Control-Resonant) | Windows light up in flat violet, cyan and yellow | 26.3, our winegstreamer | Stock | Plays with Metal 4 off; lit rooms behind windows show as dark glass |
 | [**The Witcher 3: Wild Hunt**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/The-Witcher-3) | Black screen at start; DLSS said to be unsupported | 26.3, our winegstreamer | Stock | Reaches the menu and plays; DLSS works, frame generation does not. Ray tracing stays off since the game's 2026-10-08 update: one of its ray-tracing shaders uses a 64-bit atomic compare-exchange that Metal refuses to compile (measured on an M4 Max) |
+| [**Marvel's Spider-Man 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Spider-Man-2) | Characters stay in a T-pose; the symbiote breaks; brief black blocks in the sandstorm | Preview 27, through NotProton | Stock | Fixed -- T-pose and symbiote; the black blocks were not seen again in a session with the barrier |
+| [**God of War**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/God-of-War) | White specks on characters in dim light | Preview 27, through NotProton | Stock | Fixed under Rosetta and under FEX; D3DMetal not measured |
 
 <!-- readme-games:end -->
 
