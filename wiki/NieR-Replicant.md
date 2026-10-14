@@ -12,7 +12,29 @@ two was a magenta screen.
 | Fix | Software decode, and the frame converted and written into the game's own target |
 | Backend | **D3DMetal**, D3D11 |
 | Needs | `libgstlibav` staged, and the `dinput8` override below — without the override nothing else matters |
-| CrossOver | Stable 26.3, measured on a stock one, with Game Porting Toolkit 4.0b2 |
+| CrossOver | Stable 26.3, measured on a stock one, with Game Porting Toolkit 4.0b2; CrossOver Preview 27 through NotProton with nothing staged (2026-10-14) |
+
+## Its own decoder (2026-10-14)
+
+No engine needs the codec any more. The bridge first asks Media Foundation, with
+and without the D3D attributes. When it refuses -- as every CrossOver without a
+staged codec does, here with `0xc00d36bb` -- the bridge hands the stream to
+`mgvf-asf-reader.dll`. That is the FFmpeg-based reader written for
+[Persona 5 Strikers](Persona-5-Strikers.md), now built with the WMV2 decoder
+too. It gets the plain attributes, so its frames come out in system memory,
+which is the software path the bridge already writes into the game's target.
+
+Measured on CrossOver Preview 27 through NotProton, D3DMetal, nothing staged.
+The reader opened the intro (WMV2 1920x1080 at 30 fps, WMA v2 48 kHz stereo,
+about three and a half minutes), and NieR asked for its streams by the "first
+video" and "first audio" selectors. The intro played with its sound.
+
+**A Steam Play prefix.** `install-nier-bridge.sh` now takes one in
+`MGVF_BOTTLE`. It copies that prefix's own `dinput8.dll` as the original and
+writes the override straight into its `user.reg`, only while nothing runs
+there. In that run the proxy also loaded with no override written at all, and
+why is not known; the key is written anyway, because a CrossOver bottle needs
+it.
 
 ## What the source codec is
 

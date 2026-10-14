@@ -101,7 +101,7 @@
     "NieR Replicant ver.1.22474487139.exe": {
       "title": "NieR Replicant ver.1.22474487139",
       "backend": "d3dmetal",
-      "codec": "libgstlibav",
+      "codec": "",
       "gptk": "",
       "env": {},
       "symptom": "Crashes when the first video starts"

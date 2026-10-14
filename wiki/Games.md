@@ -281,7 +281,7 @@ to prefer our file at all.
 | [Nioh 2](Nioh-2.md) | **DXMT** | 11 | 4.0b2 | `GfeSDK.dll` | `GfeSDK_real.dll` | `p5s-video-bridge.c` | `libgstlibav` | `BEAST_FORCE_NV12`, `BEAST_REFUSE_D3D_MANAGER` | — |
 | [Nioh 3](Nioh-3.md) | D3DMetal | 12 | 4.0b2 | `amd_ags_x64.dll` | `amd_ags_x64_real.dll` | `dwo-video-bridge.c` | — | — | — |
 | [Wo Long: Fallen Dynasty](Wo-Long-Fallen-Dynasty.md) | D3DMetal | 12 | 4.0b2 | `libxess.dll` | `libxess_real.dll` | `dwo-video-bridge.c` | — | — | — |
-| [NieR Replicant ver.1.22474487139](NieR-Replicant.md) | D3DMetal | 11 | 4.0b2 | `dinput8.dll` | `dinput8_real.dll` | `dwo-video-bridge.c` | `libgstlibav` | — | yes |
+| [NieR Replicant ver.1.22474487139](NieR-Replicant.md) | D3DMetal | 11 | 4.0b2 | `dinput8.dll` | `dinput8_real.dll` | `dwo-video-bridge.c` | — | — | yes |
 | [KINGDOM HEARTS Dream Drop Distance](Kingdom-Hearts.md) | D3DMetal | 11 + 12 | not measured | `dinput8.dll` | `dinput8_real.dll` | `dwo-video-bridge.c` | — | — | yes |
 | [KINGDOM HEARTS 0.2 Birth by Sleep](Kingdom-Hearts.md) | D3DMetal | 11 | not measured | — | — | — | not measured | — | — |
 | [KINGDOM HEARTS HD 1.5+2.5 ReMIX](Kingdom-Hearts.md) | D3DMetal | 11 + 12 | not measured | `dinput8.dll` | `dinput8_real.dll` | `dwo-video-bridge.c` | — | — | yes |
@@ -317,7 +317,7 @@ levers, not requirements: each one defaults to the setting the fix was measured
 with, and they exist so a failing title can be bisected without a rebuild.
 
 **Codec** is the plugin that has to be in front of CrossOver before the title
-can play. 3 titles need a decoder no CrossOver ships, 2 need a
+can play. 2 titles need a decoder no CrossOver ships, 2 need a
 demuxer, and telling those two cases apart is most of the work -- see
 [How the codec staging works](How-the-codec-staging-works.md). Stable 26.3
 ships no `matroska` plugin at all, so the demuxer rows say what has to be put

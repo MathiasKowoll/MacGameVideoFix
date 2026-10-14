@@ -14,8 +14,9 @@
  * answers MF_E_UNSUPPORTED_BYTESTREAM_TYPE (measured on Preview 27, 271 times
  * in one session). Staging libav into the engine fixes it (measured on Preview
  * 27, 2026-10-14) but that is an engine change. This is the same reader, in the
- * game folder: FFmpeg's ASF demuxer and its VC-1 / WMV3 / WMA Pro / WMA v2
- * decoders, statically linked, and nothing else of FFmpeg.
+ * game folder: FFmpeg's ASF demuxer and its VC-1 / WMV3 / WMV2 / WMV1 /
+ * WMA Pro / WMA v2 decoders, statically linked, and nothing else of FFmpeg.
+ * WMV2 with WMA v2 is NieR Replicant's.
  *
  * WHAT IT IMPLEMENTS, and what it does not. Synchronous mode only: ReadSample
  * returns the sample. A caller that asks for an async callback is refused, and
@@ -1022,7 +1023,8 @@ static BOOL is_supported(enum AVCodecID id, BOOL *video)
 {
     switch (id)
     {
-    case AV_CODEC_ID_VC1: case AV_CODEC_ID_WMV3: *video = TRUE;  return TRUE;
+    case AV_CODEC_ID_VC1: case AV_CODEC_ID_WMV3:
+    case AV_CODEC_ID_WMV2: case AV_CODEC_ID_WMV1: *video = TRUE;  return TRUE;
     case AV_CODEC_ID_WMAPRO: case AV_CODEC_ID_WMAV2: *video = FALSE; return TRUE;
     default: return FALSE;
     }
@@ -1109,7 +1111,7 @@ __declspec(dllexport) HRESULT WINAPI MGVF_CreateAsfReader(IMFByteStream *bs, IMF
         }
     if (!r->n)
     {
-        logf_("no VC-1, WMV3, WMA Pro or WMA v2 stream in this file");
+        logf_("no VC-1, WMV1/2/3, WMA Pro or WMA v2 stream in this file");
         goto fail;
     }
     r->duration = r->fmt->duration > 0 ? r->fmt->duration * 10 : 0;

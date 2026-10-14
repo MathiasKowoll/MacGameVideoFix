@@ -39,7 +39,7 @@
 #
 # MGVF-SCOPE: folder
 # MGVF-GAME: NieR Replicant ver.1.22474487139 | NieR Replicant ver.1.22474487139.exe | 
-# MGVF-WHY: Crashes when the first video starts. Its video is WMV2 with WMA v2 audio in ASF, and CrossOver demuxes ASF while decoding neither stream, so the staged decoder is needed too.
+# MGVF-WHY: Crashes when the first video starts. Its video is WMV2 with WMA v2 audio in ASF, which no CrossOver decodes; the fix decodes it itself where the engine cannot.
 
 set -euo pipefail
 
@@ -70,6 +70,13 @@ EXE_NAME='NieR Replicant ver.1.22474487139.exe'
 LIVE="$GAME/dinput8.dll"
 REAL="$GAME/dinput8_real.dll"
 PROXY="$HERE/dinput8-nier.dll"
+# The fix's own WMV2 / WMA v2 reader, asked only when Media Foundation refuses
+# the video, so no engine needs the codec (measured on CrossOver Preview 27,
+# 2026-10-14). FFmpeg is LGPL and inside it, so its notice goes with it.
+READER="$HERE/mgvf-asf-reader.dll"
+READER_LICENCES="$HERE/mgvf-asf-reader-LICENCES.md"
+LIVE_READER="$GAME/mgvf-asf-reader.dll"
+LIVE_LICENCES="$GAME/mgvf-asf-reader-LICENCES.md"
 EXPORTS="$HERE/pe.pl"
 MARKER='dwo-video-bridge.log'
 
@@ -296,6 +303,81 @@ override_ok() {
   [ "$seen" -gt 0 ]
 }
 
+# ---------------------------------------------------------------------------
+# A STEAM PLAY PREFIX: compatdata/<appid>/pfx, named by the caller in
+# MGVF_BOTTLE. No CrossOver claims it, so reg.exe cannot reach it; its user.reg
+# is edited directly, and only while nothing runs in it (bottles.sh says why).
+# The original dinput8 is the prefix's own. Measured on CrossOver Preview 27
+# through NotProton (2026-10-14): with that copy, the proxy and the reader, the
+# intro plays. That run also loaded the proxy with no override written at all;
+# the key is written anyway, because a bottle needs it and nothing showed why
+# this prefix did not.
+prefix_stopped() {  # prefix_stopped <prefix dir>
+  local rc=0
+  bottle_server_alive "$1" || rc=$?
+  case "$rc" in
+  1) return 0 ;;
+  0) echo "error: something is running in this prefix: $1" >&2
+     echo "       Quit the game first. Nothing was changed." >&2 ;;
+  *) echo "error: cannot tell whether anything runs in this prefix: $1" >&2
+     echo "       Nothing was changed." >&2 ;;
+  esac
+  return 1
+}
+
+if [ -n "${MGVF_BOTTLE:-}" ] && is_plain_prefix "${MGVF_BOTTLE%/}"; then
+  PFX="${MGVF_BOTTLE%/}"
+  KEY="Software\\Wine\\AppDefaults\\$EXE_NAME\\DllOverrides"
+  case "$MODE" in
+  --status)
+    if is_ours "$LIVE" && [ -f "$REAL" ]; then
+      if cmp -s "$LIVE" "$PROXY" && [ -f "$LIVE_READER" ] && cmp -s "$LIVE_READER" "$READER"
+      then echo installed
+      else echo "an older build of the fix is in place; install again" >&2; echo broken; fi
+    elif is_ours "$LIVE"; then echo broken
+    elif [ ! -f "$LIVE" ] && [ -f "$REAL" ]; then echo half
+    else echo absent; fi
+    exit 0 ;;
+  --restore)
+    if [ -f "$LIVE" ] && ! is_ours "$LIVE"; then
+      echo "error: $LIVE is not ours, so nothing was removed." >&2; exit 1
+    fi
+    prefix_stopped "$PFX" || exit 1
+    rm -f "$LIVE" "$REAL" "$LIVE_READER" "$LIVE_LICENCES"
+    user_reg_edit "$PFX" delete "$KEY" dinput8 || true
+    echo "restored — the bridge, its reader and the dinput8 override are gone"
+    exit 0 ;;
+  --install) ;;
+  *) usage ;;
+  esac
+  prefix_stopped "$PFX" || exit 1
+  [ -f "$PFX/drive_c/windows/system32/dinput8.dll" ] || {
+    echo "error: this prefix has no dinput8.dll yet -- run the game once first" >&2; exit 1; }
+  if [ -f "$LIVE" ] && ! is_ours "$LIVE"; then
+    echo "error: $LIVE already exists and is not ours; nothing was changed." >&2; exit 1
+  fi
+  echo "[1/3] taking a copy of the prefix's own dinput8"
+  cp "$PFX/drive_c/windows/system32/dinput8.dll" "$REAL.new" && mv -f "$REAL.new" "$REAL" || {
+    rm -f "$REAL.new"; echo "error: could not copy the original beside the game" >&2; exit 1; }
+  missing="$(comm -23 <(/usr/bin/perl "$EXPORTS" exports "$REAL" | sort) \
+                      <(/usr/bin/perl "$EXPORTS" exports "$PROXY" | sort))"
+  if [ -n "$missing" ]; then
+    echo "error: this prefix's dinput8 exports symbols the shipped proxy does not:" >&2
+    echo "$missing" | sed 's/^/       /' >&2
+    exit 1
+  fi
+  echo "[2/3] installing the bridge and its reader"
+  cp "$PROXY" "$LIVE.new" && mv -f "$LIVE.new" "$LIVE" \
+    && cp "$READER" "$LIVE_READER" && cp "$READER_LICENCES" "$LIVE_LICENCES" || {
+    rm -f "$LIVE.new"; echo "error: could not install the bridge" >&2; exit 1; }
+  echo "[3/3] telling Wine to prefer it, for this game only"
+  user_reg_edit "$PFX" set "$KEY" dinput8 "native,builtin" || {
+    echo "error: could not write the override into $PFX/user.reg" >&2; exit 1; }
+  echo
+  echo "installed — the bridge and its reader are in place; dinput8 is overridden for this game"
+  exit 0
+fi
+
 case "$MODE" in
 --status)
   # The wine call costs a wineserver, so it is only made once the file pair has
@@ -320,7 +402,7 @@ case "$MODE" in
     echo "       Delete $REAL by hand if you want the leftover copy gone." >&2
     exit 1
   fi
-  rm -f "$LIVE" "$REAL"
+  rm -f "$LIVE" "$REAL" "$LIVE_READER" "$LIVE_LICENCES"
   while read -r b; do
     [ -n "$b" ] || continue
     cx="$(crossover_for_bottle "$b")" || continue
@@ -343,6 +425,13 @@ SKIP_FILES=0
 if is_ours "$LIVE" && [ -f "$REAL" ]; then
   echo "the bridge files are already in place; re-asserting the override"
   SKIP_FILES=1
+  # Bring our own two files up to date, which re-running is also for.
+  if ! cmp -s "$LIVE" "$PROXY"; then
+    cp "$PROXY" "$LIVE.new" && mv -f "$LIVE.new" "$LIVE" || {
+      rm -f "$LIVE.new"; echo "error: could not replace the older bridge" >&2; exit 1; }
+  fi
+  cp "$READER" "$LIVE_READER" && cp "$READER_LICENCES" "$LIVE_LICENCES" || {
+    echo "error: could not copy the reader beside the game" >&2; exit 1; }
 fi
 
 echo "[1/4] finding the bottle and the CrossOver that runs it"
@@ -400,6 +489,8 @@ if [ -n "$missing" ]; then
   exit 1
 fi
 cp "$PROXY" "$LIVE" || { echo "error: could not install the bridge" >&2; rm -f "$REAL"; exit 1; }
+cp "$READER" "$LIVE_READER" && cp "$READER_LICENCES" "$LIVE_LICENCES" || {
+  echo "error: could not copy the reader beside the game" >&2; rm -f "$LIVE" "$REAL"; exit 1; }
 fi
 
 echo "[4/4] telling Wine to prefer it, for this game only"
@@ -464,5 +555,5 @@ fi
 echo
 echo "installed"
 echo "  the video bridge is in place, and dinput8 is overridden for this game only"
-echo "  the staged codec is needed too: the video is WMV2 with WMA v2 audio in ASF,"
-echo "  and CrossOver demuxes ASF while decoding neither stream"
+echo "  the video is WMV2 with WMA v2 audio, which no CrossOver decodes: a staged codec"
+echo "  is used first where present, and the fix's own reader where it is not"

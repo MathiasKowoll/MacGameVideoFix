@@ -49,6 +49,7 @@
 #include <shlwapi.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <wchar.h>
 
 #define LOGFILE "C:\\dwo-video-bridge.log"
 
@@ -1389,6 +1390,54 @@ static void arm_source_reader(IMFSourceReader *reader)
  * the attributes without them decodes in software instead. A copy, never the
  * game's own store: writing into that breaks the negotiation outright.
  */
+/*
+ * OUR OWN READER, when the engine has no decoder at all.
+ *
+ * NieR's video is WMV2 with WMA v2 audio, which no CrossOver decodes; without
+ * a staged codec Media Foundation refuses the stream outright. mgvf-asf-reader.dll,
+ * beside this proxy when its installer put it there, is a source reader built
+ * on FFmpeg (asf-reader.c). It is asked only after Media Foundation has
+ * refused both with and without the D3D attributes, and it is given the
+ * plain copy, so its frames come out in system memory -- the software path
+ * this bridge already uploads from. Absent, or with asf-no-reader.txt beside
+ * the game, nothing changes.
+ */
+typedef HRESULT (WINAPI *asf_create_fn)(IMFByteStream *, IMFAttributes *, IMFSourceReader **);
+static asf_create_fn asf_reader_create;
+
+static BOOL load_asf_reader_(void)
+{
+    static LONG tried;
+    WCHAR path[MAX_PATH], *slash;
+    HMODULE self = NULL, mod;
+
+    if (InterlockedExchange(&tried, 1)) return asf_reader_create != NULL;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCWSTR)(void *)load_asf_reader_, &self) ||
+        !GetModuleFileNameW(self, path, MAX_PATH))
+        return FALSE;
+    slash = wcsrchr(path, L'\\');
+    if (!slash || (slash - path) + 32 >= MAX_PATH) return FALSE;
+    lstrcpyW(slash + 1, L"asf-no-reader.txt");
+    if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES)
+    {
+        logf_("own ASF reader: off (asf-no-reader.txt)");
+        return FALSE;
+    }
+    lstrcpyW(slash + 1, L"mgvf-asf-reader.dll");
+    if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) return FALSE;  /* not this title's */
+    mod = LoadLibraryW(path);
+    if (!mod)
+    {
+        logf_("own ASF reader: mgvf-asf-reader.dll not loaded (err %lu)", GetLastError());
+        return FALSE;
+    }
+    asf_reader_create = (asf_create_fn)(void *)GetProcAddress(mod, "MGVF_CreateAsfReader");
+    logf_("own ASF reader: %s", asf_reader_create ? "loaded" : "loaded, but it exports no MGVF_CreateAsfReader");
+    return asf_reader_create != NULL;
+}
+
 static HRESULT WINAPI my_MFCreateSourceReaderFromByteStream(IMFByteStream *stream,
         IMFAttributes *attrs, IMFSourceReader **reader)
 {
@@ -1396,12 +1445,20 @@ static HRESULT WINAPI my_MFCreateSourceReaderFromByteStream(IMFByteStream *strea
     HRESULT hr = E_FAIL;
 
     if (plain)
-    {
         hr = real_MFCreateSourceReaderFromByteStream(stream, plain, reader);
-        IMFAttributes_Release(plain);
-    }
     if (FAILED(hr))
         hr = real_MFCreateSourceReaderFromByteStream(stream, attrs, reader);
+    if (FAILED(hr) && stream && reader && load_asf_reader_())
+    {
+        static LONG ours;
+        HRESULT mine = asf_reader_create(stream, plain ? plain : attrs, reader);
+        LONG k = InterlockedIncrement(&ours);
+        if (k <= 3 || FAILED(mine))
+            logf_("Media Foundation refused a stream (0x%08lx); our ASF reader -> 0x%08lx (%ld so far)",
+                  (unsigned long)hr, (unsigned long)mine, k);
+        if (SUCCEEDED(mine)) hr = mine;
+    }
+    if (plain) IMFAttributes_Release(plain);
 
     if (SUCCEEDED(hr) && reader) arm_source_reader(*reader);
     return hr;

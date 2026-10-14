@@ -473,7 +473,10 @@ CODEC = {
     # the videos play with their sound.
     "RESIDENT EVIL 2": NONE,
     "RESIDENT EVIL 3": NONE,   # measured as RESIDENT EVIL 2, 2026-10-14
-    "NieR Replicant ver.1.22474487139": "`libgstlibav`",
+    # Measured with nothing staged on 2026-10-14, Preview 27 through NotProton:
+    # the bridge hands the refused stream to its own reader, which decodes the
+    # WMV2 and the WMA v2, and the intro plays with its sound.
+    "NieR Replicant ver.1.22474487139": NONE,
     "NINJA GAIDEN 4": "`libgstmatroska`",
     "DYNASTY WARRIORS: ORIGINS": "`libgstmatroska`",
     # Stated absences, each one measured: the reader reports a native type the
