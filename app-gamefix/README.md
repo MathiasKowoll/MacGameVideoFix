@@ -32,6 +32,7 @@ Quit a game before installing or removing its fix.
 
 | Game | What the fix is for | Needs |
 | --- | --- | --- |
+| Beast of Reincarnation | Startup video plays with sound, no picture | D3DMetal, CrossOver Preview 27 |
 | CONTROL Resonant | Lit rooms behind windows drawn in flat colours | D3DMetal |
 | Devil May Cry 5 | Crashes when a skill preview plays | D3DMetal |
 | DYNASTY WARRIORS: ORIGINS | Cutscenes with sound and no picture | D3DMetal, CrossOver Preview 27 |
@@ -108,6 +109,14 @@ nothing runs in it, and the installer refuses otherwise. The CrossOver route is
 the one measured with the game. The Steam Play route was tested on a prefix --
 install, check, remove, and Wine reading the key back -- but not yet with
 KINGDOM HEARTS itself running from one.
+
+### Beast of Reincarnation needs CrossOver Preview
+
+On stable CrossOver 26.3 its video stalls after two frames unless the engine
+carries a change from winevideo, which MacGameVideoFix installs. CrossOver
+Preview 27 does not need it: its own video decoder already behaves that way.
+Measured on 2026-10-14 on CrossOver Preview 27 through NotProton, D3DMetal,
+with nothing else installed: the startup video plays.
 
 ### DYNASTY WARRIORS: ORIGINS needs CrossOver Preview
 

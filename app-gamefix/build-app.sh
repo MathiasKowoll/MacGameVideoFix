@@ -18,7 +18,8 @@
 #     codec_shipped_by, a CrossOver that already carries that codec as
 #     CodeWeavers ships it; the app then says which one
 #   - and no needs_engine -- the table's Motor column, which is what says a fix
-#     depends on a winegstreamer of ours or of winevideo's
+#     depends on a winegstreamer of ours or of winevideo's -- or names, in
+#     engine_not_needed_on, a CrossOver where it was measured needing none
 #
 # So a fix that later stops needing the engine arrives here on its own, and one
 # that starts needing it leaves.
@@ -60,7 +61,7 @@ for script in sorted((root / "runtime").glob("install-*.sh")):
             reason = "not in process-features.json"
         elif p.get("codec") and not p.get("codec_shipped_by"):
             reason = "needs " + p["codec"] + " inside the engine"
-        elif p.get("needs_engine"):
+        elif p.get("needs_engine") and not p.get("engine_not_needed_on"):
             reason = "needs a winegstreamer carrying " + p["needs_engine"]
         if reason:
             left.append((name, reason)); continue
@@ -79,6 +80,9 @@ for script in sorted((root / "runtime").glob("install-*.sh")):
             # Empty for a title that needs no codec. For one that does, the
             # CrossOver that ships it, which is then the only one it plays on.
             "codecShippedBy": p.get("codec_shipped_by", "") if p.get("codec") else "",
+            # A title whose engine requirement holds on stable 26.3 and not on
+            # the CrossOver named here, which then is the one it plays on.
+            "engineFreeOn": p.get("engine_not_needed_on", "") if p.get("needs_engine") else "",
             "why": why.group(1).strip() if why else "",
         })
 games.sort(key=lambda g: g["name"].lower())

@@ -112,6 +112,9 @@ struct Game: Decodable, Identifiable, Hashable {
     /// The CrossOver that ships the codec this title's videos need, or empty
     /// when it needs none. Stable 26.3 ships none of them.
     let codecShippedBy: String
+    /// A CrossOver on which a fix that needs an engine of ours on 26.3 was
+    /// measured needing none; empty otherwise.
+    let engineFreeOn: String
     let why: String
 
     var id: String { name }
@@ -150,6 +153,9 @@ struct Game: Decodable, Identifiable, Hashable {
         }
         if !codecShippedBy.isEmpty {
             parts.append("its videos need \(codecShippedBy), which ships their codec")
+        }
+        if !engineFreeOn.isEmpty {
+            parts.append("needs \(engineFreeOn); stable CrossOver 26.3 needs MacGameVideoFix's engine")
         }
         return parts.isEmpty ? nil : parts.joined(separator: ", ")
     }
