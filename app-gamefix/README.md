@@ -40,6 +40,7 @@ Quit a game before installing or removing its fix.
 | Life is Strange: Reunion | Freezes after a while | D3DMetal 4 |
 | Marvel's Spider-Man 2 | T-pose, a broken symbiote, black blocks in the sandstorm | D3DMetal |
 | Mortal Shell 2 | Crash on the first cutscene | D3DMetal |
+| NINJA GAIDEN 4 | Says the VP9 codec is missing, then exits; on D3DMetal 4, nothing is ever drawn | D3DMetal 3 or 4.0b3, CrossOver Preview 27 |
 | Nioh 3 | "Failed to play movie" | D3DMetal |
 | RESONANCE: A Plague Tale Legacy | "Shader Model 6.7 is not supported" | D3DMetal |
 | TMNT: Splintered Fate | Opens a window, then closes | D3DMetal |
@@ -49,7 +50,8 @@ Quit a game before installing or removing its fix.
 
 The list is not written by hand. The build takes every installer in
 MacGameVideoFix that declares a game-folder fix, and keeps the games for which
-MacGameVideoFix's own table records no codec and no engine requirement.
+MacGameVideoFix's own table records no engine requirement, and either no codec
+or a CrossOver that ships that codec as CodeWeavers distributes it.
 
 **Measured, and what was not.** Every fix here was measured on a CrossOver 26.3
 that carried MacGameVideoFix's engine patches, which do not touch these fixes;
@@ -80,6 +82,25 @@ nothing runs in it, and the installer refuses otherwise. The CrossOver route is
 the one measured with the game. The Steam Play route was tested on a prefix --
 install, check, remove, and Wine reading the key back -- but not yet with
 KINGDOM HEARTS itself running from one.
+
+### NINJA GAIDEN 4 needs CrossOver Preview
+
+Its videos are VP9 in WebM. Stable CrossOver 26.3 cannot open a WebM, so there
+the game reaches its menu with every video missing; MacGameVideoFix stages the
+codec for it, which this app does not do. CrossOver Preview 27 ships what it
+needs: its own GStreamer opens the WebM and VideoToolbox decodes the VP9.
+
+The fix itself does three things, all in the game folder. It answers the game's
+question about a VP9 decoder, which a Windows install answers with a codec pack.
+It renames `dstoragecore.dll`, so DirectStorage is off, and removing the fix
+renames it back. And it repairs two faults in how D3DMetal 4 handles D3D12
+fences, without which the game runs with sound and never draws a frame.
+
+Measured on 2026-10-14: on CrossOver Preview 27 through NotProton, with D3DMetal
+4.0b3 and Metal 4 on, the intro video played and the menu came up. The same
+repair, in a diagnostic build, brought the game up on 4.0b3 with Metal 4 on and
+off, on a CrossOver carrying MacGameVideoFix's engine. D3DMetal 4.0b2 with the
+repair was not run.
 
 ### Spider-Man 2 downloads one thing
 

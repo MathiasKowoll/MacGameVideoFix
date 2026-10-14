@@ -14,7 +14,9 @@
 #   - an installer under runtime/ names it on an MGVF-GAME line, and declares
 #     MGVF-SCOPE: folder
 #   - process-features.json, generated from the wiki's own table, gives it no
-#     codec -- a staged GStreamer plugin goes INTO the engine
+#     codec -- a staged GStreamer plugin goes INTO the engine -- or names, in
+#     codec_shipped_by, a CrossOver that already carries that codec as
+#     CodeWeavers ships it; the app then says which one
 #   - and no needs_engine -- the table's Motor column, which is what says a fix
 #     depends on a winegstreamer of ours or of winevideo's
 #
@@ -56,7 +58,7 @@ for script in sorted((root / "runtime").glob("install-*.sh")):
             reason = "not a game-folder fix"
         elif p is None:
             reason = "not in process-features.json"
-        elif p.get("codec"):
+        elif p.get("codec") and not p.get("codec_shipped_by"):
             reason = "needs " + p["codec"] + " inside the engine"
         elif p.get("needs_engine"):
             reason = "needs a winegstreamer carrying " + p["needs_engine"]
@@ -73,6 +75,10 @@ for script in sorted((root / "runtime").glob("install-*.sh")):
             "symptom": p.get("symptom", ""),
             "backend": p.get("backend", ""),
             "gptk": p.get("gptk", ""),
+            "gptkAlso": p.get("gptk_also", ""),
+            # Empty for a title that needs no codec. For one that does, the
+            # CrossOver that ships it, which is then the only one it plays on.
+            "codecShippedBy": p.get("codec_shipped_by", "") if p.get("codec") else "",
             "why": why.group(1).strip() if why else "",
         })
 games.sort(key=lambda g: g["name"].lower())

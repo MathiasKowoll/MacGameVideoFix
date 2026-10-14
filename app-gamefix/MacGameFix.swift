@@ -107,6 +107,11 @@ struct Game: Decodable, Identifiable, Hashable {
     let symptom: String
     let backend: String
     let gptk: String
+    /// A second toolkit generation measured working, beside `gptk`.
+    let gptkAlso: String
+    /// The CrossOver that ships the codec this title's videos need, or empty
+    /// when it needs none. Stable 26.3 ships none of them.
+    let codecShippedBy: String
     let why: String
 
     var id: String { name }
@@ -139,7 +144,13 @@ struct Game: Decodable, Identifiable, Hashable {
         case "d3dmetal": parts.append("runs on D3DMetal")
         default: break
         }
-        if !gptk.isEmpty { parts.append("needs D3DMetal \(gptk)") }
+        if !gptk.isEmpty {
+            parts.append(gptkAlso.isEmpty ? "needs D3DMetal \(gptk)"
+                                          : "needs D3DMetal \(gptk) or \(gptkAlso)")
+        }
+        if !codecShippedBy.isEmpty {
+            parts.append("its videos need \(codecShippedBy), which ships their codec")
+        }
         return parts.isEmpty ? nil : parts.joined(separator: ", ")
     }
 }
