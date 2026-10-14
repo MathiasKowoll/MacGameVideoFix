@@ -88,6 +88,14 @@ on **DXMT**: with a Steam Play tool, set `CX_GRAPHICS_BACKEND=dxmt %command%`.
 Measured on 2026-10-14 on CrossOver Preview 27 through NotProton, with nothing
 else installed: the videos play.
 
+### Nioh 3 decodes its own video too
+
+Its cutscenes are VP9. CrossOver Preview 27 decodes them through VideoToolbox
+with magenta blocks in the bright areas, so its fix decodes them itself, with
+the same reader, and asks for it before CrossOver's decoder. Measured on
+2026-10-14 on CrossOver Preview 27 through NotProton: the picture is clean and
+smooth.
+
 ### NieR Replicant decodes its own video, and needs a prefix
 
 Its video is WMV2 with WMA v2 audio, which no CrossOver decodes; its fix uses
