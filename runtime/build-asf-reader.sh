@@ -4,8 +4,9 @@
 #
 #   runtime/build-asf-reader.sh            build into runtime/
 #
-# FFmpeg is configured with nothing but the ASF demuxer, the VC-1 parser and
-# the VC-1, WMV3, WMV2, WMV1, WMA Pro and WMA v2 decoders. No assembly (nasm is not needed),
+# FFmpeg is configured with nothing but the ASF and Matroska/WebM demuxers, the
+# VC-1 and VP9 parsers, VP9's superframe splitter, and the VC-1, WMV3, WMV2,
+# WMV1, VP9, VP8, WMA Pro, WMA v2, Opus and Vorbis decoders. No assembly (nasm is not needed),
 # no programs, no network, no autodetected libraries: LGPL 2.1 or later. The
 # tarball is fetched once into ~/Development/sources/ffmpeg and checked against
 # the sha256 below before anything is built from it.
@@ -32,8 +33,11 @@ echo "$FFSHA  $TAR" | shasum -a 256 -c - >/dev/null || { echo "error: $TAR does 
 
 # The configuration is part of the prefix's name, so a change to the decoder
 # list builds afresh instead of linking a stale library.
-FFCODECS="vc1,wmv3,wmv2,wmv1,wmapro,wmav2"
-PREFIX="$SRC/win64-$FFVER-$(printf '%s' "$FFCODECS" | shasum | cut -c1-8)"
+FFCODECS="vc1,wmv3,wmv2,wmv1,wmapro,wmav2,vp9,vp8,opus,vorbis"
+FFDEMUX="asf,matroska"
+FFPARSE="vc1,vp9"
+FFBSF="vp9_superframe_split"
+PREFIX="$SRC/win64-$FFVER-$(printf '%s|%s|%s|%s' "$FFCODECS" "$FFDEMUX" "$FFPARSE" "$FFBSF" | shasum | cut -c1-8)"
 if [ ! -f "$PREFIX/lib/libavcodec.a" ]; then
   BUILD="$SRC/build-$FFVER"
   rm -rf "$BUILD"; mkdir -p "$BUILD"
@@ -45,7 +49,8 @@ if [ ! -f "$PREFIX/lib/libavcodec.a" ]; then
       --disable-autodetect --disable-x86asm --disable-debug \
       --enable-static --disable-shared --enable-w32threads \
       --disable-avdevice --disable-avfilter --disable-swscale --disable-swresample \
-      --enable-decoder="$FFCODECS" --enable-demuxer=asf --enable-parser=vc1 >/dev/null
+      --enable-decoder="$FFCODECS" --enable-demuxer="$FFDEMUX" --enable-parser="$FFPARSE" \
+      --enable-bsf="$FFBSF" >/dev/null
     make -j"$(sysctl -n hw.ncpu)" >/dev/null
     make install >/dev/null )
 fi

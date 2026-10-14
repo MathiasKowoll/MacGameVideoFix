@@ -18,6 +18,11 @@
  * WMA Pro / WMA v2 decoders, statically linked, and nothing else of FFmpeg.
  * WMV2 with WMA v2 is NieR Replicant's.
  *
+ * WebM with VP9 came later (Nioh 3): Preview 27's own decoder, VideoToolbox
+ * through GStreamer, draws magenta blocks into this title's cutscenes, which a
+ * software decode on the same file does not. That title asks for this reader
+ * FIRST, by a marker file its installer writes; nothing else does.
+ *
  * WHAT IT IMPLEMENTS, and what it does not. Synchronous mode only: ReadSample
  * returns the sample. A caller that asks for an async callback is refused, and
  * the bridge then hands the game Media Foundation's own refusal. Video comes
@@ -1024,8 +1029,10 @@ static BOOL is_supported(enum AVCodecID id, BOOL *video)
     switch (id)
     {
     case AV_CODEC_ID_VC1: case AV_CODEC_ID_WMV3:
-    case AV_CODEC_ID_WMV2: case AV_CODEC_ID_WMV1: *video = TRUE;  return TRUE;
-    case AV_CODEC_ID_WMAPRO: case AV_CODEC_ID_WMAV2: *video = FALSE; return TRUE;
+    case AV_CODEC_ID_WMV2: case AV_CODEC_ID_WMV1:
+    case AV_CODEC_ID_VP9: case AV_CODEC_ID_VP8: *video = TRUE;  return TRUE;
+    case AV_CODEC_ID_WMAPRO: case AV_CODEC_ID_WMAV2:
+    case AV_CODEC_ID_OPUS: case AV_CODEC_ID_VORBIS: *video = FALSE; return TRUE;
     default: return FALSE;
     }
 }
@@ -1040,6 +1047,7 @@ __declspec(dllexport) HRESULT WINAPI MGVF_CreateAsfReader(IMFByteStream *bs, IMF
     BYTE head[16] = { 0 };
     ULONG got = 0;
     IUnknown *callback = NULL;
+    const char *container;
     unsigned i;
     int pass;
 
@@ -1053,10 +1061,14 @@ __declspec(dllexport) HRESULT WINAPI MGVF_CreateAsfReader(IMFByteStream *bs, IMF
         return E_NOTIMPL;
     }
 
+    /* ASF by its header GUID, Matroska and WebM by the EBML magic: the two
+     * containers this reader carries a demuxer for. */
     if (FAILED(IMFByteStream_SetCurrentPosition(bs, 0)) ||
-        FAILED(IMFByteStream_Read(bs, head, sizeof(head), &got)) || got < 16 ||
-        memcmp(head, asf_guid, 16) != 0)
+        FAILED(IMFByteStream_Read(bs, head, sizeof(head), &got)) || got < 16)
         return MF_E_UNSUPPORTED_BYTESTREAM_TYPE;
+    if (!memcmp(head, asf_guid, 16)) container = "asf";
+    else if (head[0] == 0x1a && head[1] == 0x45 && head[2] == 0xdf && head[3] == 0xa3) container = "matroska";
+    else return MF_E_UNSUPPORTED_BYTESTREAM_TYPE;
 
     r = calloc(1, sizeof(*r));
     if (!r) return E_OUTOFMEMORY;
@@ -1092,9 +1104,9 @@ __declspec(dllexport) HRESULT WINAPI MGVF_CreateAsfReader(IMFByteStream *bs, IMF
     if (!r->avio || !r->fmt || !r->pkt || !r->frame) { if (!r->avio) av_free(iobuf); goto fail; }
     r->fmt->pb = r->avio;
     r->fmt->flags |= AVFMT_FLAG_CUSTOM_IO;
-    if (avformat_open_input(&r->fmt, NULL, av_find_input_format("asf"), NULL) < 0)
+    if (avformat_open_input(&r->fmt, NULL, av_find_input_format(container), NULL) < 0)
     {
-        logf_("FFmpeg's ASF demuxer could not open the stream");
+        logf_("FFmpeg's %s demuxer could not open the stream", container);
         goto fail;
     }
     avformat_find_stream_info(r->fmt, NULL);
@@ -1111,7 +1123,7 @@ __declspec(dllexport) HRESULT WINAPI MGVF_CreateAsfReader(IMFByteStream *bs, IMF
         }
     if (!r->n)
     {
-        logf_("no VC-1, WMV1/2/3, WMA Pro or WMA v2 stream in this file");
+        logf_("no stream this reader decodes in this file");
         goto fail;
     }
     r->duration = r->fmt->duration > 0 ? r->fmt->duration * 10 : 0;

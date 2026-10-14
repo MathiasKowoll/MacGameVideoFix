@@ -1157,6 +1157,17 @@ static void upload_frame(IMFSample *sample)
 
     EnterCriticalSection(&frame_lock);
     stride = frame_stride ? frame_stride : frame_width;
+    /* The layout as delivered, once: the chroma plane is taken to start at
+     * stride * height, and a decoder that pads its planes would put it later
+     * -- which reads luma as colour, magenta where the picture is bright. */
+    {
+        static LONG said;
+        if (frame_width && frame_height && InterlockedIncrement(&said) <= 2)
+            logf_("frame layout: %lu bytes, stride %u, %ux%u -> expected %lu (%+ld)",
+                  (unsigned long)length, stride, frame_width, frame_height,
+                  (unsigned long)((DWORD)stride * frame_height * 3 / 2),
+                  (long)length - (long)((DWORD)stride * frame_height * 3 / 2));
+    }
     if (frame_width && frame_height && length >= (DWORD)stride * frame_height * 3 / 2)
     {
         /* A clip of a different size needs its own texture: this game ships
@@ -1438,11 +1449,56 @@ static BOOL load_asf_reader_(void)
     return asf_reader_create != NULL;
 }
 
+/* OUR READER FIRST, for a title whose engine decodes its video badly rather
+ * than not at all. Nioh 3's cutscenes are VP9 in WebM; on CrossOver Preview 27
+ * VideoToolbox decodes them with magenta blocks in the bright areas, which a
+ * software decode of the same file does not show (measured 2026-10-14, the
+ * same bridge on both engines). Media Foundation opens the file there, so the
+ * fallback below never runs. mgvf-own-decoder-first.txt beside this proxy --
+ * written by that title's installer -- asks for our reader before wine's. */
+static BOOL own_decoder_first_(void)
+{
+    static LONG state;      /* 0 unknown, 1 no, 2 yes */
+    WCHAR path[MAX_PATH], *slash;
+    HMODULE self = NULL;
+    if (state) return state == 2;
+    state = 1;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCWSTR)(void *)own_decoder_first_, &self) ||
+        !GetModuleFileNameW(self, path, MAX_PATH))
+        return FALSE;
+    slash = wcsrchr(path, L'\\');
+    if (!slash || (slash - path) + 40 >= MAX_PATH) return FALSE;
+    lstrcpyW(slash + 1, L"mgvf-own-decoder-first.txt");
+    if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES)
+    {
+        state = 2;
+        logf_("own decoder first: mgvf-own-decoder-first.txt is here");
+    }
+    return state == 2;
+}
+
 static HRESULT WINAPI my_MFCreateSourceReaderFromByteStream(IMFByteStream *stream,
         IMFAttributes *attrs, IMFSourceReader **reader)
 {
     IMFAttributes *plain = strip_d3d_attributes(attrs);
     HRESULT hr = E_FAIL;
+
+    if (stream && reader && own_decoder_first_() && load_asf_reader_())
+    {
+        static LONG said;
+        HRESULT mine = asf_reader_create(stream, plain ? plain : attrs, reader);
+        if (InterlockedIncrement(&said) <= 3 || FAILED(mine))
+            logf_("own decoder first -> 0x%08lx%s", (unsigned long)mine,
+                  FAILED(mine) ? "; Media Foundation's instead" : "");
+        if (SUCCEEDED(mine))
+        {
+            if (plain) IMFAttributes_Release(plain);
+            arm_source_reader(*reader);
+            return mine;
+        }
+    }
 
     if (plain)
         hr = real_MFCreateSourceReaderFromByteStream(stream, plain, reader);
@@ -1459,6 +1515,39 @@ static HRESULT WINAPI my_MFCreateSourceReaderFromByteStream(IMFByteStream *strea
         if (SUCCEEDED(mine)) hr = mine;
     }
     if (plain) IMFAttributes_Release(plain);
+
+    /* What the video is, once: the native subtype Media Foundation reports and
+     * the stream's first bytes. Which decoder an engine picks follows from the
+     * codec, and two engines decoding one file differently is only readable
+     * with the codec named. */
+    if (SUCCEEDED(hr) && reader && *reader)
+    {
+        static LONG said;
+        if (InterlockedIncrement(&said) <= 2)
+        {
+            IMFMediaType *native = NULL;
+            GUID sub = { 0 };
+            BYTE head[16] = { 0 };
+            ULONG got = 0;
+            QWORD pos = 0;
+            char hex[16 * 3 + 1] = "";
+            int k;
+            if (SUCCEEDED(IMFSourceReader_GetNativeMediaType(*reader, 0xFFFFFFFC, 0, &native)) && native)
+            {
+                IMFMediaType_GetGUID(native, &MF_MT_SUBTYPE, &sub);
+                IMFMediaType_Release(native);
+            }
+            if (stream && SUCCEEDED(IMFByteStream_GetCurrentPosition(stream, &pos)))
+            {
+                if (SUCCEEDED(IMFByteStream_SetCurrentPosition(stream, 0)))
+                    IMFByteStream_Read(stream, head, sizeof(head), &got);
+                IMFByteStream_SetCurrentPosition(stream, pos);
+            }
+            for (k = 0; k < (int)got; k++) sprintf(hex + k * 3, "%02x ", head[k]);
+            logf_("video: native subtype '%.4s' {%08lx-...}, first bytes %s", (const char *)&sub.Data1,
+                  (unsigned long)sub.Data1, hex);
+        }
+    }
 
     if (SUCCEEDED(hr) && reader) arm_source_reader(*reader);
     return hr;

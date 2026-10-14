@@ -11,7 +11,33 @@ one its two predecessors use.
 | Symptom | `Failed to play movie.` |
 | Fix | The DYNASTY WARRIORS video bridge, on `amd_ags_x64.dll` |
 | Backend | **D3DMetal**, D3D12 — the opposite of Nioh and Nioh 2 |
-| CrossOver | Stable 26.3, on an engine carrying this project's `winegstreamer` |
+| CrossOver | Stable 26.3, on an engine carrying this project's `winegstreamer`; CrossOver Preview 27 through NotProton, with its VP9 decoded by the fix (2026-10-14) |
+
+## Magenta blocks on CrossOver Preview 27, and the fix's own VP9 decoder (2026-10-14)
+
+On Preview 27 through NotProton, D3DMetal, the cutscenes played with
+rectangular magenta blocks in their bright areas. The same bridge on this
+project's 26.3 engine showed the same video clean. The frame reached the bridge
+at exactly the expected size (5,529,600 bytes, stride 2560, 2560x1440), so the
+bridge's conversion was ruled out, and with it everything after the decoder.
+
+The video is VP9 in WebM. The stream opens `1a 45 df a3 … webm`, and Media
+Foundation reports NV12 because wine's reader decodes it. On Preview the
+decoder is VideoToolbox through GStreamer's `vtdec`; on the 26.3 engine it is
+software. Blocky errors in bright areas, present in one decode and absent in
+the other, are the decoder's.
+
+So this title asks for the fix's own reader **first**. `mgvf-asf-reader.dll`
+now also carries FFmpeg's Matroska/WebM demuxer and its VP9, VP8, Opus and
+Vorbis decoders. The installer writes `mgvf-own-decoder-first.txt` beside the
+bridge, and with it the bridge creates our reader before asking Media
+Foundation; if ours fails, Media Foundation's is used as before. A fallback
+alone would never have reached it, because Media Foundation does open these
+files; it just decodes them badly.
+
+Measured on Preview 27 through NotProton: the reader opened the 2560x1440 VP9
+and delivered frames at the video's own 30 fps (frame 100 at 3.3 s). The
+picture is clean, with no magenta, and plays smoothly.
 
 ## Not the same fault as Nioh or Nioh 2
 
