@@ -42,6 +42,7 @@ Quit a game before installing or removing its fix.
 | Mortal Shell 2 | Crash on the first cutscene | D3DMetal |
 | NINJA GAIDEN 4 | Says the VP9 codec is missing, then exits; on D3DMetal 4, nothing is ever drawn | D3DMetal 3 or 4.0b3, CrossOver Preview 27 |
 | Nioh 3 | "Failed to play movie" | D3DMetal |
+| Persona 5 Strikers | Video never starts; sound only | DXMT |
 | RESONANCE: A Plague Tale Legacy | "Shader Model 6.7 is not supported" | D3DMetal |
 | TMNT: Splintered Fate | Opens a window, then closes | D3DMetal |
 | The Witcher 3: Wild Hunt | Black screen at start; DLSS said to be unsupported | D3DMetal |
@@ -101,6 +102,18 @@ Measured on 2026-10-14: on CrossOver Preview 27 through NotProton, with D3DMetal
 repair, in a diagnostic build, brought the game up on 4.0b3 with Metal 4 on and
 off, on a CrossOver carrying MacGameVideoFix's engine. D3DMetal 4.0b2 with the
 repair was not run.
+
+### Persona 5 Strikers decodes its own video
+
+Its cutscenes are VC-1 with WMA Pro audio, which no CrossOver decodes. The fix
+adds `mgvf-asf-reader.dll` beside the game: a video reader built on FFmpeg
+(LGPL; its notice is installed with it), used only when CrossOver cannot open
+the video. The game must run on **DXMT**. With a Steam Play tool such as
+NotProton, set the launch option `CX_GRAPHICS_BACKEND=dxmt %command%`.
+
+Measured on 2026-10-14 on CrossOver Preview 27 through NotProton, with nothing
+else installed: the intro videos play with sound in sync. Stable CrossOver 26.3
+without MacGameVideoFix's codec was not run.
 
 ### Spider-Man 2 downloads one thing
 
