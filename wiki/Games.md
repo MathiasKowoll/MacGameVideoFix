@@ -21,7 +21,7 @@ engine of ours are the ones where that was not enough.
 | [Life is Strange: Double Exposure](Life-is-Strange-Double-Exposure.md) | Unreal Engine 5 | Freezes after a while, anywhere | DXGI node guard, same DLL | D3DMetal | 12 | **4.0b2 only** -- 3.0 crashes it | Stock | 26.3, our winegstreamer | Guard installs; the freeze was never reproduced or cured |
 | [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) | Koei Tecmo, in-house | Cutscene runs with sound, picture black | Video bridge, D3D11 to D3D12 | D3DMetal | 12 | 4.0b2 | Stock&dagger; | 26.3, our winegstreamer | Fixed |
 | [Beast of Reincarnation](Beast-of-Reincarnation.md) | Unreal Engine 5 | Startup video plays with sound, no picture | Console variable found by name; software path from engine patch 0006; **needs winevideo** | D3DMetal | 12 | not measured | winevideo | 26.3, our winegstreamer | Fixed |
-| [Persona 5 Strikers](Persona-5-Strikers.md) | Koei Tecmo, in-house | Video never starts; sound only | Staged VC-1 codec, and a D3D9 to D3D11 bridge | **DXMT** | 11 | not measured | Stock&dagger; | 26.3, our winegstreamer | Fixed |
+| [Persona 5 Strikers](Persona-5-Strikers.md) | Koei Tecmo, in-house | Video never starts; sound only | Its own VC-1 and WMA Pro reader, and a D3D9 to D3D11 bridge | **DXMT** | 11 | not measured | Stock | 26.3, our winegstreamer | Fixed |
 | [NINJA GAIDEN 3: Razor's Edge](Ninja-Gaiden-3-Razors-Edge.md) | Koei Tecmo, in-house | Will not start: "Insufficient VRAM" | d9vk, and winevideo's DirectShow filters | **DXVK** | 9 | not measured | Stock | 26.3, our winegstreamer | Starts, 60 fps, in-game cutscenes; the boot movie freezes, one click skips it |
 | [Nioh](Nioh.md) | Koei Tecmo, in-house | Cutscene refuses to play, then crashes | Staged WMV3 codec, and the same D3D9 to D3D11 bridge | **DXMT** | 11 | 4.0b2 | Stock&dagger; | 26.3, our winegstreamer | Fixed |
 | [Nioh 2](Nioh-2.md) | Koei Tecmo, in-house | Cutscene refuses to play, then crashes | Same codec and same bridge as Nioh, unchanged | **DXMT** | 11 | 4.0b2 | Stock&dagger; | 26.3, our winegstreamer | Fixed |
@@ -275,7 +275,7 @@ to prefer our file at all.
 | [Life is Strange: Double Exposure](Life-is-Strange-Double-Exposure.md) | D3DMetal | 12 | **4.0b2 only** -- 3.0 crashes it | `libogg_64.dll` | `libogg_64_real.dll` | `ue5-media-fix.c` | — | — | — |
 | [DYNASTY WARRIORS: ORIGINS](Dynasty-Warriors-Origins.md) | D3DMetal | 12 | 4.0b2 | `libxess.dll` | `libxess_real.dll` | `dwo-video-bridge.c` | `libgstmatroska` | — | — |
 | [Beast of Reincarnation](Beast-of-Reincarnation.md) | D3DMetal | 12 | not measured | `libogg_64.dll` | `libogg_64_real.dll` | `ue5-media-fix.c` | — | — | — |
-| [Persona 5 Strikers](Persona-5-Strikers.md) | **DXMT** | 11 | not measured | `amd_ags_x64.dll` | `amd_ags_x64_real.dll` | `p5s-video-bridge.c` | `libgstlibav` | `BEAST_FORCE_NV12`, `BEAST_REFUSE_D3D_MANAGER` | — |
+| [Persona 5 Strikers](Persona-5-Strikers.md) | **DXMT** | 11 | not measured | `amd_ags_x64.dll` | `amd_ags_x64_real.dll` | `p5s-video-bridge.c` | — | `BEAST_FORCE_NV12`, `BEAST_REFUSE_D3D_MANAGER` | — |
 | [NINJA GAIDEN 3: Razor's Edge](Ninja-Gaiden-3-Razors-Edge.md) | **DXVK** | 9 | not measured | — | — | — | not measured | — | yes |
 | [Nioh](Nioh.md) | **DXMT** | 11 | 4.0b2 | `GfeSDK.dll` | `GfeSDK_real.dll` | `p5s-video-bridge.c` | `libgstlibav` | `BEAST_FORCE_NV12`, `BEAST_REFUSE_D3D_MANAGER` | — |
 | [Nioh 2](Nioh-2.md) | **DXMT** | 11 | 4.0b2 | `GfeSDK.dll` | `GfeSDK_real.dll` | `p5s-video-bridge.c` | `libgstlibav` | `BEAST_FORCE_NV12`, `BEAST_REFUSE_D3D_MANAGER` | — |
@@ -317,7 +317,7 @@ levers, not requirements: each one defaults to the setting the fix was measured
 with, and they exist so a failing title can be bisected without a rebuild.
 
 **Codec** is the plugin that has to be in front of CrossOver before the title
-can play. 7 titles need a decoder no CrossOver ships, 2 need a
+can play. 6 titles need a decoder no CrossOver ships, 2 need a
 demuxer, and telling those two cases apart is most of the work -- see
 [How the codec staging works](How-the-codec-staging-works.md). Stable 26.3
 ships no `matroska` plugin at all, so the demuxer rows say what has to be put

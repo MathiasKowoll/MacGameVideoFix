@@ -9,8 +9,11 @@
 # It rides on amd_ags_x64.dll, which the game imports and barely uses under
 # Metal -- the same role libxess plays for DYNASTY WARRIORS.
 #
-# This game also needs codecs CrossOver does not ship. See
-# runtime/stage-codecs.sh; the bridge alone will not make the video appear.
+# Its video is VC-1 with WMA Pro audio, which no CrossOver decodes. Beside the
+# proxy goes mgvf-asf-reader.dll, a source reader built on FFmpeg
+# (runtime/asf-reader.c), which the bridge asks only when Media Foundation
+# refuses a movie. So the codec staged by runtime/stage-codecs.sh is no longer
+# the only way: with it, wine's reader plays; without it, ours does.
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
@@ -28,7 +31,7 @@
 #
 # MGVF-SCOPE: folder
 # MGVF-GAME: Persona 5 Strikers | game.exe | 
-# MGVF-WHY: Cutscene runs with sound and no picture. Needs the staged decoder as well: its video is VC-1.
+# MGVF-WHY: Cutscene runs with sound and no picture. Its video is VC-1 with WMA Pro audio, which the fix decodes itself where the engine cannot. Runs on DXMT only.
 
 set -euo pipefail
 
@@ -47,6 +50,12 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 LIVE="$GAME/amd_ags_x64.dll"
 REAL="$GAME/amd_ags_x64_real.dll"
 PROXY="$HERE/amd_ags_x64.dll"
+READER="$HERE/mgvf-asf-reader.dll"
+LIVE_READER="$GAME/mgvf-asf-reader.dll"
+# FFmpeg is LGPL and statically inside the reader, so its notice goes where the
+# binary goes.
+READER_LICENCES="$HERE/mgvf-asf-reader-LICENCES.md"
+LIVE_LICENCES="$GAME/mgvf-asf-reader-LICENCES.md"
 EXPORTS="$HERE/pe.pl"
 MARKER='p5s-video-bridge.log'
 PROBE_MARKER='mf-observe.log'
@@ -64,13 +73,18 @@ is_ours() {
 
 case "$MODE" in
 --status)
-  if is_ours "$LIVE" && [ -f "$REAL" ]; then echo installed
+  # Without its reader the bridge still works where the codec is staged, and
+  # nowhere else -- an install from before the reader existed. Broken, so the
+  # app offers the repair, which is an install.
+  if is_ours "$LIVE" && [ -f "$REAL" ] && [ -f "$LIVE_READER" ]; then echo installed
+  elif is_ours "$LIVE" && [ -f "$REAL" ]; then echo broken
   elif is_ours "$LIVE"; then echo broken
   elif [ ! -f "$LIVE" ] && [ -f "$REAL" ]; then echo half
   else echo absent; fi
   exit 0
   ;;
 --restore)
+  rm -f "$LIVE_READER" "$LIVE_LICENCES"
   if [ -f "$REAL" ]; then
     mv -f "$REAL" "$LIVE"
     echo "restored — the game is back to its own amd_ags_x64.dll"
@@ -83,8 +97,16 @@ case "$MODE" in
 *) usage ;;
 esac
 
+[ -f "$READER" ] || { echo "error: no reader at $READER" >&2; exit 1; }
+
+# Installed already: bring both files up to date. A bridge from before the
+# reader existed would otherwise stay as it was, without the reader, while
+# this said there was nothing to do.
 if is_ours "$LIVE" && [ -f "$REAL" ]; then
-  echo "the bridge is already installed, nothing to do"
+  cp "$PROXY" "$LIVE" && cp "$READER" "$LIVE_READER" || {
+    echo "error: could not update the bridge" >&2; exit 1; }
+  cp "$READER_LICENCES" "$LIVE_LICENCES" 2>/dev/null || true
+  echo "installed — the bridge and its reader are up to date"
   exit 0
 fi
 
@@ -131,8 +153,9 @@ mv -f "$LIVE" "$REAL" || {
   echo "error: the original is not where it should be; refusing to write" >&2
   exit 1
 }
-cp "$PROXY" "$LIVE" || {
+cp "$PROXY" "$LIVE" && cp "$READER" "$LIVE_READER" && cp "$READER_LICENCES" "$LIVE_LICENCES" || {
   echo "error: could not install the bridge; putting the original back" >&2
+  rm -f "$LIVE" "$LIVE_READER" "$LIVE_LICENCES"
   mv -f "$REAL" "$LIVE" || echo "       and that failed too -- it is at $REAL" >&2
   exit 1
 }
@@ -151,8 +174,5 @@ echo "  the video bridge is in place"
 # Whether a codec is staged is now a per-engine question, and the app owns it:
 # it gates its own button on Codecs.staged(forEngine:). Saying less here beats
 # saying something wrong next to a button that knows better.
-if [ -n "${MGVF_FRONTEND:-}" ]; then
-  echo "  this game also needs the VC-1 codec -- use the Stage codec button"
-else
-  echo "  this game also needs the staged codec -- runtime/stage-codecs.sh"
-fi
+echo "  where the engine cannot decode VC-1, the bridge's own reader does"
+echo "  the game must run on DXMT: CX_GRAPHICS_BACKEND=dxmt"

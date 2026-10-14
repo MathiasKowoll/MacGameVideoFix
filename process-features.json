@@ -54,7 +54,7 @@
     "game.exe": {
       "title": "Persona 5 Strikers",
       "backend": "dxmt",
-      "codec": "libgstlibav",
+      "codec": "",
       "gptk": "",
       "env": {},
       "symptom": "Video never starts; sound only"

@@ -465,7 +465,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
     /// in either way; without the codec there is nothing for it to carry.
     var extraRequirement: String? {
         switch self {
-        case .personaStrikers: return "Also needs the VC-1 codec staged."
+        // Persona 5 Strikers no longer: its fix carries its own VC-1 reader,
+        // measured playing on an engine with nothing staged (2026-10-14).
         case .nioh, .nioh2:    return "Also needs the WMV3 codec staged."
         default:               return nil
         }

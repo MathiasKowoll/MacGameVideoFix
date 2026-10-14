@@ -8,15 +8,55 @@ and no error anywhere.
 | Video | VC-1 in ASF, measured by header scan of all five archives |
 | Played by | `IMFSourceReader` on Media Foundation, presented through D3D9 |
 | Symptom | Sound plays, the picture never appears |
-| Fix | Stage a VC-1 decoder, then bridge D3D9 to D3D11 |
+| Fix | The fix's own VC-1 and WMA Pro reader (or a staged VC-1 decoder), then bridge D3D9 to D3D11 |
 | Backend | **DXMT only.** D3DMetal cannot produce a shared handle at all |
-| CrossOver | Plays on stable 26.3 — see below for what the first measurement on 26.3 got wrong |
+| CrossOver | Plays on stable 26.3 with the codec staged, and on CrossOver Preview 27 through NotProton with nothing staged (2026-10-14) |
 
 **CrossOver Preview is no longer a supported engine here**, and the supported
 engine is stable 26.3. Where Preview appears below it is a record of what was
 measured or read on it at the time, not a build to run this title on.
 
+## Its own decoder, in the game folder (2026-10-14)
+
+The fix now carries a decoder, so no engine needs one. The video is VC-1
+(`WVC1`, 1920x1080, a frame every 33 ms) and the audio WMA Pro (48 kHz,
+stereo), in ASF. VideoToolbox decodes neither, and Preview 27 ships no
+`libav`. Without a decoder, wine cannot even create the ASF media source, and
+`MFCreateSourceReaderFromByteStream` fails: 271 times in one Preview session.
+
+`mgvf-asf-reader.dll` goes beside the game with the bridge. It is a Media
+Foundation source reader (`runtime/asf-reader.c`) built on FFmpeg 9.0.2:
+statically linked, LGPL, and containing nothing of FFmpeg but the ASF demuxer
+and the VC-1, WMV3, WMA Pro and WMA v2 decoders (`runtime/build-asf-reader.sh`).
+The bridge first asks Media Foundation. Only if Media Foundation refuses does
+the bridge load the reader and hand it the stream. So an engine with the codec
+staged plays exactly as before, and an engine without it uses the reader.
+`p5s-no-asf-reader.txt` beside the game turns the reader off.
+
+Two things it had to get right, both found by running the game:
+
+- **The frames go out as Direct3D 9 surfaces.** The game passes its D3D9
+  device manager to the reader. It then asks each buffer for its surface and
+  copies that surface with `StretchRect`. With the frames in system memory,
+  every sample was delivered and the screen stayed black. The reader now
+  writes NV12 into a default-pool offscreen surface on the game's own device,
+  wrapped with `MFCreateDXSurfaceBuffer`, which is what wine's reader gave it.
+- **The game reads audio well ahead of video.** Decoded 1080p frames queued for
+  that long hit a bound and were dropped, a third of a six-second clip. The
+  reader now queues the compressed packets and decodes each stream only when
+  it is read.
+
+Measured on CrossOver Preview 27 through NotProton, with DXMT and nothing
+staged: the intro videos play, with sound in sync, and each one opens, ends and
+hands over to the next. The backend requirement is unchanged: DXMT only.
+
+**Not measured yet:** a long session, and stable 26.3 without the staged codec.
+One run showed 51 FPS with a low of 5 during the intro; the cause is not known.
+
 ## The one that does not depend on what the engine ships
+
+*Written before the reader above existed: it describes the staged codec, which
+still works and is still used first where it is present.*
 
 Every other title here that goes through Media Foundation depends on what
 CrossOver's own media stack can open and decode. This one depends on none of

@@ -107,6 +107,8 @@ rm -rf "$MANIFEST_TMP"
 [ -f "$RES/manifest.json" ] || { echo "error: manifest.json was not generated" >&2; exit 1; }
 cp "$ROOT"/runtime/ng3-*.dll "$RES/"
 cp "$ROOT/runtime/ng3-THIRD-PARTY-LICENCES.md" "$RES/"
+# Persona 5 Strikers' own reader, FFmpeg inside, and the notice that travels with it.
+cp "$ROOT/runtime/mgvf-asf-reader.dll" "$ROOT/runtime/mgvf-asf-reader-LICENCES.md" "$RES/"
 chmod +x "$RES/install-ng3-fix.sh"
 
 # bottles.sh, which install-kh-bridge.sh and install-nier-bridge.sh source.

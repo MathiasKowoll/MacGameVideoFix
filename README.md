@@ -52,7 +52,7 @@ resolutions and nothing else, and a laptop display has none.
 | [**Life is Strange: Double Exposure**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Life-is-Strange-Double-Exposure) | Freezes after a while, anywhere | 26.3, our winegstreamer | Stock | Guard installs; the freeze was never reproduced or cured |
 | [**DYNASTY WARRIORS: ORIGINS**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Dynasty-Warriors-Origins) | Cutscene runs with sound, picture black | 26.3, our winegstreamer | Stock&dagger; | Fixed |
 | [**Beast of Reincarnation**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Beast-of-Reincarnation) | Startup video plays with sound, no picture | 26.3, our winegstreamer | winevideo | Fixed |
-| [**Persona 5 Strikers**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Persona-5-Strikers) | Video never starts; sound only | 26.3, our winegstreamer | Stock&dagger; | Fixed |
+| [**Persona 5 Strikers**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Persona-5-Strikers) | Video never starts; sound only | 26.3, our winegstreamer | Stock | Fixed |
 | [**NINJA GAIDEN 3: Razor's Edge**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Ninja-Gaiden-3-Razors-Edge) | Will not start: "Insufficient VRAM" | 26.3, our winegstreamer | Stock | Starts, 60 fps, in-game cutscenes; the boot movie freezes, one click skips it |
 | [**Nioh**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Nioh) | Cutscene refuses to play, then crashes | 26.3, our winegstreamer | Stock&dagger; | Fixed |
 | [**Nioh 2**](https://github.com/MathiasKowoll/MacGameVideoFix/wiki/Nioh-2) | Cutscene refuses to play, then crashes | 26.3, our winegstreamer | Stock&dagger; | Fixed |

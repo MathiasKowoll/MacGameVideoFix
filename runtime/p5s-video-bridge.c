@@ -39,6 +39,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <stdio.h>
+#include <wchar.h>
 
 #define LOGFILE "C:\\p5s-video-bridge.log"
 
@@ -1094,18 +1095,76 @@ static void sniff_stream_(void *stream)
               : "NOT an ASF header -- Media Foundation was handed something else");
 }
 
+/* OUR OWN READER, for an engine that has no decoder for this title.
+ *
+ * Its video is VC-1 with WMA Pro audio, and no CrossOver decodes either: on
+ * one without the staged codec, wine cannot even create the ASF media source,
+ * and the refusal above is all the game ever gets. mgvf-asf-reader.dll, beside
+ * this proxy, is a source reader built on FFmpeg's ASF demuxer and decoders
+ * (runtime/asf-reader.c). It is asked only after Media Foundation has refused,
+ * so an engine that can open the file never reaches it. A file
+ * p5s-no-asf-reader.txt beside the game turns it off. */
+static HRESULT (WINAPI *asf_reader_create)(void *, void *, void **);
+
+static BOOL load_asf_reader_(void)
+{
+    static LONG tried;
+    WCHAR path[MAX_PATH], *slash;
+    HMODULE self = NULL, mod;
+    DWORD attr;
+
+    if (InterlockedExchange(&tried, 1)) return asf_reader_create != NULL;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCWSTR)(void *)load_asf_reader_, &self) ||
+        !GetModuleFileNameW(self, path, MAX_PATH))
+        return FALSE;
+    slash = wcsrchr(path, L'\\');
+    if (!slash || (slash - path) + 32 >= MAX_PATH) return FALSE;
+
+    lstrcpyW(slash + 1, L"p5s-no-asf-reader.txt");
+    attr = GetFileAttributesW(path);
+    if (attr != INVALID_FILE_ATTRIBUTES)
+    {
+        logf_("own ASF reader: off (p5s-no-asf-reader.txt)");
+        return FALSE;
+    }
+    lstrcpyW(slash + 1, L"mgvf-asf-reader.dll");
+    mod = LoadLibraryW(path);
+    if (!mod)
+    {
+        logf_("own ASF reader: mgvf-asf-reader.dll not loaded (err %lu) -- install the fix again",
+              GetLastError());
+        return FALSE;
+    }
+    *(FARPROC *)&asf_reader_create = GetProcAddress(mod, "MGVF_CreateAsfReader");
+    logf_("own ASF reader: %s", asf_reader_create ? "loaded" : "loaded, but it exports no MGVF_CreateAsfReader");
+    return asf_reader_create != NULL;
+}
+
 static HRESULT WINAPI my_MFCreateSourceReaderFromByteStream(void *stream, void *attrs, void **reader)
 {
-    static LONG made, sniffed;
+    static LONG made, sniffed, ours;
     HRESULT hr = real_MFCreateSourceReaderFromByteStream(stream, attrs, reader);
     LONG n = InterlockedIncrement(&made);
-    if (n == 1 || FAILED(hr))
+    BOOL own = FALSE;
+    if (n == 1 || (FAILED(hr) && n <= 3))
         logf_("MFCreateSourceReaderFromByteStream -> 0x%08lx (reader %ld)", hr, n);
     /* Only the first few. The game opens hundreds of these and the answer is the
      * same every time; a log that repeats it is a log nobody reads to the end. */
     if (InterlockedIncrement(&sniffed) <= 3)
         sniff_stream_(stream);
-    if (SUCCEEDED(hr) && reader && *reader)
+    if (FAILED(hr) && stream && reader && load_asf_reader_())
+    {
+        HRESULT mine = asf_reader_create(stream, attrs, reader);
+        LONG k = InterlockedIncrement(&ours);
+        if (k <= 3 || FAILED(mine))
+            logf_("  Media Foundation refused it (0x%08lx); our ASF reader -> 0x%08lx (%ld so far)",
+                  hr, mine, k);
+        if (SUCCEEDED(mine)) { hr = mine; own = TRUE; }
+    }
+    /* Our reader is left unpatched: these hooks are for watching wine's. */
+    if (SUCCEEDED(hr) && !own && reader && *reader)
     {
         static void *gn, *sc, *rs;
         patch_slot("GetNativeMediaType",  *reader, SLOT_GET_NATIVE_TYPE,

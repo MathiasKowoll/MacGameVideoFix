@@ -98,8 +98,12 @@ for dll in "$HERE"/*.dll; do
       # table -- so it is named here rather than left reading as an unknown.
       printf '  %-32s --   engine set, checked below\n' "$name"
       continue ;;
-    ng3-*.dll)
-      want="$(grep -E "\`$name\`" "$HERE/ng3-THIRD-PARTY-LICENCES.md" 2>/dev/null | grep -oE '[0-9a-f]{64}' | tail -1)"
+    ng3-*.dll|mgvf-asf-reader.dll)
+      case "$name" in
+        ng3-*) record="$HERE/ng3-THIRD-PARTY-LICENCES.md" ;;
+        *)     record="$HERE/mgvf-asf-reader-LICENCES.md" ;;
+      esac
+      want="$(grep -E "\`$name\`" "$record" 2>/dev/null | grep -oE '[0-9a-f]{64}' | tail -1)"
       have="$(shasum -a256 "$dll" | cut -d' ' -f1)"
       if [ -z "$want" ]; then
         printf '  %-32s ?  third-party, and no sha256 recorded for it\n' "$name"

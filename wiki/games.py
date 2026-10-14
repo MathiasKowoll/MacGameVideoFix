@@ -74,7 +74,7 @@ GAMES = [
      "D3DMetal", "12", MEASURED,
      "Fixed", "Beast-of-Reincarnation"),
     ("Persona 5 Strikers", "Koei Tecmo, in-house",
-     "Video never starts; sound only", "Staged VC-1 codec, and a D3D9 to D3D11 bridge",
+     "Video never starts; sound only", "Its own VC-1 and WMA Pro reader, and a D3D9 to D3D11 bridge",
      "**DXMT**", "11", MEASURED,
      "Fixed", "Persona-5-Strikers"),
     ("NINJA GAIDEN 3: Razor's Edge", "Koei Tecmo, in-house",
@@ -457,7 +457,11 @@ CODEC = {
     # here rather than an unmeasured one. It is not NONE either: that would read
     # as "measured, and none needed", which no run here could have shown.
     "METAL GEAR SOLID: Peace Walker": "**in the engine**",
-    "Persona 5 Strikers": "`libgstlibav`",
+    # Measured with nothing staged on 2026-10-14, on CrossOver Preview 27: the
+    # fix carries its own reader (mgvf-asf-reader.dll, FFmpeg's ASF demuxer and
+    # VC-1 / WMA Pro decoders), which the bridge asks when Media Foundation
+    # refuses the file. A staged libav still works and is then simply used first.
+    "Persona 5 Strikers": NONE,
     "Nioh": "`libgstlibav`",
     "Nioh 2": "`libgstlibav`",
     "Devil May Cry 5": "`libgstlibav`",
@@ -683,7 +687,7 @@ ENGINE_NEEDED = {
     "Beast of Reincarnation": "winevideo",
     "KINGDOM HEARTS 0.2 Birth by Sleep": "None",
     "DYNASTY WARRIORS: ORIGINS": "Stock&dagger;",
-    "Persona 5 Strikers": "Stock&dagger;",
+    "Persona 5 Strikers": "Stock",
     "Nioh": "Stock&dagger;",
     "Nioh 2": "Stock&dagger;",
     "Nioh 3": "Stock&dagger;",
