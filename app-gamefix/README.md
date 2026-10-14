@@ -42,6 +42,7 @@ Quit a game before installing or removing its fix.
 | Life is Strange: Reunion | Freezes after a while | D3DMetal 4 |
 | Marvel's Spider-Man 2 | T-pose, a broken symbiote, black blocks in the sandstorm | D3DMetal |
 | Mortal Shell 2 | Crash on the first cutscene | D3DMetal |
+| NieR Replicant ver.1.22474487139 | Crashes when the first video starts | D3DMetal, a prefix |
 | NINJA GAIDEN 4 | Says the VP9 codec is missing, then exits; on D3DMetal 4, nothing is ever drawn | D3DMetal 3 or 4.0b3, CrossOver Preview 27 |
 | Nioh 3 | "Failed to play movie" | D3DMetal |
 | Persona 5 Strikers | Video never starts; sound only | DXMT |
@@ -73,6 +74,14 @@ reproduced on demand, even on 4.0b2, so for those two the sessions show that
 nothing went wrong rather than a fault cured.) Spider-Man 2, The Witcher 3, Tormented Souls 2, TMNT and Wo Long still
 needed theirs, and God of War runs on DXMT, which the toolkit does not change. Every
 fix stays, for anyone on 4.0b2 and earlier.
+
+### NieR Replicant decodes its own video, and needs a prefix
+
+Its video is WMV2 with WMA v2 audio, which no CrossOver decodes; its fix uses
+the same reader as Persona 5 Strikers. Measured on 2026-10-14 on CrossOver
+Preview 27 through NotProton, with nothing else installed: the intro plays
+with its sound. Like KINGDOM HEARTS below, its fix also tells Wine, in the
+game's prefix, to load the DLL beside it, so the app asks which prefix.
 
 ### KINGDOM HEARTS needs a prefix
 
