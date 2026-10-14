@@ -60,9 +60,9 @@ untouched CrossOver.
 
 **Game Porting Toolkit 4.0b3.** On 2026-10-13, with D3DMetal 4.0b3 and every
 fix removed, CONTROL Resonant drew its windows correctly and RESONANCE started
-and played: neither needs its fix there. Life is Strange: Reunion also played
-without its fix, but its freeze was never reproduced on demand, so that says
-little. Spider-Man 2, The Witcher 3, Tormented Souls 2, TMNT and Wo Long still
+and played: neither needs its fix there. Both Life is Strange titles also
+played without theirs, Double Exposure for over five minutes, but neither freeze
+was ever reproduced on demand, so that says little. Spider-Man 2, The Witcher 3, Tormented Souls 2, TMNT and Wo Long still
 needed theirs, and God of War runs on DXMT, which the toolkit does not change. Every
 fix stays, for anyone on 4.0b2 and earlier.
 
