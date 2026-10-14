@@ -83,6 +83,8 @@ for script in sorted((root / "runtime").glob("install-*.sh")):
             # A title whose engine requirement holds on stable 26.3 and not on
             # the CrossOver named here, which then is the one it plays on.
             "engineFreeOn": p.get("engine_not_needed_on", "") if p.get("needs_engine") else "",
+            # The toolkit from which this title plays without its fix at all.
+            "notNeededFrom": p.get("not_needed_from_gptk", ""),
             "why": why.group(1).strip() if why else "",
         })
 games.sort(key=lambda g: g["name"].lower())

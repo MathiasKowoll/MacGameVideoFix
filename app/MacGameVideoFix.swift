@@ -502,6 +502,21 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         }
     }
 
+    /// A Game Porting Toolkit from which this title plays without its fix.
+    ///
+    /// Measured 2026-10-13/14 with every fix removed: these four play on
+    /// D3DMetal 4.0b3 as they are. The fix stays for 4.0b2 and earlier, and
+    /// the row says so rather than offering it as if it were still needed.
+    /// The same four are NOT_NEEDED_FROM_GPTK in wiki/games.py.
+    var notNeededFromToolkit: String? {
+        switch self {
+        case .controlResonant, .resonance, .lisReunion, .lisDoubleExposure:
+            return "Not needed with Game Porting Toolkit 4.0b3 or later; kept for 4.0b2 and earlier."
+        default:
+            return nil
+        }
+    }
+
     /// Has this title been run on a stable CrossOver, or only on Preview?
     ///
     /// Not a question any more. Every title here was measured on stable
@@ -1169,6 +1184,7 @@ final class Runner: ObservableObject {
             if ok && install {
                 note("Done. Launch the game — the cutscenes should play.")
                 if let extra = game.extraRequirement { note(extra) }
+                if let toolkit = game.notNeededFromToolkit { note(toolkit) }
                 note("Note: Steam's \"verify integrity of game files\" undoes this.")
             } else if ok {
                 note("Reverted. The game is back to its original files.")
@@ -6041,6 +6057,9 @@ struct ContentView: View {
                 if let extra = hit.wrappedValue.game.extraRequirement,
                    hit.wrappedValue.blocker == nil {
                     Text(extra).font(.caption).foregroundStyle(.secondary)
+                }
+                if let toolkit = hit.wrappedValue.game.notNeededFromToolkit {
+                    Text(toolkit).font(.caption).foregroundStyle(.secondary)
                 }
             }
             Spacer()

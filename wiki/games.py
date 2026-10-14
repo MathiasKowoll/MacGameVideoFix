@@ -734,6 +734,16 @@ ENGINE_NOT_NEEDED_ON = {
     "Beast of Reincarnation": "CrossOver Preview 27",
 }
 
+# Titles measured playing WITHOUT their fix on a later Game Porting Toolkit,
+# 2026-10-13/14, every fix removed (see the 4.0b3 note on Games). The fix stays
+# for anyone on an earlier toolkit; the apps say it is not needed from this one.
+NOT_NEEDED_FROM_GPTK = {
+    "CONTROL Resonant": "4.0b3",
+    "RESONANCE: A PLAGUE TALE LEGACY": "4.0b3",
+    "Life is Strange: Reunion": "4.0b3",
+    "Life is Strange: Double Exposure": "4.0b3",
+}
+
 # A toolkit generation measured working besides the one `gptk` selects.
 GPTK_ALSO = {
     "NINJA GAIDEN 4": "4.0b3",
@@ -1132,6 +1142,8 @@ def features_json():
             entry["codec_shipped_by"] = CODEC_SHIPPED_BY[g]
         if g in ENGINE_NOT_NEEDED_ON:
             entry["engine_not_needed_on"] = ENGINE_NOT_NEEDED_ON[g]
+        if g in NOT_NEEDED_FROM_GPTK:
+            entry["not_needed_from_gptk"] = NOT_NEEDED_FROM_GPTK[g]
         if g in GPTK_ALSO:
             entry["gptk_also"] = GPTK_ALSO[g]
         procs[exe] = entry
