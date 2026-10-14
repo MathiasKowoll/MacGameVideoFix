@@ -8,8 +8,25 @@ Koei Tecmo, in-house engine. Cutscenes played with sound and no picture.
 | Cutscenes | 355 `.webm`, VP9 Profile 0. 42 of them 2560x1440 and up to four minutes; the rest 960x540 interface clips |
 | Played by | `IMFSourceReader` on a **separate D3D11 device**, presented by a **D3D12** renderer |
 | Was | Cutscene ran with sound and subtitles, picture black |
-| Now | Plays on stable 26.3, on a copy of it carrying this project's `winegstreamer` and its plugins (2026-08-31). On a stock 26.3 it crashes — that much was run. Why is inferred rather than measured: a stock 26.3 ships no WebM demuxer, read from the plugin sets; see below |
+| Now | Plays on CrossOver Preview 27 with only the bridge in the game folder (2026-10-14, see below). Plays on stable 26.3, on a copy of it carrying this project's `winegstreamer` and its plugins (2026-08-31). On a stock 26.3 it crashes — that much was run. Why is inferred rather than measured: a stock 26.3 ships no WebM demuxer, read from the plugin sets; see below |
 | Needs | A Media Foundation that can **open a WebM**, and an injected DLL. Neither alone is enough: a stock 26.3 decodes the VP9 perfectly well and ships no `matroska` plugin, so nothing opens the container. The first successful run also had the `.webm` byte-stream handler registered — see below for whether that is needed |
+
+## CrossOver Preview 27, with nothing of ours in the engine (2026-10-14)
+
+Run through NotProton on Preview 27, D3DMetal, with the bridge installed in the
+game folder and nothing else: no staged codec, no patched `winegstreamer`, and
+no `.webm` byte-stream handler key. The cutscene plays with its sound. The
+bridge's log shows the whole path:
+- Preview's own `matroska` plugin opens the WebM, and VideoToolbox decodes the
+  VP9.
+- The reader delivers 2560x1440 NV12 frames, more than 300 in the first
+  seconds with none empty.
+- The game asks each buffer for its DXGI texture and runs its video processor
+  on it; the bridge answers the shared handle and carries the frame across to
+  the D3D12 renderer.
+
+So on Preview this title needs only its bridge, and the handler key is not
+needed there, which closes the open question below for that engine.
 
 **CrossOver Preview is no longer a supported engine here**, and the supported
 engine is stable 26.3. Where Preview appears below it is a record of what was

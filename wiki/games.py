@@ -713,6 +713,9 @@ ENGINE_NEEDED = {
 # CodeWeavers ships it already carries that codec.
 CODEC_SHIPPED_BY = {
     "NINJA GAIDEN 4": "CrossOver Preview 27",
+    # 2026-10-14, Preview 27 through NotProton, D3DMetal, only the bridge in the
+    # game folder and no .webm handler key: the cutscene plays with its sound.
+    "DYNASTY WARRIORS: ORIGINS": "CrossOver Preview 27",
 }
 
 # A toolkit generation measured working besides the one `gptk` selects.

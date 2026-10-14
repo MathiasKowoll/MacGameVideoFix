@@ -217,7 +217,10 @@ case "$MODE" in
 
   echo
   echo "installed — the cutscenes should play"
-  echo "CrossOver must be patched with winevideo, or there is nothing to decode them"
+  # Not "patched with winevideo", which this said long after the header above
+  # withdrew it: what an engine needs is to open a WebM. CrossOver Preview 27
+  # does that itself (measured 2026-10-14); stable 26.3 needs the demuxer staged.
+  echo "DYNASTY WARRIORS needs a CrossOver that opens WebM: Preview 27 as it ships, or 26.3 with the codec staged"
   echo "a log is written to the bottle's C:\\${MARKER} on each launch"
   ;;
 

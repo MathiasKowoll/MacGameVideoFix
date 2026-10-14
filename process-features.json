@@ -47,7 +47,8 @@
       "codec": "libgstmatroska",
       "gptk": "",
       "env": {},
-      "symptom": "Cutscene runs with sound, picture black"
+      "symptom": "Cutscene runs with sound, picture black",
+      "codec_shipped_by": "CrossOver Preview 27"
     },
     "game.exe": {
       "title": "Persona 5 Strikers",
