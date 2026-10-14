@@ -51,6 +51,22 @@ shader, and the 2026-10-01 update recompiled it (`cc6f0f9fb056f7f5` became
 Matched by name, the same build hid all four of the new pipelines. An update that
 renames the shader is matched by nothing, and the DLL then does nothing.
 
+## Game Porting Toolkit 4.0b3
+
+Seen by the user on 2026-10-13, on CrossOver Preview 27 through NotProton with
+D3DMetal 4.0b3 and Metal 4 off: the lit rooms behind the windows drew correctly
+with the fix **not** installed. That it was not installed was checked, not
+assumed: the game's own `PxFoundation_x64.dll` was in place, the installer's
+`--status` said `absent`, and the fix's log was last written on 2026-10-09.
+
+So 4.0b3 changed something on the D3DMetal side. Which of the two faults above it
+cured has not been measured. The fix stays, because on 4.0b2 the windows are
+still wrong without it, and on 4.0b3 it only hides a shader that no longer
+needs hiding.
+
+Ray tracing still does not work there. With the game's ReSTIR option turned on,
+the same run did not give working ray tracing.
+
 ## Where it hooks
 
 NVIDIA Streamline wraps the device the game creates, so the game's own device is
