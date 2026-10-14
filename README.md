@@ -22,6 +22,12 @@ Makes Windows games show their cutscenes under CrossOver on Apple Silicon.
 > up** is the other route, and on that one a toolkit you ask for does go into
 > the CrossOver you installed. [How it runs](#how-it-runs) is the whole flow.
 
+> **Only the game-folder fixes, and no CrossOver patch at all:**
+> **<https://github.com/MathiasKowoll/MacGameFix>**, built from `app-gamefix/`.
+> It carries the fixes that live entirely in a game's folder and need nothing of
+> the engine, so they work with CrossOver as it ships, CrossOver Preview and
+> Steam Play tools such as NotProton.
+
 More games than rows: the two KINGDOM HEARTS packages hold seven playable titles between them. <!-- count-ok: titles inside those two packages, not entries in the table -->
 
 Most of these are video faults, which is what the name says. Several are not —
