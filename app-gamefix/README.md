@@ -69,8 +69,9 @@ For Wo Long, Nioh 3 and KINGDOM HEARTS Dream Drop Distance, that the fix needs
 nothing of the engine is read off how it works, not established by a run on an
 untouched CrossOver.
 
-**Game Porting Toolkit 4.0b3.** The app marks these four titles as not needing
-their fix from 4.0b3 on. On 2026-10-13 and 14, with D3DMetal 4.0b3 and
+**Game Porting Toolkit 4.0b3.** The app marks five titles as not needing their
+fix from 4.0b3 on: the four below and Mortal Shell 2, which was also played
+without its fix on 4.0b3, cutscenes included (2026-10-14). On 2026-10-13 and 14, with D3DMetal 4.0b3 and
 every fix removed, CONTROL Resonant drew its windows correctly, RESONANCE
 started and played, and both Life is Strange titles played without problems:
 none of the four needs its fix there. (The Life is Strange freeze was never

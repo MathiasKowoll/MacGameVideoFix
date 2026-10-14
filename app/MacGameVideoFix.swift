@@ -504,13 +504,13 @@ enum SupportedGame: String, CaseIterable, Identifiable {
 
     /// A Game Porting Toolkit from which this title plays without its fix.
     ///
-    /// Measured 2026-10-13/14 with every fix removed: these four play on
+    /// Measured 2026-10-13/14 with every fix removed: these five play on
     /// D3DMetal 4.0b3 as they are. The fix stays for 4.0b2 and earlier, and
     /// the row says so rather than offering it as if it were still needed.
-    /// The same four are NOT_NEEDED_FROM_GPTK in wiki/games.py.
+    /// The same five are NOT_NEEDED_FROM_GPTK in wiki/games.py.
     var notNeededFromToolkit: String? {
         switch self {
-        case .controlResonant, .resonance, .lisReunion, .lisDoubleExposure:
+        case .controlResonant, .resonance, .lisReunion, .lisDoubleExposure, .mortalShell2:
             return "Not needed with Game Porting Toolkit 4.0b3 or later; kept for 4.0b2 and earlier."
         default:
             return nil

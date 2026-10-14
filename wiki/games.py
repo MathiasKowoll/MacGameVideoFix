@@ -742,6 +742,9 @@ NOT_NEEDED_FROM_GPTK = {
     "RESONANCE: A PLAGUE TALE LEGACY": "4.0b3",
     "Life is Strange: Reunion": "4.0b3",
     "Life is Strange: Double Exposure": "4.0b3",
+    # Played by the user without its fix on 4.0b3, cutscenes included
+    # (2026-10-14).
+    "Mortal Shell 2": "4.0b3",
 }
 
 # A toolkit generation measured working besides the one `gptk` selects.
