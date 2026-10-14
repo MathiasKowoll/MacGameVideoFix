@@ -22,6 +22,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <stdio.h>
+#include <string.h>
 
 #define LOGFILE "C:\\ng4-observe.log"
 
@@ -3777,11 +3778,527 @@ static HRESULT WINAPI my_CreateCommittedWatch(void *self, const void *heap, UINT
     return hr;
 }
 
+/* NG4_WATCH_FENCES=1: who waits for what, across the command queues.
+ *
+ * Measured 2026-10-14 on D3DMetal 4.0b3: with Metal 4 on, both
+ * com.Metal4.SubmissionQueue threads park in IOGPUCommandQueueWaitMTLEvent;
+ * with it off, D3DMetal reports "Caused GPU Timeout Error" about thirty
+ * seconds in -- and across the hundred seconds before that timeout the GPU
+ * stood at 0%. Work that times out on an idle GPU is waiting, not running. In
+ * D3D12 that is a queue Wait on a fence value nobody signals in time.
+ *
+ * This records every queue the device creates (with its type), every
+ * ExecuteCommandLists, queue Signal and queue Wait, every CPU-side fence
+ * Signal and SetEventOnCompletion, into its own log, and every two seconds
+ * writes which waits are still unmet: the queue, the fence, the value it waits
+ * for, the value the fence has reached, and the last value anyone asked it to
+ * reach. Observation only -- every call is forwarded untouched. */
+#define FENCE_LOG "C:\\ng4-fences.log"
+#define FENCE_LOG_MAX 40000
+static BOOL watch_fences;
+static BOOL fence_logging;
+static LONG fence_lines;
+static DWORD fence_t0;
+
+static void flog_(const char *fmt, ...)
+{
+    char buf[512];
+    HANDLE h;
+    DWORD written;
+    va_list ap;
+    int n, m;
+    if (!fence_logging) return;
+    if (InterlockedIncrement(&fence_lines) > FENCE_LOG_MAX) return;
+    n = snprintf(buf, sizeof(buf) - 2, "%7.3f [%lu] ", (GetTickCount() - fence_t0) / 1000.0,
+                 GetCurrentThreadId());
+    if (n < 0) n = 0;
+    va_start(ap, fmt);
+    m = vsnprintf(buf + n, sizeof(buf) - 2 - n, fmt, ap);
+    va_end(ap);
+    if (m < 0) return;
+    n += m;
+    if (n > (int)sizeof(buf) - 2) n = sizeof(buf) - 2;
+    buf[n] = '\n';
+    h = CreateFileA(FENCE_LOG, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return;
+    SetFilePointer(h, 0, NULL, FILE_END);
+    WriteFile(h, buf, n + 1, &written, NULL);
+    CloseHandle(h);
+}
+
+#define MAXQ 32
+#define MAXF 8192
+static SRWLOCK fence_lock = SRWLOCK_INIT;
+static struct { void *q; void *dev; int type; LONG ecl; void *wf; UINT64 wv; DWORD wt; void *sf; UINT64 sv; } fq[MAXQ];
+static int nq;
+static struct { void *f; UINT64 initial; UINT64 asked; int who; LONG waits;
+                UINT64 last; UINT64 top; UINT64 base[8]; int nbase; } ff[MAXF];
+static int nf;
+
+/* NG4_MONOTONIC_FENCES (marker ng4-monotonic-fences.txt): measured with the
+ * watch above on 2026-10-14, the title runs a ping-pong between its direct and
+ * copy queues on three rotating fences -- Q0 Signal 1, Q1 Wait 1, Q1 Signal 2,
+ * Q0 Wait 2 -- and then sets the fence back to 0 from Q0, every frame. D3D12
+ * allows a fence to go down. Metal's shared events only go up, so D3DMetal has
+ * to emulate the reset, and about thirty seconds in one iteration ended with
+ * the fence at 0, Q1 waiting for 1 and Q0 waiting for 2: both queues stopped,
+ * the GPU idle, and a GPU timeout after that.
+ *
+ * This keeps every value D3DMetal sees rising. A signal lower than the last
+ * one the game gave that fence opens a new epoch above everything issued so
+ * far; signals, waits and SetEventOnCompletion are offset by the current
+ * epoch, and GetCompletedValue maps what D3DMetal reports back through the
+ * epoch it falls in, so the game still reads 0, 1, 2. Only fences the game
+ * created through the hooked CreateFence are translated. */
+static BOOL mono_fences;
+
+static UINT64 mono_signal_(int j, UINT64 v)       /* call with fence_lock held */
+{
+    UINT64 a;
+    /* A reset is a return to 0 or to the initial value. Any other value below
+     * the last one is the same epoch: measured 2026-10-14, the title records a
+     * whole ladder for the compute queue (Signal 2, 4 ... 10) before the direct
+     * queue's half (Signal 1, 3 ... 9) on one fence, and the GPU runs them in
+     * dependency order. Reading Signal 1 after Signal 10 as a reset opened an
+     * epoch the compute queue was never waiting on, and both queues stopped. */
+    if (v < ff[j].last && (v == 0 || v == ff[j].initial))
+    {
+        UINT64 nb = ff[j].top + 1 - v;
+        if (ff[j].nbase < 8) ff[j].base[ff[j].nbase++] = nb;
+        else { memmove(ff[j].base, ff[j].base + 1, 7 * sizeof(UINT64)); ff[j].base[7] = nb; }
+        ff[j].last = v;
+    }
+    else if (v > ff[j].last)
+        ff[j].last = v;
+    a = ff[j].base[ff[j].nbase - 1] + v;
+    if (a > ff[j].top) ff[j].top = a;
+    return a;
+}
+static UINT64 mono_wait_(int j, UINT64 v)         /* call with fence_lock held */
+{
+    return v == ~0ULL ? v : ff[j].base[ff[j].nbase - 1] + v;
+}
+static UINT64 mono_back_(int j, UINT64 a)         /* call with fence_lock held */
+{
+    int k;
+    for (k = ff[j].nbase - 1; k >= 0; k--)
+        if (a >= ff[j].base[k]) return a - ff[j].base[k];
+    return a;
+}
+
+/* NG4_BRIDGE_EARLY_WAITS (marker ng4-bridge-early-waits.txt): measured
+ * 2026-10-14 with the monotonic fences on, the title records a whole ladder on
+ * one fence for its compute queue -- Wait 1, Signal 2, Wait 3 ... Signal 10 --
+ * before the direct queue's half -- Signal 1, Wait 2 ... -- so the compute
+ * queue's waits reach D3DMetal before the signals they wait for. The fence then
+ * reached 1 and the compute queue never went on to signal 2.
+ *
+ * A wait for a value no signal has been issued for yet is not handed to
+ * D3DMetal. The queue waits instead on a fence of our own, one per queue,
+ * counting 1, 2, 3 in queue order; a thread per queue waits on the CPU for the
+ * game's fence to reach the value and then signals ours from the CPU. A wait
+ * whose signal has already been issued goes through unchanged. */
+static BOOL bridge_waits;
+/* ng4-bridge-all-waits.txt: every wait not yet met when it is issued goes
+ * through the bridge, early or not. Measured 2026-10-14: with only early waits
+ * bridged, the fence reached 2 and the direct queue's ordinary Wait for 2 --
+ * issued after the signal -- still never woke. */
+static BOOL bridge_all;
+static void *bridge_device;
+#define BRIDGE_RING 4096
+static struct bridge {
+    void *proxy; UINT64 count; HANDLE sem, thread; SRWLOCK lock;
+    struct { void *f; UINT64 a, pv; } item[BRIDGE_RING];
+    LONG head, tail, done;
+} *bq[MAXQ];
+static LONG bridged_total;
+static LONG fence_ops;
+
+static const char *qtype(int t)
+{
+    switch (t) { case 0: return "direct"; case 1: return "bundle"; case 2: return "compute";
+                 case 3: return "copy"; case 4: return "video-decode"; case 5: return "video-process";
+                 case 6: return "video-encode"; default: return "?"; }
+}
+static int q_index(void *q)
+{
+    int i;
+    for (i = 0; i < nq; i++) if (fq[i].q == q) return i;
+    return -1;
+}
+static int f_index(void *f, BOOL add)
+{
+    int i;
+    for (i = 0; i < nf; i++) if (ff[i].f == f) return i;
+    if (!add || nf >= MAXF) return -1;
+    ff[nf].f = f; ff[nf].who = -2;
+    return nf++;
+}
+
+static HRESULT (WINAPI *real_CreateCommandQueueF)(void *, const void *, const GUID *, void **);
+static HRESULT (WINAPI *real_CreateFenceF)(void *, UINT64, UINT, const GUID *, void **);
+static void    (WINAPI *real_ExecuteCommandListsF)(void *, UINT, void *const *);
+static HRESULT (WINAPI *real_QSignalF)(void *, void *, UINT64);
+static HRESULT (WINAPI *real_QWaitF)(void *, void *, UINT64);
+static UINT64  (WINAPI *real_FGetCompletedF)(void *);
+static HRESULT (WINAPI *real_FSetEventF)(void *, UINT64, HANDLE);
+static HRESULT (WINAPI *real_FSignalF)(void *, UINT64);
+
+static void WINAPI my_ExecuteCommandListsF(void *q, UINT n, void *const *lists)
+{
+    int i;
+    LONG k = InterlockedIncrement(&fence_ops);
+    AcquireSRWLockExclusive(&fence_lock);
+    i = q_index(q);
+    if (i >= 0) fq[i].ecl++;
+    ReleaseSRWLockExclusive(&fence_lock);
+    if (k <= 200000) flog_("Q%d(%s) ExecuteCommandLists n=%u", i, i >= 0 ? qtype(fq[i].type) : "?", n);
+    real_ExecuteCommandListsF(q, n, lists);
+}
+static HRESULT WINAPI my_QSignalF(void *q, void *f, UINT64 v)
+{
+    int i, j;
+    HRESULT hr;
+    LONG k = InterlockedIncrement(&fence_ops);
+    AcquireSRWLockExclusive(&fence_lock);
+    i = q_index(q); j = f_index(f, FALSE);
+    if (i >= 0) { fq[i].sf = f; fq[i].sv = v; }
+    if (j >= 0) { if (v > ff[j].asked) ff[j].asked = v; ff[j].who = i; }
+    {
+        UINT64 a = (mono_fences && j >= 0 && ff[j].nbase) ? mono_signal_(j, v) : v;
+        ReleaseSRWLockExclusive(&fence_lock);
+        hr = real_QSignalF(q, f, a);
+        if (k <= 200000) flog_("Q%d(%s) Signal F%d = %llu [actual %llu] -> 0x%08lx", i,
+                               i >= 0 ? qtype(fq[i].type) : "?", j, (unsigned long long)v,
+                               (unsigned long long)a, hr);
+    }
+    return hr;
+}
+static DWORD WINAPI bridge_worker_(void *param)
+{
+    struct bridge *b = param;
+    HANDLE ev = CreateEventA(NULL, FALSE, FALSE, NULL);
+    for (;;)
+    {
+        void *f; UINT64 a, pv; LONG h;
+        WaitForSingleObject(b->sem, INFINITE);
+        AcquireSRWLockExclusive(&b->lock);
+        h = b->head;
+        f = b->item[h % BRIDGE_RING].f; a = b->item[h % BRIDGE_RING].a; pv = b->item[h % BRIDGE_RING].pv;
+        b->head = h + 1;
+        ReleaseSRWLockExclusive(&b->lock);
+        if (real_FGetCompletedF(f) < a)
+        {
+            real_FSetEventF(f, a, ev);
+            while (WaitForSingleObject(ev, 5000) == WAIT_TIMEOUT)
+                flog_("bridge: still waiting for %llu (fence at %llu), proxy value %llu",
+                      (unsigned long long)a, (unsigned long long)real_FGetCompletedF(f), (unsigned long long)pv);
+        }
+        real_FSignalF(b->proxy, pv);
+        InterlockedIncrement(&b->done);
+    }
+    return 0;
+}
+
+/* Hands the wait to this queue's bridge. FALSE when the bridge cannot be set
+ * up, and the caller then waits the ordinary way. */
+static BOOL bridge_wait_(int i, void *q, void *f, UINT64 a, HRESULT *hr)
+{
+    static const GUID iid_fence = { 0x0a753dcf, 0xc4d8, 0x4b91, { 0xad, 0xf6, 0xbe, 0x5a, 0x60, 0xd9, 0x5a, 0x76 } };
+    struct bridge *b = bq[i];
+    UINT64 pv;
+    LONG t;
+    /* The device that made this queue, not the first one this saw: the title
+     * creates more than one, and a device used only to ask a question may be
+     * gone by now. */
+    void *dev = fq[i].dev ? fq[i].dev : bridge_device;
+    if (!real_FSetEventF || !real_FSignalF || !real_CreateFenceF || !dev) return FALSE;
+    if (!b)
+    {
+        b = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*b));
+        if (!b) return FALSE;
+        InitializeSRWLock(&b->lock);
+        if (FAILED(real_CreateFenceF(dev, 0, 0, &iid_fence, &b->proxy)) || !b->proxy) return FALSE;
+        b->sem = CreateSemaphoreA(NULL, 0, BRIDGE_RING, NULL);
+        b->thread = CreateThread(NULL, 0, bridge_worker_, b, 0, NULL);
+        bq[i] = b;
+        flog_("bridge: Q%d gets its own proxy fence", i);
+    }
+    AcquireSRWLockExclusive(&b->lock);
+    t = b->tail;
+    if (t - b->head >= BRIDGE_RING) { ReleaseSRWLockExclusive(&b->lock); return FALSE; }
+    pv = ++b->count;
+    b->item[t % BRIDGE_RING].f = f; b->item[t % BRIDGE_RING].a = a; b->item[t % BRIDGE_RING].pv = pv;
+    b->tail = t + 1;
+    ReleaseSRWLockExclusive(&b->lock);
+    *hr = real_QWaitF(q, b->proxy, pv);
+    ReleaseSemaphore(b->sem, 1, NULL);
+    InterlockedIncrement(&bridged_total);
+    return TRUE;
+}
+
+static HRESULT WINAPI my_QWaitF(void *q, void *f, UINT64 v)
+{
+    int i, j;
+    HRESULT hr;
+    UINT64 done = real_FGetCompletedF ? real_FGetCompletedF(f) : 0, a = v;
+    LONG k = InterlockedIncrement(&fence_ops);
+    AcquireSRWLockExclusive(&fence_lock);
+    i = q_index(q); j = f_index(f, FALSE);
+    if (i >= 0) { fq[i].wf = f; fq[i].wv = v; fq[i].wt = GetTickCount(); }
+    if (j >= 0) ff[j].waits++;
+    if (mono_fences && j >= 0 && ff[j].nbase) { a = mono_wait_(j, v); done = mono_back_(j, done); }
+    if (i >= 0) fq[i].wv = a;
+    {
+        /* Early: no signal of at least this value issued yet, by anyone. */
+        BOOL early = bridge_waits && mono_fences && i >= 0 && j >= 0 && ff[j].nbase && a > ff[j].top;
+        ReleaseSRWLockExclusive(&fence_lock);
+        if (!early && bridge_all && mono_fences && i >= 0 && j >= 0 && real_FGetCompletedF(f) < a)
+            early = TRUE;
+        if (early && bridge_wait_(i, q, f, a, &hr))
+        {
+            if (k <= 200000) flog_("Q%d(%s) Wait F%d >= %llu [actual %llu] BRIDGED -> 0x%08lx", i,
+                                   qtype(fq[i].type), j, (unsigned long long)v, (unsigned long long)a, hr);
+            return hr;
+        }
+    }
+    hr = real_QWaitF(q, f, a);
+    if (k <= 200000 || done < v)
+        flog_("Q%d(%s) Wait F%d >= %llu [actual %llu] (completed %llu, asked %llu by %s%d)%s -> 0x%08lx",
+              i, i >= 0 ? qtype(fq[i].type) : "?", j, (unsigned long long)v, (unsigned long long)a,
+              (unsigned long long)done,
+              j >= 0 ? (unsigned long long)ff[j].asked : 0ULL,
+              j >= 0 && ff[j].who == -1 ? "CPU" : "Q", j >= 0 ? ff[j].who : -9,
+              done < v ? " NOT YET MET" : "", hr);
+    return hr;
+}
+static HRESULT WINAPI my_FSignalF(void *f, UINT64 v)
+{
+    int j;
+    HRESULT hr;
+    LONG k = InterlockedIncrement(&fence_ops);
+    AcquireSRWLockExclusive(&fence_lock);
+    j = f_index(f, FALSE);
+    if (j >= 0) { if (v > ff[j].asked) ff[j].asked = v; ff[j].who = -1; }
+    {
+        UINT64 a = (mono_fences && j >= 0 && ff[j].nbase) ? mono_signal_(j, v) : v;
+        ReleaseSRWLockExclusive(&fence_lock);
+        hr = real_FSignalF(f, a);
+        if (k <= 200000) flog_("CPU Signal F%d = %llu [actual %llu] -> 0x%08lx", j, (unsigned long long)v,
+                               (unsigned long long)a, hr);
+    }
+    return hr;
+}
+static HRESULT WINAPI my_FSetEventF(void *f, UINT64 v, HANDLE ev)
+{
+    int j;
+    UINT64 done = real_FGetCompletedF ? real_FGetCompletedF(f) : 0;
+    LONG k = InterlockedIncrement(&fence_ops);
+    AcquireSRWLockExclusive(&fence_lock);
+    UINT64 a = v;
+    j = f_index(f, FALSE);
+    if (mono_fences && j >= 0 && ff[j].nbase) { a = mono_wait_(j, v); done = mono_back_(j, done); }
+    ReleaseSRWLockExclusive(&fence_lock);
+    if (k <= 200000) flog_("CPU SetEventOnCompletion F%d >= %llu (completed %llu)%s",
+                         j, (unsigned long long)v, (unsigned long long)done, ev ? "" : " [blocking]");
+    return real_FSetEventF(f, a, ev);
+}
+
+static UINT64 WINAPI my_FGetCompletedF(void *f)
+{
+    UINT64 a = real_FGetCompletedF(f);
+    int j;
+    AcquireSRWLockShared(&fence_lock);
+    j = f_index(f, FALSE);
+    if (j >= 0 && ff[j].nbase) a = mono_back_(j, a);
+    ReleaseSRWLockShared(&fence_lock);
+    return a;
+}
+
+static HRESULT (WINAPI *real_SetEventMultiF)(void *, void *const *, const UINT64 *, UINT, UINT, HANDLE);
+static HRESULT WINAPI my_SetEventMultiF(void *dev, void *const *fences, const UINT64 *values,
+                                        UINT n, UINT flags, HANDLE ev)
+{
+    UINT64 tv[64];
+    UINT i;
+    if (n > 64) return real_SetEventMultiF(dev, fences, values, n, flags, ev);
+    AcquireSRWLockShared(&fence_lock);
+    for (i = 0; i < n; i++)
+    {
+        int j = f_index(fences[i], FALSE);
+        tv[i] = (j >= 0 && ff[j].nbase) ? mono_wait_(j, values[i]) : values[i];
+    }
+    ReleaseSRWLockShared(&fence_lock);
+    flog_("CPU SetEventOnMultipleFenceCompletion n=%u flags %u", n, flags);
+    return real_SetEventMultiF(dev, fences, tv, n, flags, ev);
+}
+
+static HRESULT WINAPI my_CreateFenceF(void *dev, UINT64 initial, UINT flags, const GUID *iid, void **out)
+{
+    HRESULT hr = real_CreateFenceF(dev, initial, flags, iid, out);
+    if (SUCCEEDED(hr) && out && *out)
+    {
+        static void *g, *se, *si;
+        int j;
+        void **vt = *(void ***)*out;
+        if (!real_FGetCompletedF) real_FGetCompletedF = (UINT64 (WINAPI *)(void *))vt[8];
+        if (mono_fences && !g && !patch_slot("fence GetCompletedValue", *out, 8, (void *)my_FGetCompletedF, &g))
+            flog_("GetCompletedValue NOT hooked: reads of translated fences would be wrong");
+        if (!se) { real_FSetEventF = (HRESULT (WINAPI *)(void *, UINT64, HANDLE))vt[9];
+                   if (!patch_slot("fence SetEventOnCompletion", *out, 9, (void *)my_FSetEventF, &se)) real_FSetEventF = NULL; }
+        if (!si) { real_FSignalF = (HRESULT (WINAPI *)(void *, UINT64))vt[10];
+                   if (!patch_slot("fence Signal", *out, 10, (void *)my_FSignalF, &si)) real_FSignalF = NULL; }
+        (void)g;
+        AcquireSRWLockExclusive(&fence_lock);
+        j = f_index(*out, TRUE);
+        if (j >= 0) { ff[j].initial = initial; ff[j].asked = initial; ff[j].last = initial;
+                      ff[j].top = initial; ff[j].base[0] = 0; ff[j].nbase = 1; }
+        ReleaseSRWLockExclusive(&fence_lock);
+        flog_("CreateFence F%d initial %llu flags 0x%x", j, (unsigned long long)initial, flags);
+    }
+    return hr;
+}
+
+static HRESULT WINAPI my_CreateCommandQueueF(void *dev, const void *desc, const GUID *iid, void **out)
+{
+    HRESULT hr = real_CreateCommandQueueF(dev, desc, iid, out);
+    if (SUCCEEDED(hr) && out && *out)
+    {
+        static void *e, *s, *w;
+        int i = -1, type = desc ? *(const int *)desc : -1;
+        void **vt = *(void ***)*out;
+        if (!e && fence_logging) { real_ExecuteCommandListsF = (void (WINAPI *)(void *, UINT, void *const *))vt[10];
+                  if (!patch_slot("queue ExecuteCommandLists", *out, 10, (void *)my_ExecuteCommandListsF, &e)) real_ExecuteCommandListsF = NULL; }
+        if (!s) { real_QSignalF = (HRESULT (WINAPI *)(void *, void *, UINT64))vt[14];
+                  if (!patch_slot("queue Signal", *out, 14, (void *)my_QSignalF, &s)) real_QSignalF = NULL; }
+        if (!w) { real_QWaitF = (HRESULT (WINAPI *)(void *, void *, UINT64))vt[15];
+                  if (!patch_slot("queue Wait", *out, 15, (void *)my_QWaitF, &w)) real_QWaitF = NULL; }
+        AcquireSRWLockExclusive(&fence_lock);
+        if (nq < MAXQ) { i = nq++; fq[i].q = *out; fq[i].dev = dev; fq[i].type = type; }
+        ReleaseSRWLockExclusive(&fence_lock);
+        flog_("CreateCommandQueue Q%d type %s priority %d flags 0x%x",
+              i, qtype(type), desc ? ((const int *)desc)[1] : 0, desc ? ((const int *)desc)[2] : 0);
+    }
+    return hr;
+}
+
+static DWORD WINAPI fence_watcher(void *unused)
+{
+    (void)unused;
+    for (;;)
+    {
+        int i, j, pend = 0;
+        Sleep(2000);
+        if (!real_FGetCompletedF) continue;
+        AcquireSRWLockShared(&fence_lock);
+        flog_("--- every queue at %.1fs: %ld operations so far, %ld waits bridged", (GetTickCount() - fence_t0) / 1000.0,
+              fence_ops, bridged_total);
+        for (i = 0; i < nq; i++)
+        {
+            UINT64 done = fq[i].wf ? real_FGetCompletedF(fq[i].wf) : 0;
+            j = fq[i].wf ? f_index(fq[i].wf, FALSE) : -1;
+            if (fq[i].wf && done < fq[i].wv) pend++;
+            flog_("  Q%d(%s) ecl=%ld last wait F%d >= %llu (now %llu)%s, last signal F%d = %llu",
+                  i, qtype(fq[i].type), fq[i].ecl, j, (unsigned long long)fq[i].wv, (unsigned long long)done,
+                  fq[i].wf && done < fq[i].wv ? " STILL WAITING" : "",
+                  fq[i].sf ? f_index(fq[i].sf, FALSE) : -1, (unsigned long long)fq[i].sv);
+        }
+        for (j = 0; j < nf; j++)
+        {
+            UINT64 done = real_FGetCompletedF(ff[j].f);
+            if (ff[j].nbase) done = mono_back_(j, done);
+            if (done < ff[j].asked)
+                flog_("  F%d completed %llu, asked %llu by %s%d, waited on %ld times",
+                      j, (unsigned long long)done, (unsigned long long)ff[j].asked,
+                      ff[j].who == -1 ? "CPU" : "Q", ff[j].who, ff[j].waits);
+        }
+        ReleaseSRWLockShared(&fence_lock);
+        (void)pend;
+    }
+    return 0;
+}
+
+static void arm_fence_watch(void *device)
+{
+    static void *cq, *cf;
+    void **vt = *(void ***)device;
+    fence_t0 = GetTickCount();
+    bridge_device = device;
+    real_CreateCommandQueueF = (HRESULT (WINAPI *)(void *, const void *, const GUID *, void **))vt[8];
+    if (!patch_slot("d3d12 CreateCommandQueue (fence watch)", device, 8, (void *)my_CreateCommandQueueF, &cq))
+        real_CreateCommandQueueF = NULL;
+    real_CreateFenceF = (HRESULT (WINAPI *)(void *, UINT64, UINT, const GUID *, void **))vt[36];
+    if (!patch_slot("d3d12 CreateFence (fence watch)", device, 36, (void *)my_CreateFenceF, &cf))
+        real_CreateFenceF = NULL;
+    if (mono_fences)
+    {
+        static void *em;
+        real_SetEventMultiF = (HRESULT (WINAPI *)(void *, void *const *, const UINT64 *, UINT, UINT, HANDLE))vt[45];
+        if (!patch_slot("d3d12 SetEventOnMultipleFenceCompletion (monotonic)", device, 45, (void *)my_SetEventMultiF, &em))
+            real_SetEventMultiF = NULL;
+    }
+    flog_("fence watch armed: monotonic fences %s, early waits bridged %s, every unmet wait bridged %s",
+          mono_fences ? "ON" : "off", bridge_waits ? "ON" : "off", bridge_all ? "ON" : "off");
+    flog_("fence watch armed: CreateCommandQueue %s, CreateFence %s",
+          real_CreateCommandQueueF ? "hooked" : "NOT hooked", real_CreateFenceF ? "hooked" : "NOT hooked");
+    if (fence_logging) CloseHandle(CreateThread(NULL, 0, fence_watcher, NULL, 0, NULL));
+}
+
 static HRESULT WINAPI my_D3D12CreateDevice(void *adapter, UINT level,
                                            const GUID *iid, void **device)
 {
     HRESULT hr = real_D3D12CreateDevice(adapter, level, iid, device);
     logf_("D3D12CreateDevice(featureLevel=0x%lx) -> 0x%08lx", level, hr);
+    if (SUCCEEDED(hr) && device && *device && !watch_fences)
+    {
+        /* The fence repair, and the switches around it. Switches are files
+         * beside this DLL as well as variables: a Steam Play tool hands the
+         * game only the variables on its own list (NotProton passes D3DM_*,
+         * MTL_* and a few more), so a marker file is the switch that reaches
+         * the process there.
+         *
+         *   built with NG4_FIX       the repair is on: monotonic fences, and
+         *                            every unmet wait bridged through the CPU
+         *   ng4-no-fence-fix.txt     the repair off
+         *   ng4-watch-fences.txt     log queues and fences to C:\ng4-fences.log
+         *   ng4-monotonic-fences.txt / ng4-bridge-early-waits.txt /
+         *   ng4-bridge-all-waits.txt the experiment's own pieces, one at a time
+         *
+         * On D3DMetal 3 the device's vtable cannot be patched (its objects live
+         * in native code wine reports as MEM_FREE), so nothing here takes and
+         * the title runs as it always has. */
+        char v[8] = { 0 }, path[MAX_PATH + 32];
+        HMODULE self = NULL;
+        char *slash = NULL;
+        BOOL logging = GetEnvironmentVariableA("NG4_WATCH_FENCES", v, sizeof(v)) && v[0] == '1';
+#ifdef NG4_FIX
+        BOOL fix = TRUE;
+#else
+        BOOL fix = FALSE;
+#endif
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                               | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               (LPCSTR)arm_fence_watch, &self)
+            && GetModuleFileNameA(self, path, MAX_PATH))
+            slash = strrchr(path, '\\');
+#define NG4_MARKER(name) (slash && (strcpy(slash + 1, (name)), GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES))
+        if (NG4_MARKER("ng4-watch-fences.txt")) logging = TRUE;
+        if (NG4_MARKER("ng4-monotonic-fences.txt")) mono_fences = TRUE;
+        if (NG4_MARKER("ng4-bridge-early-waits.txt")) bridge_waits = TRUE;
+        if (NG4_MARKER("ng4-bridge-all-waits.txt")) bridge_all = bridge_waits = TRUE;
+        if (fix) { mono_fences = TRUE; bridge_all = bridge_waits = TRUE; }
+        if (NG4_MARKER("ng4-no-fence-fix.txt")) mono_fences = bridge_all = bridge_waits = FALSE;
+#undef NG4_MARKER
+        fence_logging = logging;
+        logf_("fence repair: monotonic %s, unmet waits bridged %s, fence log %s",
+              mono_fences ? "on" : "off", bridge_all ? "on" : "off", logging ? "on" : "off");
+        if (logging || mono_fences || bridge_waits)
+        {
+            watch_fences = TRUE;
+            arm_fence_watch(*device);
+        }
+    }
     /*
      * Leave D3D12 alone.
      *

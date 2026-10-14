@@ -27,21 +27,27 @@
 # device manager, which sends decoding to software and keeps frames in system
 # memory; leaving it alone reaches the video and dies inside Metal.
 #
-# Neither of those makes a video play on its own. The container does: CrossOver
-# ships no Matroska demuxer, and 399 of this title's 400 `.msd` files are plain
-# WebM. Stage the codec from the app -- or runtime/stage-codecs.sh -- or this
-# fix will get the game to its menu with the cutscene still missing.
+# Neither of those makes a video play on its own. The container does: stable
+# CrossOver 26.3 ships no Matroska demuxer, and 399 of this title's 400 `.msd`
+# files are plain WebM. Stage the codec from the app -- or
+# runtime/stage-codecs.sh -- or this fix will get the game to its menu with the
+# cutscene still missing. CrossOver Preview 27 needs nothing staged: its own
+# GStreamer carries `matroska`, and VideoToolbox decodes the VP9 (measured
+# 2026-10-14, through NotProton: intro video and menu).
 #
 # DirectStorage must also be off: rename dstoragecore.dll beside the game. The
 # title takes another I/O path and plays; with it in place it dies earlier, for
 # reasons that are its own and not this project's.
 #
-# TOOLKIT. This title needs Apple's Game Porting Toolkit 3.0. On 4.0b2, measured
-# 2026-08-31, the Metal 4 submission queue parks in IOGPUCommandQueueWaitMTLEvent
-# with the GPU idle, so nothing is ever presented and the window does not reach
-# full screen; it also takes about five times as long to reach a cutscene. Setting
-# D3DM_MTL4=0 removes that queue and the stall with it. Neither is anything a
-# proxy can reach -- see the wiki -- and the app can put 3.0 back.
+# TOOLKIT. Apple's Game Porting Toolkit 3.0 runs this title as it is. On 4.x the
+# GPU waited forever and nothing was ever presented, and that turned out to be
+# two D3DMetal fence faults, which the proxy now repairs (2026-10-14): a fence
+# the game resets to 0 every frame loses a signal in the race, so signals are
+# made monotonic; and a queue's wait on another queue's fence is not woken when
+# the value arrives later, so every wait not yet met is bridged through the CPU.
+# With both the title renders on 4.0b3, Metal 4 on and off. 4.0b2 with the repair
+# was never run. Putting ng4-no-fence-fix.txt beside the game turns the repair
+# off; ng4-watch-fences.txt logs every fence operation to C:\ng4-fences.log.
 #
 # Part of MacGameVideoFix — https://github.com/MathiasKowoll/MacGameVideoFix
 # SPDX-License-Identifier: GPL-3.0-or-later
@@ -60,7 +66,7 @@
 #
 # MGVF-SCOPE: folder
 # MGVF-GAME: NINJA GAIDEN 4 | NINJAGAIDEN4-Steam.exe | 
-# MGVF-WHY: The game asks Media Foundation whether anything decodes VP9 and quits if the answer is zero. Needs the staged Matroska demuxer too.
+# MGVF-WHY: The game asks Media Foundation whether anything decodes VP9 and quits if the answer is zero; on D3DMetal 4 its fences are repaired so it presents at all. Needs the staged Matroska demuxer too, except on CrossOver Preview 27, which ships it.
 
 set -euo pipefail
 
@@ -200,4 +206,4 @@ if [ -f "$GAME/dstoragecore.dll" ]; then
   mv -f "$GAME/dstoragecore.dll" "$GAME/dstoragecore.dll.mgvf-off"
   echo "  DirectStorage turned off: dstoragecore.dll -> dstoragecore.dll.mgvf-off"
 fi
-echo "installed — answer the codec gate, and decode in software"
+echo "installed — answer the codec gate, decode in software, and repair D3DMetal 4's fences"

@@ -136,7 +136,7 @@ videos".
 | [Devil May Cry 5](RE-Engine-VC1.md) | RE Engine | Crashes when a skill preview video plays | Staged VC-1 codec. Nothing installed beside the game | D3DMetal | 12 | not measured | Stock | 26.3, our winegstreamer | Fixed |
 | [RESIDENT EVIL 2](RE-Engine-VC1.md) | RE Engine | Crashes when a video plays | The same staged VC-1 codec, unchanged | D3DMetal | 12 | not measured | Stock | 26.3, our winegstreamer | Fixed |
 | [RESIDENT EVIL 3](RE-Engine-VC1.md) | RE Engine | Crashes when a video plays | The same staged VC-1 codec, unchanged | D3DMetal | 12 | not measured | Stock | 26.3, our winegstreamer | Fixed |
-| [NINJA GAIDEN 4](Ninja-Gaiden-4.md) | Koei Tecmo, in-house | Says the VP9 codec is missing, then exits | Staged Matroska demuxer, and the MFT gate answered | D3DMetal | 12 | **3.0 only** -- on 4.0b2 nothing is ever presented: the game runs blind, every `Present` succeeds, the window stays black | Stock | 26.3, our winegstreamer | Fixed |
+| [NINJA GAIDEN 4](Ninja-Gaiden-4.md) | Koei Tecmo, in-house | Says the VP9 codec is missing, then exits | Staged Matroska demuxer, and the MFT gate answered | D3DMetal | 12 | **3.0**, or **4.0b3** with the fence repair this fix carries -- on 4.0b2 without it nothing is ever presented; 4.0b2 with it was not run | Stock | 26.3, our winegstreamer | Fixed |
 | [RESONANCE: A PLAGUE TALE LEGACY](Resonance-A-Plague-Tale-Legacy.md) | Asobo, in-house | Fatal error: Shader Model 6.7 is not supported | Shader model floor lowered in memory; HDR10 off in ENGINESETTINGS | D3DMetal | 12 | not measured | Stock | 26.3, our winegstreamer | Plays at the desktop resolution with HDR10 off -- its cutscenes have never been visible |
 | [CONTROL Resonant](Control-Resonant.md) | Northlight, Remedy in-house | Windows light up in flat violet, cyan and yellow | The window-interior shader kept from drawing; Metal 4 off | D3DMetal | 12 | 4.0b2 | Stock | 26.3, our winegstreamer | Plays with Metal 4 off; lit rooms behind windows show as dark glass |
 | [The Witcher 3: Wild Hunt](The-Witcher-3.md) | REDengine 3 | Black screen at start; DLSS said to be unsupported | The stream-output pipeline refused; Streamline's Wine check answered | D3DMetal | 12 | 4.0b2 | Stock | 26.3, our winegstreamer | Reaches the menu and plays; DLSS works, frame generation does not. Ray tracing stays off since the game's 2026-10-08 update: one of its ray-tracing shaders uses a 64-bit atomic compare-exchange that Metal refuses to compile (measured on an M4 Max) |
@@ -157,10 +157,11 @@ not touched. With the copy turned off in Set up, a toolkit you ask for goes into
 the CrossOver you installed instead, and the app says so where that choice is
 made.
 
-The exception is NINJA GAIDEN 4, which is the other way round: it is measured
-working on 3.0, and on 4.0b2 its cutscene plays its audio and no picture
-appears. It does not stall there and it does not exit; where the frames stop
-has not been established.
+The exception is NINJA GAIDEN 4, which was the other way round: measured
+working on 3.0, and on 4.0b2 its cutscene played its audio and no picture
+appeared. Where the frames stopped is now established -- two D3DMetal 4 fence
+faults, which the title's fix repairs since 2026-10-14 -- and with that repair
+it renders on 4.0b3, Metal 4 on and off.
 
 **The GPTK column is the one that decides.** Apple's Game Porting Toolkit is
 what actually draws these games, and CrossOver ships it inside the bundle
@@ -173,15 +174,16 @@ about Wine at all -- which is why dropping Preview costs the table nothing.
 
 Those three rows in bold are where that stops being a footnote, and they fall
 into two camps pointing opposite ways. **NINJA GAIDEN 4 is measured working on
-3.0, and on 4.0b2 nothing is ever presented -- the game runs blind while every
-`Present` succeeds. Life is Strange -- both packages -- runs on 4.0b2 and
-crashes on 3.0.** Opposite requirements, same machine, so there is no single
-toolkit that serves the whole table. Both were measured by moving the toolkit
-under a fixed CrossOver, which is the only way to separate the two.
+3.0, and on 4.0b2 without its fence repair nothing is ever presented -- the
+game runs blind while every `Present` succeeds; with the repair it renders on
+4.0b3. Life is Strange -- both packages -- runs on 4.0b2 and crashes on 3.0.**
+Opposite requirements, same machine, so there is no single toolkit that serves
+the whole table. Both were measured by moving the toolkit under a fixed
+CrossOver, which is the only way to separate the two.
 
 **Everywhere else the column says "not measured", and that is deliberate.**
 4.0b2 is what these titles need as a general rule, with NINJA GAIDEN 4 the
-exception at 3.0 -- but a rule is not a run, and a row whose toolkit nobody
+exception at 3.0 unless its fence repair is in place -- but a rule is not a run, and a row whose toolkit nobody
 varied has no measurement of its own to report. The cells that used to hold one
 were derived from the CrossOver build rather than run, and that derivation is
 gone: a launcher chooses the generation, so the build implies nothing about it.

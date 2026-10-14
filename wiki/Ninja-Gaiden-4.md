@@ -10,8 +10,8 @@ answer turned out to be a single missing demuxer.
 | Cause | CrossOver ships no Matroska demuxer, so a WebM is recognised and then has nothing to hand off to |
 | Fix | Stage `libgstmatroska` beside the decoder; answer the VP9 MFT gate and decode in software |
 | Backend | **D3DMetal**, D3D12 |
-| GPTK | 3.0 -- this title is the exception to the project's 4.0b2 rule |
-| CrossOver | Stable 26.3.0.39832, measured on a stock install as well as on this project's patched engine |
+| GPTK | 3.0; or 4.0b3 with the fence repair the fix carries since 2026-10-14 (see below). 4.0b2 with the repair was not run |
+| CrossOver | Stable 26.3.0.39832, measured on a stock install as well as on this project's patched engine; CrossOver Preview 27 through NotProton, with nothing staged (2026-10-14) |
 
 ## The message is misleading, and precisely so
 
@@ -197,7 +197,64 @@ DYNASTY WARRIORS: ORIGINS ships 355 `.webm` cutscenes, and its row records 26.3
 patched engine. Nobody has yet watched it play on a stock 26.3 with the demuxer
 staged, and that is the run still owed.
 
+## Fixed: two D3DMetal 4 fence faults (2026-10-14)
+
+**The section after this one closed too early.** It concluded that nothing a
+probe could reach explained the black window on 4.x. The fault was within
+reach: the game was waiting on GPU fences that never completed. With the GPU at
+0% utilisation for 100 seconds, the command buffers eventually timed out.
+
+The probe (`diagnostics/ng4-observe.c`, marker `ng4-watch-fences.txt`) logged
+every queue and fence operation. NINJA GAIDEN 4 runs three queues: direct, copy
+and compute. They pass work to each other through rotating fences, which the
+direct queue and the CPU reset to 0 every frame. The compute and direct queues
+also climb "ladders" on two fences: one queue waits on the odd values and signals
+the even ones, and the other does the reverse. On D3DMetal 4.0b3 two things
+fail:
+
+1. **A fence reset to 0 races with the next signal, and a signal is lost.**
+   Resetting a fence to a lower value is legal in D3D12. The repair makes the
+   fence monotonic. A return to 0, or to the value the fence was created with,
+   opens a new epoch above every value issued so far. Signals, waits,
+   `SetEventOnCompletion`, `SetEventOnMultipleFenceCompletion` and
+   `GetCompletedValue` are translated between the game's values and the real
+   ones. Only 0 or the initial value counts as a reset, because the ladders
+   legitimately record a lower value after a higher one: compute's half is
+   recorded before direct's. After this repair the HUD appeared, and the game
+   still stalled.
+2. **A queue's wait is not woken when another queue reaches the value later.**
+   A fence stood at 2, and the direct queue's wait for 2 never woke. The repair
+   bridges every wait that is not met when issued through the CPU. Each queue
+   gets a proxy fence and a worker thread. The queue waits on the proxy; the
+   thread waits on the real fence with `SetEventOnCompletion`, then signals the
+   proxy from the CPU.
+
+With both repairs the title renders on 4.0b3: 60 FPS with GPU time near 9 ms
+with Metal 4 off, per the Metal HUD, and it renders with Metal 4 on too. Both are on by default in the shipped
+`dstorage-ng4.dll`, built from the probe with `-DNG4_FIX`. That build keeps no
+log beyond one line in `C:\ng4-observe.log`: `fence repair: monotonic on,
+unmet waits bridged on, fence log off`. Put `ng4-no-fence-fix.txt` beside the
+game to turn the repair off, or `ng4-watch-fences.txt` to log every fence
+operation to `C:\ng4-fences.log`.
+
+**CrossOver Preview 27 now plays it with nothing staged.** Earlier the same
+day, without the repair, Preview reached full screen with music and a black
+picture, which is the 4.x symptom above. The video path needs nothing of ours
+there:
+Preview's GStreamer 1.28.4 carries `matroska`, and `applemedia`'s vtdec decodes
+VP9 through VideoToolbox. With the repair, on Preview 27 through NotProton with
+D3DMetal 4.0b3 and Metal 4 on, the intro video played and the menu came up. The
+MFT gate answer and the refused DXGI device manager are still needed there:
+Media Foundation on Preview offers no VP9 decoder MFT either.
+
+**Not measured:** D3DMetal 4.0b2 with the repair, because that toolkit was
+replaced before the repair existed. A long play session is also still owed.
+Launchers therefore still select 3.0 for this title.
+
 ## Closed on our side: with GPTK 4.0b2 nothing is ever presented
+
+*Superseded by the section above: the conclusion that nothing on the Windows
+side could reach the fault was wrong. Kept as the record of what was measured.*
 
 **This title is the exception to the project's toolkit rule.** The general rule
 is GPTK 4.0b2; NINJA GAIDEN 4 is measured working on 3.0, and that is what its

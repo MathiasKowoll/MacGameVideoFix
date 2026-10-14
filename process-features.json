@@ -121,7 +121,9 @@
       "codec": "libgstmatroska",
       "gptk": "3",
       "env": {},
-      "symptom": "Says the VP9 codec is missing, then exits"
+      "symptom": "Says the VP9 codec is missing, then exits",
+      "codec_shipped_by": "CrossOver Preview 27",
+      "gptk_also": "4.0b3"
     },
     "nioh.exe": {
       "title": "Nioh",

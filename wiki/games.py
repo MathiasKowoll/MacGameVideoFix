@@ -194,10 +194,11 @@ not touched. With the copy turned off in Set up, a toolkit you ask for goes into
 the CrossOver you installed instead, and the app says so where that choice is
 made.
 
-The exception is NINJA GAIDEN 4, which is the other way round: it is measured
-working on 3.0, and on 4.0b2 its cutscene plays its audio and no picture
-appears. It does not stall there and it does not exit; where the frames stop
-has not been established.
+The exception is NINJA GAIDEN 4, which was the other way round: measured
+working on 3.0, and on 4.0b2 its cutscene played its audio and no picture
+appeared. Where the frames stopped is now established -- two D3DMetal 4 fence
+faults, which the title's fix repairs since 2026-10-14 -- and with that repair
+it renders on 4.0b3, Metal 4 on and off.
 
 **The GPTK column is the one that decides.**
 Apple's Game Porting Toolkit is what actually draws these games, and CrossOver
@@ -211,7 +212,7 @@ the table nothing.
 
 Those {gptk_n} rows in bold are where that stops being a footnote, and they
 fall into two camps pointing opposite ways. **NINJA GAIDEN 4 is measured working
-on 3.0, and on 4.0b2 nothing is ever presented -- the game runs blind while every `Present` succeeds. Life is Strange -- both
+on 3.0, and on 4.0b2 without its fence repair nothing is ever presented -- the game runs blind while every `Present` succeeds; with the repair it renders on 4.0b3. Life is Strange -- both
 packages -- runs on 4.0b2 and crashes
 on 3.0.** Opposite requirements, same machine, so there is no single toolkit
 that serves the whole table.
@@ -220,7 +221,7 @@ only way to separate the two.
 
 **Everywhere else the column says "not measured", and that is deliberate.**
 4.0b2 is what these titles need as a general rule, with NINJA GAIDEN 4 the
-exception at 3.0 -- but a rule is not a run, and a row whose toolkit nobody
+exception at 3.0 unless its fence repair is in place -- but a rule is not a run, and a row whose toolkit nobody
 varied has no measurement of its own to report. The cells that used to hold one
 were derived from the CrossOver build rather than run, and that derivation is
 gone: a launcher chooses the generation, so the build implies nothing about it.
@@ -400,7 +401,9 @@ def _note():
     # what used to be counted here -- how many rows ran on a stable engine, how
     # many stalled on the other build -- was a count of a distinction the
     # CrossOver cell no longer draws.
-    gptk_req = [g for g in GAMES if "only" in gptk(g[0])]
+    # A cell is a requirement when it is bold: "only", or NINJA GAIDEN 4's
+    # "**3.0**, or **4.0b3** with the fence repair", which still rules 4.0b2 out.
+    gptk_req = [g for g in GAMES if gptk(g[0]).startswith("**")]
     values = dict(gptk_n=_word(len(gptk_req)))
     # Substituting a word of a different length leaves the paragraph ragged, so
     # the ones that take a value are rewrapped and the rest are left exactly as
@@ -689,6 +692,25 @@ ENGINE_NEEDED = {
 }
 
 
+# Engines that ship, themselves, the plugin a title's Codec cell names. The cell
+# stays true for stable 26.3, which ships no Matroska demuxer; this says where
+# nothing has to be staged at all, and only where a run showed it. NINJA GAIDEN
+# 4 played its intro video and reached its menu on CrossOver Preview 27 through
+# NotProton (2026-10-14) with nothing staged: Preview's GStreamer 1.28 carries
+# `matroska`, and `applemedia`'s vtdec decodes VP9 through VideoToolbox.
+#
+# MacGameFix reads this: a codec title enters it only when an engine as
+# CodeWeavers ships it already carries that codec.
+CODEC_SHIPPED_BY = {
+    "NINJA GAIDEN 4": "CrossOver Preview 27",
+}
+
+# A toolkit generation measured working besides the one `gptk` selects.
+GPTK_ALSO = {
+    "NINJA GAIDEN 4": "4.0b3",
+}
+
+
 def engine_needed(title):
     """Stock unless a fix demonstrably needs something inside the engine."""
     return ENGINE_NEEDED.get(title, "Stock")
@@ -772,7 +794,12 @@ GPTK_BY_TITLE = {
     # it" is retracted; it was never measured. "Preview stalls before video" is
     # measured but names a CrossOver build, which is what the CrossOver cell is
     # for -- putting it here said nothing about the toolkit twice over.
-    "NINJA GAIDEN 4": "**3.0 only** -- on 4.0b2 nothing is ever presented: the game runs blind, every `Present` succeeds, the window stays black",
+    #
+    # 2026-10-14: the blindness on 4.x was two D3DMetal fence faults, and the
+    # fix's proxy now repairs both (see the page). With it the title renders on
+    # 4.0b3, Metal 4 on and off. 4.0b2 with the repair was never run -- that
+    # toolkit was replaced before the repair existed -- so it is not claimed.
+    "NINJA GAIDEN 4": "**3.0**, or **4.0b3** with the fence repair this fix carries -- on 4.0b2 without it nothing is ever presented; 4.0b2 with it was not run",
     "Life is Strange: Reunion": "**4.0b2 only** -- 3.0 crashes it",
     "Life is Strange: Double Exposure": "**4.0b2 only** -- 3.0 crashes it",
 }
@@ -954,7 +981,13 @@ def config_json():
     for g, engine, sym, fix, backend, dx, cx, status, page in GAMES:
         want = gptk(g)
         gen = ""
-        if "only" in want:
+        # NINJA GAIDEN 4 keeps "3" here although 4.0b3 renders it too. This is
+        # the generation a launcher selects, and 3.0 is the one measured working
+        # unconditionally; a launcher whose 4.x is 4.0b2 would otherwise land on
+        # the one toolkit the repair was never run on.
+        if want.startswith("**3.0**, or"):
+            gen = "3"
+        elif "only" in want:
             if "3.0 only" in want:
                 gen = "3"
             elif "4.0b2 only" in want:
@@ -1066,6 +1099,10 @@ def features_json():
         motor = engine_needed(g)
         if motor not in ("Stock", "Stock&dagger;", "None"):
             entry["needs_engine"] = motor.replace("**", "")
+        if g in CODEC_SHIPPED_BY:
+            entry["codec_shipped_by"] = CODEC_SHIPPED_BY[g]
+        if g in GPTK_ALSO:
+            entry["gptk_also"] = GPTK_ALSO[g]
         procs[exe] = entry
     missing = sorted(g for g, *_ in GAMES if g not in exes)
     # An executable name is a key here, and some of them are not distinctive
