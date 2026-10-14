@@ -15,7 +15,8 @@
       "gptk": "",
       "env": {},
       "symptom": "Startup video plays with sound, no picture",
-      "needs_engine": "winevideo"
+      "needs_engine": "winevideo",
+      "engine_not_needed_on": "CrossOver Preview 27"
     },
     "Chronos-Win64-Shipping.exe": {
       "title": "Life is Strange: Double Exposure",

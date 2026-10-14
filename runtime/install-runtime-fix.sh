@@ -175,7 +175,17 @@ case "$MODE" in
   [ -f "$PROXY" ] || { echo "error: proxy DLL not found at $PROXY" >&2; exit 1; }
 
   if [ "$(status)" = installed ]; then
-    echo "the runtime fix is already installed, nothing to do"
+    # Installed is not up to date. The proxy is ours and the original is safe
+    # under $REAL, so a newer build replaces only our own file -- which is what
+    # re-running is for. Saying "nothing to do" here left an old build in place
+    # after a fix grew a new half (Beast of Reincarnation, 2026-10-14).
+    if cmp -s "$LIVE" "$PROXY"; then
+      echo "the runtime fix is already installed and up to date"
+    else
+      cp "$PROXY" "$LIVE.new" && mv -f "$LIVE.new" "$LIVE" || {
+        rm -f "$LIVE.new"; echo "error: could not replace the older proxy" >&2; exit 1; }
+      echo "the runtime fix is updated to this build"
+    fi
     exit 0
   fi
 

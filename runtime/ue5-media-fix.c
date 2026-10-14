@@ -1700,6 +1700,33 @@ static HRESULT WINAPI my_ActivateObject(void *self, REFIID iid, void **out)
                 logf_("  asked it for low latency -> 0x%08lx%s", hr2,
                       SUCCEEDED(hr2) ? "  (should emit without hoarding now)"
                                      : "  (refused; it will keep buffering)");
+                /* What winevideo's winegstreamer patch 0006 does inside the
+                 * engine, done here instead: the decoder stops saying it is
+                 * D3D-aware, so Electra builds no D3D11 device for it and
+                 * answers its own IsSoftware() honestly. Set on the decoder's
+                 * own store, before Electra ever holds the pointer. On an engine
+                 * carrying 0006 the value is already absent, and 0 changes
+                 * nothing. Only for an H.264 decoder, which is the one Electra
+                 * takes the D3D path with. */
+                if (h264_wanted)
+                {
+                    static const GUID MF_SA_D3D_AWARE_ =
+                        { 0xeaa35c29, 0x775e, 0x488e,
+                          { 0x9b, 0x61, 0xb3, 0x28, 0x3e, 0x49, 0x58, 0x3b } };
+                    static const GUID MF_SA_D3D11_AWARE_ =
+                        { 0x206b4fc8, 0xfcf9, 0x4c51,
+                          { 0xaf, 0xe3, 0x97, 0x64, 0x36, 0x9e, 0x33, 0xa0 } };
+                    HRESULT (WINAPI *get_u32)(void *, REFGUID, UINT32 *) =
+                        (HRESULT (WINAPI *)(void *, REFGUID, UINT32 *))avt[7];
+                    UINT32 was9 = 0, was11 = 0;
+                    HRESULT g9 = get_u32(attrs, &MF_SA_D3D_AWARE_, &was9);
+                    HRESULT g11 = get_u32(attrs, &MF_SA_D3D11_AWARE_, &was11);
+                    HRESULT s9 = set_u32(attrs, &MF_SA_D3D_AWARE_, 0);
+                    HRESULT s11 = set_u32(attrs, &MF_SA_D3D11_AWARE_, 0);
+                    logf_("  D3D awareness hidden: D3D_AWARE was %s%u -> 0x%08lx, D3D11_AWARE was %s%u -> 0x%08lx",
+                          SUCCEEDED(g9) ? "" : "absent ", was9, s9,
+                          SUCCEEDED(g11) ? "" : "absent ", was11, s11);
+                }
                 ((ULONG (WINAPI *)(void *))avt[2])(attrs);
             }
             else logf_("  no attribute store on the transform");

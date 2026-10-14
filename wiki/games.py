@@ -724,6 +724,16 @@ CODEC_SHIPPED_BY = {
     "DYNASTY WARRIORS: ORIGINS": "CrossOver Preview 27",
 }
 
+# Titles whose Motor cell names an engine of ours or winevideo's, measured
+# playing on an engine as CodeWeavers ships it. The Motor cell stays true for
+# stable 26.3; this says where nothing of the engine is needed. Beast of
+# Reincarnation, 2026-10-14, Preview 27 through NotProton, D3DMetal, only its
+# folder fix: the startup video plays. Preview's own winegstreamer already
+# reports MF_SA_D3D_AWARE as 0, which is what winevideo's 0006 makes 26.3 do.
+ENGINE_NOT_NEEDED_ON = {
+    "Beast of Reincarnation": "CrossOver Preview 27",
+}
+
 # A toolkit generation measured working besides the one `gptk` selects.
 GPTK_ALSO = {
     "NINJA GAIDEN 4": "4.0b3",
@@ -1120,6 +1130,8 @@ def features_json():
             entry["needs_engine"] = motor.replace("**", "")
         if g in CODEC_SHIPPED_BY:
             entry["codec_shipped_by"] = CODEC_SHIPPED_BY[g]
+        if g in ENGINE_NOT_NEEDED_ON:
+            entry["engine_not_needed_on"] = ENGINE_NOT_NEEDED_ON[g]
         if g in GPTK_ALSO:
             entry["gptk_also"] = GPTK_ALSO[g]
         procs[exe] = entry

@@ -11,6 +11,20 @@ Unreal Engine 5. The startup video plays its sound and shows nothing.
 | CrossOver | Stable 26.3, on an engine carrying **winevideo**'s `winegstreamer`. A plain 26.3 stalls after two frames |
 | winevideo | **Required**, since the game update of 2026-08-24 |
 
+## CrossOver Preview 27 needs nothing of the engine (2026-10-14)
+
+Run through NotProton on Preview 27, D3DMetal, with only the folder fix: the
+startup video plays. The decoder is Preview's own H.264 MFT, which decodes
+through VideoToolbox. It already reports `MF_SA_D3D_AWARE` and
+`MF_SA_D3D11_AWARE` as 0, which is what winevideo's patch 0006 makes 26.3 do,
+so the console variable is all this title needs there. Frames came out
+steadily: 240 in the first 11 seconds, where a plain 26.3 stalled after two.
+
+The fix now also sets both attributes to 0 on the decoder itself, before
+Electra holds it. On Preview that changes nothing, since they are already 0.
+On a 26.3 without 0006 it is meant to do what 0006 does, but that has not
+been run.
+
 ## The addresses are gone, and that is the end of this cycle
 
 **2026-09-09.** The title shipped a third build in sixteen days --
