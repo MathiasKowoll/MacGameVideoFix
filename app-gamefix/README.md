@@ -44,6 +44,8 @@ Quit a game before installing or removing its fix.
 | Mortal Shell 2 | Crash on the first cutscene | D3DMetal |
 | NieR Replicant ver.1.22474487139 | Crashes when the first video starts | D3DMetal, a prefix |
 | NINJA GAIDEN 4 | Says the VP9 codec is missing, then exits; on D3DMetal 4, nothing is ever drawn | D3DMetal 3 or 4.0b3, CrossOver Preview 27 |
+| Nioh | "Failure to play movie", then a crash | DXMT |
+| Nioh 2 | Cutscene refuses to play, then a crash | DXMT |
 | Nioh 3 | "Failed to play movie" | D3DMetal |
 | Persona 5 Strikers | Video never starts; sound only | DXMT |
 | RESIDENT EVIL 2 | Crashes when a video plays | D3DMetal |
@@ -74,6 +76,16 @@ reproduced on demand, even on 4.0b2, so for those two the sessions show that
 nothing went wrong rather than a fault cured.) Spider-Man 2, The Witcher 3, Tormented Souls 2, TMNT and Wo Long still
 needed theirs, and God of War runs on DXMT, which the toolkit does not change. Every
 fix stays, for anyone on 4.0b2 and earlier.
+
+### Nioh and Nioh 2 decode their own video
+
+Their cutscenes are WMV3, which no CrossOver decodes. Nioh plays them through
+DirectShow, and its fix gives the video the Windows Media reader Windows would
+give it, with a WMV3 decoder of its own behind it. Nioh 2 plays them through
+Media Foundation and uses the same reader as Persona 5 Strikers. Both must run
+on **DXMT**: with a Steam Play tool, set `CX_GRAPHICS_BACKEND=dxmt %command%`.
+Measured on 2026-10-14 on CrossOver Preview 27 through NotProton, with nothing
+else installed: the videos play.
 
 ### NieR Replicant decodes its own video, and needs a prefix
 
