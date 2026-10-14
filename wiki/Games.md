@@ -228,8 +228,8 @@ user on 2026-10-13 and 14.
 | --- | --- | --- |
 | CONTROL Resonant | Windows drawn correctly | No |
 | RESONANCE: A Plague Tale Legacy | Starts and plays | No |
-| Life is Strange: Double Exposure | Played over five minutes; see below | Not shown |
-| Life is Strange: Reunion | Played; see below | Not shown |
+| Life is Strange: Double Exposure | Played without problems, over five minutes | No |
+| Life is Strange: Reunion | Played without problems | No |
 | Marvel's Spider-Man 2 | Its faults return | Yes |
 | The Witcher 3: Wild Hunt | Its faults return | Yes |
 | Tormented Souls 2 | Its fault returns | Yes |
@@ -240,8 +240,10 @@ user on 2026-10-13 and 14.
 For the four that played, the fix was checked to be absent rather than assumed:
 the installer's `--status` said `absent`, the game's own DLL was in place, and
 the fix's log in the prefix had not been written since before the toolkit
-changed. Neither Life is Strange title's freeze was ever reproduced on demand,
-so a session without the fix says little; their rows claim nothing.
+changed. Both Life is Strange titles played without problems and the user
+judged their fixes unnecessary on 4.0b3. Their freeze was never reproduced on
+demand on 4.0b2 either, so what these sessions show is that nothing went wrong,
+not that a fault was seen and then cured.
 
 **Every fix stays.** They are for whoever runs 4.0b2 or earlier, and on 4.0b3 the
 ones no longer needed do nothing worse than hide a fault that is no longer
