@@ -216,6 +216,43 @@ page comes from a measurement on an installed copy.
 
 <!-- games:end -->
 
+## Game Porting Toolkit 4.0b3
+
+Apple released 4.0b3 on 2026-10-13. Every fix in the table was written against
+4.0b2, so the question was which of them 4.0b3 makes unnecessary. It was answered
+the plain way: every game-folder fix removed, each title played on D3DMetal
+4.0b3, on CrossOver Preview 27 through NotProton. The titles were played by the
+user on 2026-10-13 and 14.
+
+| Game | Without its fix on 4.0b3 | Fix needed on 4.0b3 |
+| --- | --- | --- |
+| CONTROL Resonant | Windows drawn correctly | No |
+| RESONANCE: A Plague Tale Legacy | Starts and plays | No |
+| Life is Strange: Reunion | Played; see below | Not shown |
+| Marvel's Spider-Man 2 | Its faults return | Yes |
+| The Witcher 3: Wild Hunt | Its faults return | Yes |
+| Tormented Souls 2 | Its fault returns | Yes |
+| TMNT: Splintered Fate | Its fault returns | Yes |
+| Wo Long: Fallen Dynasty | Its fault returns | Yes |
+| God of War | Runs on DXMT, which the toolkit does not change | Yes |
+
+For the three that played, the fix was checked to be absent rather than assumed:
+the installer's `--status` said `absent`, the game's own DLL was in place, and
+the fix's log in the prefix had not been written since before the toolkit
+changed. Life is Strange: Reunion's freeze was never reproduced on demand, so a
+session without it says little; its row claims nothing.
+
+**Every fix stays.** They are for whoever runs 4.0b2 or earlier, and on 4.0b3 the
+ones no longer needed do nothing worse than hide a fault that is no longer
+there. Which change in 4.0b3 cured CONTROL Resonant's windows or RESONANCE's
+start has not been measured. The GPTK column of the table above still records what
+each fix was measured against, and for these titles that is 4.0b2.
+
+4.0b3 adds a file the toolkit directory must carry: its `d3d12.dll` imports
+`d3d12core.dll`, so a toolkit installed without it runs Apple's d3d12 over
+Wine's own d3d12core.
+
+
 ## What each title actually loads
 
 The table above says whether a title works. This one says what it is made of:
