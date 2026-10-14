@@ -496,7 +496,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         switch self {
         // Persona 5 Strikers no longer: its fix carries its own VC-1 reader,
         // measured playing on an engine with nothing staged (2026-10-14).
-        case .nioh, .nioh2:    return "Also needs the WMV3 codec staged."
+        // Nioh and Nioh 2 no longer: their fix decodes WMV3 itself, measured
+        // playing on an engine with nothing staged (2026-10-14).
         default:               return nil
         }
     }

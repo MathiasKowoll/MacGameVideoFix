@@ -82,11 +82,11 @@ GAMES = [
      "**DXVK**", "9", MEASURED,
      "Starts, 60 fps, in-game cutscenes; the boot movie freezes, one click skips it", "Ninja-Gaiden-3-Razors-Edge"),
     ("Nioh", "Koei Tecmo, in-house",
-     "Cutscene refuses to play, then crashes", "Staged WMV3 codec, and the same D3D9 to D3D11 bridge",
+     "Cutscene refuses to play, then crashes", "Its own WMV3 reader for DirectShow, and the same D3D9 to D3D11 bridge",
      "**DXMT**", "11", MEASURED,
      "Fixed", "Nioh"),
     ("Nioh 2", "Koei Tecmo, in-house",
-     "Cutscene refuses to play, then crashes", "Same codec and same bridge as Nioh, unchanged",
+     "Cutscene refuses to play, then crashes", "The same bridge as Nioh; its own WMV3 reader on Media Foundation",
      "**DXMT**", "11", MEASURED,
      "Fixed", "Nioh-2"),
     ("Nioh 3", "Koei Tecmo, in-house",
@@ -462,8 +462,11 @@ CODEC = {
     # VC-1 / WMA Pro decoders), which the bridge asks when Media Foundation
     # refuses the file. A staged libav still works and is then simply used first.
     "Persona 5 Strikers": NONE,
-    "Nioh": "`libgstlibav`",
-    "Nioh 2": "`libgstlibav`",
+    # Measured with nothing staged on 2026-10-14, Preview 27 through NotProton,
+    # DXMT: Nioh through DirectShow (the WM ASF Reader given to the graph, and
+    # wm-reader.c behind it), Nioh 2 through Media Foundation (asf-reader.c).
+    "Nioh": NONE,
+    "Nioh 2": NONE,
     # Measured with nothing staged on 2026-10-14, on CrossOver Preview 27: the
     # fix hands a refused stream to its own reader (mgvf-asf-reader.dll), and
     # the skill previews play. RESIDENT EVIL 2 and 3 stay on the staged codec

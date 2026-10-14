@@ -127,7 +127,7 @@
     "nioh.exe": {
       "title": "Nioh",
       "backend": "dxmt",
-      "codec": "libgstlibav",
+      "codec": "",
       "gptk": "",
       "env": {},
       "symptom": "Cutscene refuses to play, then crashes"
@@ -135,7 +135,7 @@
     "nioh2.exe": {
       "title": "Nioh 2",
       "backend": "dxmt",
-      "codec": "libgstlibav",
+      "codec": "",
       "gptk": "",
       "env": {},
       "symptom": "Cutscene refuses to play, then crashes"

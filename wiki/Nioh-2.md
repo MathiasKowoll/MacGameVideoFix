@@ -10,9 +10,19 @@ code change, no rebuild, the same proxy binary already built for
 | Video | WMV3 in ASF, 529 files |
 | Played by | `IMFSourceReader` on Media Foundation, presented onto a shared D3D9 surface |
 | Symptom | The cutscene refuses to play, then the game crashes |
-| Fix | Stage the WMV3 decoder, then hand the game a share handle that exists |
+| Fix | The fix's own WMV3 reader (or a staged decoder), then hand the game a share handle that exists |
 | Backend | **DXMT only.** The sidecar needs `GetSharedHandle`, `E_NOTIMPL` under D3DMetal |
-| CrossOver | Stable 26.3, on a copy of it carrying this project's `winegstreamer` (2026-08-31) |
+| CrossOver | Stable 26.3, on a copy of it carrying this project's `winegstreamer` (2026-08-31); CrossOver Preview 27 through NotProton with nothing staged (2026-10-14) |
+
+## Without a codec in the engine (2026-10-14)
+
+Nioh 2 plays through Media Foundation, so it takes the route Persona 5
+Strikers took. Media Foundation refused the file (`0xc00d36bb`), the bridge
+handed the stream to `mgvf-asf-reader.dll`, and the game passed its D3D9 device
+manager, so the frames went out as NV12 surfaces on its device. Measured on
+CrossOver Preview 27 through NotProton, DXMT, nothing staged: a 1920x1080 WMV3
+of about 83 seconds played through all 2482 frames, and the picture reached
+the shared surface.
 
 ## What it shares with Nioh, and what it does not
 

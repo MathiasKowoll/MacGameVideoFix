@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build mgvf-asf-reader.dll: asf-reader.c over a minimal, static FFmpeg.
+# Build mgvf-asf-reader.dll: asf-reader.c (a Media Foundation source reader) and
+# wmv-dmo.c (a DirectShow WMV decoder) over a minimal, static FFmpeg.
 #
 #   runtime/build-asf-reader.sh            build into runtime/
 #
@@ -49,8 +50,8 @@ if [ ! -f "$PREFIX/lib/libavcodec.a" ]; then
     make install >/dev/null )
 fi
 
-"$CC" -shared -O2 -Wall -I"$PREFIX/include" -o "$HERE/mgvf-asf-reader.dll" "$HERE/asf-reader.c" \
+"$CC" -shared -O2 -Wall -I"$PREFIX/include" -o "$HERE/mgvf-asf-reader.dll" "$HERE/asf-reader.c" "$HERE/wmv-dmo.c" "$HERE/wm-reader.c" "$HERE/dshow-graph.c" \
   "$PREFIX/lib/libavformat.a" "$PREFIX/lib/libavcodec.a" "$PREFIX/lib/libavutil.a" \
-  -lmfplat -lmfuuid -lole32 -lbcrypt -Wl,--no-insert-timestamp -s
+  -lmfplat -lmfuuid -lole32 -lstrmiids -luuid -lbcrypt -Wl,--no-insert-timestamp -s
 echo "built $HERE/mgvf-asf-reader.dll"
 shasum -a 256 "$HERE/mgvf-asf-reader.dll"

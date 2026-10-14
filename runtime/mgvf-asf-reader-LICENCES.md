@@ -1,8 +1,10 @@
 # mgvf-asf-reader.dll — FFmpeg inside
 
 `mgvf-asf-reader.dll` is installed beside the games whose fix needs it
-(Persona 5 Strikers, the RE Engine titles, NieR Replicant). It is a Media Foundation source reader written for
-this project (`asf-reader.c`, GPL-3.0-or-later) and statically linked against
+(Persona 5 Strikers, the RE Engine titles, NieR Replicant, Nioh and Nioh 2). It
+holds a Media Foundation source reader, a DirectShow WMV decoder, a WM reader
+and a filter-graph helper written for this project (`asf-reader.c`,
+`wmv-dmo.c`, `wm-reader.c`, `dshow-graph.c`, GPL-3.0-or-later), statically linked against
 FFmpeg, which is other people's work. This notice travels with the binary
 because the LGPL asks for it.
 
@@ -23,4 +25,4 @@ different FFmpeg is the same script with `FFVER` and `FFSHA` changed.
 
 ## The binary, as shipped here
 
-- `mgvf-asf-reader.dll` — `f4227b1551946a8cfb681021cba08cba5252dd429facd212ee5432ab13d0973b`
+- `mgvf-asf-reader.dll` — `f837928f6ee0e1f3fb80d5a8585ae21f2a46cf1e25a8ff7b0c5bc3d285939de3`

@@ -1105,6 +1105,9 @@ static void sniff_stream_(void *stream)
  * so an engine that can open the file never reaches it. A file
  * p5s-no-asf-reader.txt beside the game turns it off. */
 static HRESULT (WINAPI *asf_reader_create)(void *, void *, void **);
+static HRESULT (WINAPI *wmv_dmo_create)(void *, REFIID, void **);
+static HRESULT (WINAPI *wm_reader_wrap)(void *, void **);
+static void (WINAPI *patch_filter_graph)(void *);
 
 static BOOL load_asf_reader_(void)
 {
@@ -1138,6 +1141,9 @@ static BOOL load_asf_reader_(void)
         return FALSE;
     }
     *(FARPROC *)&asf_reader_create = GetProcAddress(mod, "MGVF_CreateAsfReader");
+    *(FARPROC *)&wmv_dmo_create = GetProcAddress(mod, "MGVF_CreateWmvDmo");
+    *(FARPROC *)&wm_reader_wrap = GetProcAddress(mod, "MGVF_WrapWMReader");
+    *(FARPROC *)&patch_filter_graph = GetProcAddress(mod, "MGVF_PatchFilterGraph");
     logf_("own ASF reader: %s", asf_reader_create ? "loaded" : "loaded, but it exports no MGVF_CreateAsfReader");
     return asf_reader_create != NULL;
 }
@@ -2441,10 +2447,149 @@ static void dump_environment(void)
     }
 }
 
+/* THE SAME, FOR DIRECTSHOW.
+ *
+ * Nioh and Nioh 2 play WMV3 through DirectShow. Wine's DMO wrapper, in
+ * qasf.dll, creates the WMVideo Decoder DMO by CLSID; wine's is a shim over a
+ * GStreamer decoder, and with none to wrap -- any CrossOver without the staged
+ * codec -- creating it fails and the graph never builds (the wiki's
+ * IDMOWrapperFilter::Init -> 0xD0000001). qasf's own import of
+ * CoCreateInstance is replaced, and when that one CLSID fails, the decoder in
+ * mgvf-asf-reader.dll (wmv-dmo.c) is created instead -- aggregated, as the
+ * wrapper asked. Anything that succeeds, and every other CLSID, passes
+ * through untouched. */
+static const GUID clsid_wmv_decoder =
+    { 0x82d353df, 0x90bd, 0x4382, { 0x8b, 0xc2, 0x3f, 0x61, 0x92, 0xb7, 0x6e, 0x34 } };
+static HRESULT (WINAPI *real_qasf_CoCreateInstance)(REFCLSID, void *, DWORD, REFIID, void **);
+
+static HRESULT WINAPI my_qasf_CoCreateInstance(REFCLSID clsid, void *outer, DWORD ctx,
+                                               REFIID iid, void **out)
+{
+    HRESULT hr = real_qasf_CoCreateInstance(clsid, outer, ctx, iid, out);
+    if (FAILED(hr) && clsid && IsEqualGUID(clsid, &clsid_wmv_decoder) && out)
+    {
+        static LONG said;
+        HRESULT mine = E_NOINTERFACE;
+        if (load_asf_reader_() && wmv_dmo_create) mine = wmv_dmo_create(outer, iid, out);
+        if (InterlockedIncrement(&said) <= 3 || FAILED(mine))
+            logf_("WMVideo Decoder DMO refused (0x%08lx); our decoder -> 0x%08lx", hr, mine);
+        if (SUCCEEDED(mine)) hr = mine;
+    }
+    return hr;
+}
+
+/* And the reader itself. Wine's WM ASF Reader opens a .wmv through wmvcore's
+ * IWMReader, which prepares every stream decoded while it opens -- so with no
+ * WMV3 decoder the open fails, the filter has no pins, and the decoder above is
+ * never even reached (measured: it was only ever offered the raw file). The
+ * reader qasf creates is wrapped (wm-reader.c): wine's opens first and keeps
+ * everything if it can; only a file it refuses is opened by ours. */
+static HRESULT (WINAPI *real_qasf_WMCreateReader)(void *, DWORD, void **);
+
+static HRESULT WINAPI my_qasf_WMCreateReader(void *reserved, DWORD rights, void **reader)
+{
+    HRESULT hr = real_qasf_WMCreateReader(reserved, rights, reader);
+    if (SUCCEEDED(hr) && reader && *reader && load_asf_reader_() && wm_reader_wrap)
+    {
+        static LONG said;
+        void *wrapped = NULL;
+        if (SUCCEEDED(wm_reader_wrap(*reader, &wrapped)) && wrapped) *reader = wrapped;
+        if (InterlockedIncrement(&said) == 1) logf_("WM reader wrapped: ours opens what wine's cannot");
+    }
+    return hr;
+}
+
+/* And the graph the game builds. Wine's prefixes carry no Media Type\Extensions
+ * key for .wmv, so DirectShow opens one with the generic async file source and
+ * the WM ASF Reader is never used (measured: the decoder was only ever offered
+ * the raw file). The game's own CoCreateInstance is watched for a filter graph,
+ * whose RenderFile and AddSourceFilter then give a .wmv the WM ASF Reader the
+ * way Windows does (dshow-graph.c) -- RenderFile only after wine's own attempt
+ * has failed. */
+static const GUID clsid_filter_graph =
+    { 0xe436ebb3, 0x524f, 0x11ce, { 0x9f, 0x53, 0x00, 0x20, 0xaf, 0x0b, 0xa7, 0x70 } };
+static const GUID clsid_filter_graph_no_thread =
+    { 0xe436ebb8, 0x524f, 0x11ce, { 0x9f, 0x53, 0x00, 0x20, 0xaf, 0x0b, 0xa7, 0x70 } };
+static HRESULT (WINAPI *real_game_CoCreateInstance)(REFCLSID, void *, DWORD, REFIID, void **);
+
+static HRESULT WINAPI my_game_CoCreateInstance(REFCLSID clsid, void *outer, DWORD ctx, REFIID iid, void **out)
+{
+    HRESULT hr = real_game_CoCreateInstance(clsid, outer, ctx, iid, out);
+    if (SUCCEEDED(hr) && out && *out && clsid
+        && (IsEqualGUID(clsid, &clsid_filter_graph) || IsEqualGUID(clsid, &clsid_filter_graph_no_thread))
+        && load_asf_reader_() && patch_filter_graph)
+        patch_filter_graph(*out);
+    return hr;
+}
+
+static void *hook_module_import(HMODULE base, const char *dll, const char *func, void *replacement)
+{
+    IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;
+    IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)((BYTE *)base + dos->e_lfanew);
+    IMAGE_DATA_DIRECTORY *dir = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    IMAGE_IMPORT_DESCRIPTOR *imp;
+
+    if (!dir->VirtualAddress) return NULL;
+    for (imp = (IMAGE_IMPORT_DESCRIPTOR *)((BYTE *)base + dir->VirtualAddress); imp->Name; imp++)
+    {
+        IMAGE_THUNK_DATA *orig, *iat;
+        if (lstrcmpiA((const char *)((BYTE *)base + imp->Name), dll) != 0) continue;
+        orig = (IMAGE_THUNK_DATA *)((BYTE *)base + (imp->OriginalFirstThunk ? imp->OriginalFirstThunk : imp->FirstThunk));
+        iat  = (IMAGE_THUNK_DATA *)((BYTE *)base + imp->FirstThunk);
+        for (; orig->u1.AddressOfData; orig++, iat++)
+        {
+            IMAGE_IMPORT_BY_NAME *by;
+            void *original;
+            DWORD old;
+            if (IMAGE_SNAP_BY_ORDINAL(orig->u1.Ordinal)) continue;
+            by = (IMAGE_IMPORT_BY_NAME *)((BYTE *)base + orig->u1.AddressOfData);
+            if (lstrcmpiA((const char *)by->Name, func) != 0) continue;
+            original = (void *)iat->u1.Function;
+            if (!VirtualProtect(&iat->u1.Function, sizeof(void *), PAGE_READWRITE, &old)) return NULL;
+            iat->u1.Function = (ULONG_PTR)replacement;
+            VirtualProtect(&iat->u1.Function, sizeof(void *), old, &old);
+            return original;
+        }
+    }
+    return NULL;
+}
+
+/* Only where the reader sits beside the game: a title whose fix does not ship
+ * it has nothing to fall back to, and its qasf stays as it was. qasf is loaded
+ * here, once, so the module the graph later uses is this one. */
+static void arm_wmv_fallback_(void)
+{
+    WCHAR path[MAX_PATH], *slash;
+    HMODULE self = NULL, qasf;
+    void *was;
+
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCWSTR)(void *)arm_wmv_fallback_, &self) ||
+        !GetModuleFileNameW(self, path, MAX_PATH))
+        return;
+    slash = wcsrchr(path, L'\\');
+    if (!slash || (slash - path) + 32 >= MAX_PATH) return;
+    lstrcpyW(slash + 1, L"mgvf-asf-reader.dll");
+    if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) return;
+    if (!(qasf = LoadLibraryA("qasf.dll"))) { logf_("qasf.dll not loaded; no DirectShow fallback"); return; }
+    was = hook_module_import(qasf, "ole32.dll", "CoCreateInstance", (void *)my_qasf_CoCreateInstance);
+    if (was) *(void **)&real_qasf_CoCreateInstance = was;
+    logf_("DirectShow WMV fallback: %s", was ? "qasf's CoCreateInstance hooked" : "qasf imports no CoCreateInstance");
+    was = hook_module_import(qasf, "wmvcore.dll", "WMCreateReader", (void *)my_qasf_WMCreateReader);
+    if (was) *(void **)&real_qasf_WMCreateReader = was;
+    logf_("DirectShow WM reader: %s", was ? "qasf's WMCreateReader hooked" : "qasf imports no WMCreateReader");
+    was = hook_module_import(GetModuleHandleA(NULL), "ole32.dll", "CoCreateInstance", (void *)my_game_CoCreateInstance);
+    if (was) *(void **)&real_game_CoCreateInstance = was;
+    logf_("DirectShow graph: %s", was ? "the game's CoCreateInstance watched for a filter graph"
+                                       : "the game imports no CoCreateInstance");
+}
+
 static DWORD WINAPI worker(LPVOID unused)
 {
     (void)unused;
     dump_environment();
+    arm_wmv_fallback_();
     AddVectoredExceptionHandler(1, note_exception);
     /* The two levers, from the environment or from a file beside the bottle.
      *

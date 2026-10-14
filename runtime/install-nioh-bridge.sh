@@ -15,8 +15,11 @@
 # and which does nothing at all under Metal. steam_api64.dll was the other
 # candidate and was rejected: nothing here re-exports a Steamworks entry point.
 #
-# This game also needs a WMV3 decoder CrossOver does not ship. See
-# runtime/stage-codecs.sh; the bridge alone will not make the video appear.
+# Its video is WMV3, which no CrossOver decodes. Beside the proxy goes
+# mgvf-asf-reader.dll, which carries a decoder for each path: a DirectShow
+# decoder (wmv-dmo.c), created when wine's WMVideo Decoder DMO cannot be, and
+# a Media Foundation reader (asf-reader.c), used when Media Foundation refuses
+# the file. Where the codec is staged, wine's own plays first.
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
@@ -35,7 +38,7 @@
 # MGVF-SCOPE: folder
 # MGVF-GAME: Nioh | nioh.exe | 
 # MGVF-GAME: Nioh 2 | nioh2.exe | 
-# MGVF-WHY: Cutscene runs with sound and no picture. Needs the staged decoder as well: its video is WMV3.
+# MGVF-WHY: Cutscene runs with sound and no picture. Its video is WMV3, which the fix decodes itself where the engine cannot. Runs on DXMT only.
 
 set -euo pipefail
 
@@ -54,6 +57,10 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 LIVE="$GAME/GfeSDK.dll"
 REAL="$GAME/GfeSDK_real.dll"
 PROXY="$HERE/GfeSDK.dll"
+READER="$HERE/mgvf-asf-reader.dll"
+READER_LICENCES="$HERE/mgvf-asf-reader-LICENCES.md"
+LIVE_READER="$GAME/mgvf-asf-reader.dll"
+LIVE_LICENCES="$GAME/mgvf-asf-reader-LICENCES.md"
 EXPORTS="$HERE/pe.pl"
 # Built from the same source as the Strikers bridge, so it carries the same
 # log name -- which is what identifies one of ours.
@@ -75,13 +82,17 @@ done
 
 case "$MODE" in
 --status)
-  if is_ours "$LIVE" && [ -f "$REAL" ]; then echo installed
+  # An older bridge, or a missing or older reader, is one an install repairs.
+  if is_ours "$LIVE" && [ -f "$REAL" ]; then
+    if cmp -s "$LIVE" "$PROXY" && cmp -s "$LIVE_READER" "$READER"; then echo installed
+    else echo "an older build of the fix is in place; install again" >&2; echo broken; fi
   elif is_ours "$LIVE"; then echo broken
   elif [ ! -f "$LIVE" ] && [ -f "$REAL" ]; then echo half
   else echo absent; fi
   exit 0
   ;;
 --restore)
+  rm -f "$LIVE_READER" "$LIVE_LICENCES"
   if [ -f "$REAL" ]; then
     mv -f "$REAL" "$LIVE"
     echo "restored — the game is back to its own GfeSDK.dll"
@@ -94,8 +105,17 @@ case "$MODE" in
 *) usage ;;
 esac
 
+[ -f "$READER" ] || { echo "error: no reader at $READER" >&2; exit 1; }
+
+# Installed already: bring our two files up to date, which is what a repair is.
 if is_ours "$LIVE" && [ -f "$REAL" ]; then
-  echo "the bridge is already installed, nothing to do"
+  if ! cmp -s "$LIVE" "$PROXY"; then
+    cp "$PROXY" "$LIVE.new" && mv -f "$LIVE.new" "$LIVE" || {
+      rm -f "$LIVE.new"; echo "error: could not replace the older bridge" >&2; exit 1; }
+  fi
+  cp "$READER" "$LIVE_READER" && cp "$READER_LICENCES" "$LIVE_LICENCES" || {
+    echo "error: could not copy the reader beside the game" >&2; exit 1; }
+  echo "installed — the bridge and its decoder are up to date"
   exit 0
 fi
 
@@ -145,16 +165,14 @@ mv -f "$LIVE" "$REAL" || {
   echo "error: the original is not where it should be; refusing to write" >&2
   exit 1
 }
-cp "$PROXY" "$LIVE" || {
+cp "$PROXY" "$LIVE" && cp "$READER" "$LIVE_READER" && cp "$READER_LICENCES" "$LIVE_LICENCES" || {
   echo "error: could not install the bridge; putting the original back" >&2
+  rm -f "$LIVE" "$LIVE_READER" "$LIVE_LICENCES"
   mv -f "$REAL" "$LIVE" || echo "       and that failed too -- it is at $REAL" >&2
   exit 1
 }
 echo
 echo "installed"
 echo "  the video bridge is in place for $GAME_EXE"
-if [ -n "${MGVF_FRONTEND:-}" ]; then
-  echo "  this game also needs the WMV3 codec -- use the Stage codec button"
-else
-  echo "  this game also needs the staged codec -- runtime/stage-codecs.sh"
-fi
+echo "  where the engine cannot decode WMV3, the fix's own decoder does"
+echo "  the game must run on DXMT: CX_GRAPHICS_BACKEND=dxmt"

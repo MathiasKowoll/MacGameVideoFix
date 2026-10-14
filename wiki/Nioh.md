@@ -9,9 +9,42 @@ bridge does.
 | Video | WMV3 in ASF, played through DirectShow rather than Media Foundation |
 | Played by | `IGraphBuilder` into VMR9, presenting onto a shared D3D9 surface |
 | Symptom | `Failure to play movie. (RTM_ID_EV0001)`, then a crash |
-| Fix | Stage the WMV3 decoder, then hand the game a share handle that exists |
+| Fix | The fix's own WMV3 reader (or a staged decoder), then hand the game a share handle that exists |
 | Backend | **DXMT only.** The sidecar needs `GetSharedHandle`, `E_NOTIMPL` under D3DMetal |
-| CrossOver | Stable 26.3 (`cxoffice-26.3.0rc2`), with winevideo 0.5 in the bottle — 27 Aug 2026 |
+| CrossOver | Stable 26.3 (`cxoffice-26.3.0rc2`), with winevideo 0.5 in the bottle — 27 Aug 2026; CrossOver Preview 27 through NotProton with nothing staged (2026-10-14) |
+
+## Without a codec in the engine (2026-10-14)
+
+On CrossOver Preview 27, with nothing staged, the WMV3 failed three times
+over, each failure hiding the next.
+
+1. **The file never reached the ASF reader.** Wine's prefixes carry no
+   `Media Type\Extensions` key for `.wmv`, which on Windows names the WM ASF
+   Reader as its source. So `AddSourceFilter` gave the file to the generic async
+   source, and every decoder was offered the raw bytes: the log showed the WMV
+   decoder offered `MEDIATYPE_Stream` and nothing else. The bridge now watches
+   the game's `CoCreateInstance` for a filter graph (`dshow-graph.c`). For a
+   `.wmv`, `AddSourceFilter` returns the WM ASF Reader as Windows would.
+   `RenderFile` would do the same, but only after wine's own attempt has failed.
+2. **The ASF reader could not open it.** Wine's WM ASF Reader opens through
+   wmvcore's `IWMReader`, and wine's reader prepares every stream decoded as it
+   opens. Without a WMV3 decoder the open fails at once (`0x80004005`). The
+   reader `qasf` creates is wrapped (`wm-reader.c`). Wine's own reader opens
+   first, and keeps the file if it can; otherwise ours opens it with FFmpeg and
+   speaks the reader's protocol to `qasf`: status from another thread, buffers
+   borrowed through `AllocateForOutput`, decoded frames through `OnSample`.
+3. **Wine's WMVideo Decoder DMO cannot be created** (`0xd0000001`), so a DMO
+   of ours (`wmv-dmo.c`) is created in its place. In the run that played it was
+   created but not used, because the reader above hands over frames already
+   decoded.
+
+The result: `AddSourceFilter(movie/EV0001.wmv)` returned the WM ASF Reader,
+our reader opened the 1920x1080 WMV3, and the renderer chose RGB32. Frames were
+delivered and accepted, and the picture reached the shared surface on DXMT.
+The video played.
+
+All three pieces live in `mgvf-asf-reader.dll`. The bridge arms them only when
+that file is beside the game.
 
 ## Verified on 26.3, and what the failure was not
 
