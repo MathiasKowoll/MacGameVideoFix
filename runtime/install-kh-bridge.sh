@@ -154,6 +154,21 @@ find_bottle() {
   printf '%s' "${out%%$'\n'*}"
 }
 
+# A Steam Play prefix is only written while nothing runs in it: a live wineserver
+# keeps the registry in memory and would save its own copy over this edit.
+prefix_stopped() {  # prefix_stopped <prefix dir>
+  local rc=0
+  bottle_server_alive "$1" || rc=$?
+  case "$rc" in
+  1) return 0 ;;
+  0) echo "error: something is running in this prefix: $1" >&2
+     echo "       Quit the game first. Nothing was changed." >&2 ;;
+  *) echo "error: cannot tell whether anything runs in this prefix: $1" >&2
+     echo "       Nothing was changed." >&2 ;;
+  esac
+  return 1
+}
+
 # Is there any CrossOver at all? Used only to fail early with a clear message;
 # which engine runs which bottle is crossover_for_bottle's question, and the
 # answer to this one is never used to run anything.
@@ -287,6 +302,16 @@ override_ok() {
   local b cx exe alive disk rc seen=0
   while read -r b; do
     [ -n "$b" ] || continue
+    # A Steam Play prefix has no engine to ask, so its file is the answer. Only
+    # this installer and a running game write it, and it writes only while no
+    # server holds the prefix, so what the file says is what it wrote.
+    if is_plain_prefix "$b"; then
+      for exe in "${EXE_NAMES[@]}"; do
+        user_reg_has_value "$b" "Software\\Wine\\AppDefaults\\$exe\\DllOverrides" \
+          dinput8 || return 1
+      done
+      seen=$((seen + 1)); continue
+    fi
     # Before either way of reading, because [4/4] skips a bottle that no
     # installed CrossOver matches, and the two halves must judge the same bottles.
     cx="$(crossover_for_bottle "$b")" || continue
@@ -338,9 +363,22 @@ case "$MODE" in
     echo "       Delete $REAL by hand if you want the leftover copy gone." >&2
     exit 1
   fi
+  # A Steam Play prefix is edited as a file, which needs it stopped. Checked
+  # before anything is removed, so a refusal leaves the package as it was.
+  while read -r b; do
+    [ -n "$b" ] || continue
+    is_plain_prefix "$b" || continue
+    prefix_stopped "$b" || exit 1
+  done < <(find_bottles || true)
   rm -f "$LIVE" "$REAL"
   while read -r b; do
     [ -n "$b" ] || continue
+    if is_plain_prefix "$b"; then
+      for exe in "${EXE_NAMES[@]}"; do
+        user_reg_edit "$b" delete "Software\\Wine\\AppDefaults\\$exe\\DllOverrides" dinput8 || true
+      done
+      continue
+    fi
     CX="$(crossover_for_bottle "$b")" || continue
     for exe in "${EXE_NAMES[@]}"; do
       wine_in_bottle "$b" "$CX" --cx-app reg.exe delete \
@@ -382,11 +420,23 @@ BOTTLE="$(find_bottle)" || {
   echo "       Run the game once first, so its bottle exists." >&2
   exit 1
 }
+if is_plain_prefix "$BOTTLE"; then
+  # No CrossOver runs a Steam Play prefix by name, and none is needed: the
+  # original dinput8 is the prefix's own, and the keys go into its user.reg.
+  [ -f "$BOTTLE/drive_c/windows/system32/dinput8.dll" ] || {
+    echo "error: this prefix has no dinput8.dll yet." >&2
+    echo "       Run the game once first, so the prefix is complete." >&2
+    exit 1
+  }
+  prefix_stopped "$BOTTLE" || exit 1
+  echo "      Steam Play prefix: $BOTTLE"
+else
 CX="$(find_crossover)" || {
   echo "error: no CrossOver installation was found in /Applications" >&2
   exit 1
 }
 echo "      bottle: $(basename "$BOTTLE")"
+fi
 echo "      ${#EXE_NAMES[@]} executable(s) that play video in this package"
 
 if [ "$SKIP_FILES" = 0 ]; then
@@ -446,6 +496,20 @@ skipped=0
 failed=0
 while read -r b; do
   [ -n "$b" ] || continue
+  if is_plain_prefix "$b"; then
+    bad=0
+    for exe in "${EXE_NAMES[@]}"; do
+      key="Software\\Wine\\AppDefaults\\$exe\\DllOverrides"
+      if ! user_reg_edit "$b" set "$key" dinput8 "native,builtin" \
+         || ! user_reg_has_value "$b" "$key" dinput8; then
+        bad=$((bad + 1)); echo "      failed: $exe" >&2
+      fi
+    done
+    [ "$bad" = 0 ] || { failed=$((failed + 1)); continue; }
+    echo "      $(basename "$(dirname "$b")")/$(basename "$b")"
+    wrote=$((wrote + 1))
+    continue
+  fi
   CX="$(crossover_for_bottle "$b")" || {
     echo "      skipped $(basename "$b"): no installed CrossOver matches its engine" >&2
     skipped=$((skipped + 1)); continue
@@ -496,6 +560,12 @@ if [ "$wrote" = 0 ] || [ "$failed" -gt 0 ]; then
     rm -f "$LIVE" "$REAL"
     while read -r b; do
       [ -n "$b" ] || continue
+      if is_plain_prefix "$b"; then
+        for exe in "${EXE_NAMES[@]}"; do
+          user_reg_edit "$b" delete "Software\\Wine\\AppDefaults\\$exe\\DllOverrides" dinput8 || true
+        done
+        continue
+      fi
       cx="$(crossover_for_bottle "$b")" || continue
       for exe in "${EXE_NAMES[@]}"; do
         wine_in_bottle "$b" "$cx" --cx-app reg.exe delete \

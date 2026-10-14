@@ -308,3 +308,86 @@ user_reg_has_value() {  # user_reg_has_value <bottle dir> <key under HKCU> <valu
   case "$rc" in 0|1) return "$rc" ;; esac
   return 2
 }
+
+# A PLAIN WINE PREFIX, as Steam Play tools make them: compatdata/<appid>/pfx.
+#
+# It has the registry files and drive_c a bottle has, and no cxbottle.conf, so no
+# CrossOver claims it and `wine --bottle` cannot reach it. What reaches it is the
+# registry file itself, edited while no wineserver holds the prefix -- the one
+# state in which user.reg is the whole registry (see user_reg_has_value).
+is_plain_prefix() {  # is_plain_prefix <dir>
+  [ -f "$1/user.reg" ] && [ -f "$1/system.reg" ] && [ ! -f "$1/cxbottle.conf" ]
+}
+
+# Sets or deletes one string value under HKEY_CURRENT_USER in user.reg.
+#
+# Only to be called while bottle_server_alive says 1: a live server would write
+# its own copy over this one when it next saves. The key and value are given the
+# way user_reg_has_value takes them, and escaped the way wine writes them. A new
+# key gets wine's two header lines -- the section with a Unix time, then #time
+# as a FILETIME. Deleting the last value of a key removes the key with it. The
+# file is replaced by a rename, as wine does, so no reader meets half of it.
+#
+# 0 done (including "already so"), 1 the file could not be written, 2 a name
+# this does not encode.
+user_reg_edit() {  # user_reg_edit <prefix dir> set|delete <key under HKCU> <value name> [data]
+  local reg="$1/user.reg" tmp
+  [ -f "$reg" ] && [ -w "$reg" ] || return 1
+  tmp="$(mktemp "$1/.user.reg.XXXXXX")" || return 1
+  MGVF_REG_MODE="$2" MGVF_REG_KEY="$3" MGVF_REG_VALUE="$4" MGVF_REG_DATA="${5:-}" \
+    LC_ALL=C /usr/bin/perl -e '
+      use strict; use warnings;
+      my ($mode, $key, $name, $data) = @ENV{qw(MGVF_REG_MODE MGVF_REG_KEY MGVF_REG_VALUE MGVF_REG_DATA)};
+      for ($key, $name, $data) { exit 2 if /[^ -~]/ }
+      (my $k = $key)  =~ s/([\\\[\]])/\\$1/g;
+      (my $n = $name) =~ s/([\\"])/\\$1/g;
+      (my $d = $data) =~ s/([\\"])/\\$1/g;
+      my $head = lc "[$k]";
+      my $val  = lc "\"$n\"=";
+      my $line = "\"$n\"=\"$d\"\n";
+      my @l = <STDIN>;
+      my ($start, $end);
+      for my $i (0 .. $#l) {
+        if ($l[$i] =~ /^\[/) {
+          last if defined $start;
+          my $h = lc $l[$i];
+          $start = $i if substr($h, 0, length $head) eq $head
+                      && substr($h, length $head, 1) =~ /^[ \n]$/;
+        }
+        $end = $i if defined $start;
+      }
+      if ($mode eq "set") {
+        if (defined $start) {
+          my $at;
+          for my $i ($start + 1 .. $end) { $at = $i if index(lc $l[$i], $val) == 0 }
+          if (defined $at) { $l[$at] = $line }
+          else {
+            my $ins = $start + 1;
+            $ins++ while $ins <= $end && $l[$ins] =~ /^#/;
+            splice @l, $ins, 0, $line;
+          }
+        } else {
+          push @l, "\n" if @l && $l[-1] ne "\n";
+          my $t = time;
+          my $ft = sprintf "%x", ($t + 11644473600) * 10000000;
+          push @l, "[$k] $t\n", "#time=$ft\n", $line;
+        }
+      } elsif ($mode eq "delete") {
+        if (defined $start) {
+          my @keep = grep { index(lc $l[$_], $val) != 0 } ($start + 1 .. $end);
+          if (grep { $l[$_] =~ /^["@]/ } @keep) {
+            @l = (@l[0 .. $start], @l[@keep], @l[$end + 1 .. $#l]);
+          } else {
+            my $from = $start;
+            $from-- if $from > 0 && $l[$from - 1] eq "\n";
+            my $to = $end;
+            $to-- while $to > $start && $l[$to] eq "\n";
+            splice @l, $from, $to - $from + 1;
+          }
+        }
+      } else { exit 3 }
+      print @l;
+    ' < "$reg" > "$tmp" || { local rc=$?; rm -f "$tmp"; [ "$rc" = 2 ] && return 2; return 1; }
+  chmod "$(stat -f '%Lp' "$reg")" "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$reg" || { rm -f "$tmp"; return 1; }
+}
