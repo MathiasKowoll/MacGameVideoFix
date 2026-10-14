@@ -33,7 +33,7 @@ APP="$HERE/MacGameFix.app"
 MACOS="$APP/Contents/MacOS"
 RES="$APP/Contents/Resources"
 CACHE="${TMPDIR:-/tmp}/mgf-swift-cache"
-VERSION="1.2.0"
+VERSION="1.3.0"
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
