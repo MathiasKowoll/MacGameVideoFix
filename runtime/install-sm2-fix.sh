@@ -81,11 +81,15 @@ game_build() {
   ' "$1"
 }
 
-ini_build() { sed -n 's/^game_build[[:space:]]*=[[:space:]]*//p' "$INI" 2>/dev/null | head -1; }
-ini_shaders() { sed -n 's/^shaders[[:space:]]*=[[:space:]]*//p' "$INI" 2>/dev/null | head -1; }
+# Each answers empty, with status 0, when there is no sm2fix.ini. --restore removes
+# it, and under pipefail a sed that cannot open the file made the assignment in
+# [4/4] fail, so set -e ended a reinstall after the shaders were copied and before
+# the DLL was placed -- with no message at all.
+ini_build() { [ -r "$INI" ] || return 0; sed -n 's/^game_build[[:space:]]*=[[:space:]]*//p' "$INI" | head -1; }
+ini_shaders() { [ -r "$INI" ] || return 0; sed -n 's/^shaders[[:space:]]*=[[:space:]]*//p' "$INI" | head -1; }
 # MGVF's own setting: a UAV barrier after the volumetric fog copy (see
 # sm2-tpose-fix.c). On by default; a 0 someone wrote is kept across reinstalls.
-ini_fog_barrier() { sed -n 's/^mgvf_fog_barrier[[:space:]]*=[[:space:]]*//p' "$INI" 2>/dev/null | head -1; }
+ini_fog_barrier() { [ -r "$INI" ] || return 0; sed -n 's/^mgvf_fog_barrier[[:space:]]*=[[:space:]]*//p' "$INI" | head -1; }
 
 # Current means: set up for this game build, with this fix's shader list, and the
 # DLL in the folder is the one shipped here (an older one of ours is replaced).
