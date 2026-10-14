@@ -33,6 +33,7 @@ Quit a game before installing or removing its fix.
 | Game | What the fix is for | Needs |
 | --- | --- | --- |
 | CONTROL Resonant | Lit rooms behind windows drawn in flat colours | D3DMetal |
+| Devil May Cry 5 | Crashes when a skill preview plays | D3DMetal |
 | God of War | White specks on characters in dim light | DXMT |
 | KINGDOM HEARTS Dream Drop Distance | Cutscenes with a solid green picture; a crash dialog on exit | D3DMetal, a prefix |
 | KINGDOM HEARTS HD 1.5+2.5 ReMIX | The same, for the six titles of the package | D3DMetal, a prefix |
@@ -102,6 +103,13 @@ Measured on 2026-10-14: on CrossOver Preview 27 through NotProton, with D3DMetal
 repair, in a diagnostic build, brought the game up on 4.0b3 with Metal 4 on and
 off, on a CrossOver carrying MacGameVideoFix's engine. D3DMetal 4.0b2 with the
 repair was not run.
+
+### Devil May Cry 5 decodes its own previews
+
+The skill previews on its Customize screen are VC-1, the same codec as Persona
+5 Strikers' videos, and they use the same reader. Measured on 2026-10-14 on
+CrossOver Preview 27 through NotProton, with nothing else installed: the
+previews play.
 
 ### Persona 5 Strikers decodes its own video
 
