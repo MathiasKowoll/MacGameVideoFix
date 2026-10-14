@@ -34,6 +34,7 @@ Quit a game before installing or removing its fix.
 | --- | --- | --- |
 | CONTROL Resonant | Lit rooms behind windows drawn in flat colours | D3DMetal |
 | Devil May Cry 5 | Crashes when a skill preview plays | D3DMetal |
+| DYNASTY WARRIORS: ORIGINS | Cutscenes with sound and no picture | D3DMetal, CrossOver Preview 27 |
 | God of War | White specks on characters in dim light | DXMT |
 | KINGDOM HEARTS Dream Drop Distance | Cutscenes with a solid green picture; a crash dialog on exit | D3DMetal, a prefix |
 | KINGDOM HEARTS HD 1.5+2.5 ReMIX | The same, for the six titles of the package | D3DMetal, a prefix |
@@ -86,6 +87,15 @@ nothing runs in it, and the installer refuses otherwise. The CrossOver route is
 the one measured with the game. The Steam Play route was tested on a prefix --
 install, check, remove, and Wine reading the key back -- but not yet with
 KINGDOM HEARTS itself running from one.
+
+### DYNASTY WARRIORS: ORIGINS needs CrossOver Preview
+
+Its cutscenes are VP9 in WebM, like NINJA GAIDEN 4's, and the same holds:
+stable CrossOver 26.3 cannot open them, while CrossOver Preview 27 can, by
+itself. The fix is a bridge that carries each decoded frame from the game's
+D3D11 video device to its D3D12 renderer. Measured on 2026-10-14 on CrossOver
+Preview 27 through NotProton, D3DMetal, with nothing else installed: the
+cutscene plays with its sound.
 
 ### NINJA GAIDEN 4 needs CrossOver Preview
 
