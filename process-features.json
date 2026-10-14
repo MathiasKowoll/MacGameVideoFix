@@ -38,7 +38,7 @@
     "DevilMayCry5.exe": {
       "title": "Devil May Cry 5",
       "backend": "d3dmetal",
-      "codec": "libgstlibav",
+      "codec": "",
       "gptk": "",
       "env": {},
       "symptom": "Crashes when a skill preview video plays"

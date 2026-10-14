@@ -132,7 +132,7 @@ GAMES = [
      "Fixed", "Tormented-Souls-2"),
     ("Devil May Cry 5", "RE Engine",
      "Crashes when a skill preview video plays",
-     "Staged VC-1 codec. Nothing installed beside the game",
+     "Its own VC-1 reader, handed what Media Foundation refuses",
      "D3DMetal", "12", MEASURED,
      "Fixed", "RE-Engine-VC1"),
     ("RESIDENT EVIL 2", "RE Engine",
@@ -464,7 +464,11 @@ CODEC = {
     "Persona 5 Strikers": NONE,
     "Nioh": "`libgstlibav`",
     "Nioh 2": "`libgstlibav`",
-    "Devil May Cry 5": "`libgstlibav`",
+    # Measured with nothing staged on 2026-10-14, on CrossOver Preview 27: the
+    # fix hands a refused stream to its own reader (mgvf-asf-reader.dll), and
+    # the skill previews play. RESIDENT EVIL 2 and 3 stay on the staged codec
+    # until they are run the same way.
+    "Devil May Cry 5": NONE,
     "RESIDENT EVIL 2": "`libgstlibav`",
     "RESIDENT EVIL 3": "`libgstlibav`",
     "NieR Replicant ver.1.22474487139": "`libgstlibav`",
@@ -962,12 +966,12 @@ def hand_counts(paths):
 # anything reading the manifest.
 #
 # The executable is read off a real install rather than guessed, which is why
-# this table is short: Devil May Cry 5 is on the machine this was written on and
-# the two RESIDENT EVIL folders are empty shells. The generator says out loud
+# this table is short -- and now empty: Devil May Cry 5 was here until its fix
+# grew an installer (2026-10-14), and the two RESIDENT EVIL folders are empty
+# shells. The generator says out loud
 # which titles it could not carry, so the gap is a line of output rather than an
 # absence nobody notices.
 CODEC_ONLY_EXE = {
-    "Devil May Cry 5": "DevilMayCry5.exe",
 }
 
 # METAL GEAR SOLID: Peace Walker is absent from this file for a reason worth

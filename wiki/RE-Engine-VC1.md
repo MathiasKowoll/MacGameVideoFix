@@ -1,8 +1,8 @@
 # Devil May Cry 5, RESIDENT EVIL 2 and RESIDENT EVIL 3
 
 Three Capcom titles on the same engine, with the same fault and the same
-one-line answer. Nothing is installed beside the game for these: the app already
-stages what they need, and the fix is to let it.
+one-line answer: the staged codec. Devil May Cry 5 has a second answer since
+2026-10-14 that needs nothing of the engine; see the next section.
 
 | | |
 | --- | --- |
@@ -11,6 +11,26 @@ stages what they need, and the fix is to let it.
 | Fix | The staged codec, wired into the bottle. The app does this |
 | Backend | D3DMetal, D3D12 |
 | CrossOver | Stable 26.3 |
+
+## Devil May Cry 5 without the codec (2026-10-14)
+
+Its fix now goes in the game folder. `amd_ags_x64.dll`, which the game imports,
+is replaced by a proxy built from `runtime/mf-reader-fallback.c` that does one
+thing. When `MFCreateSourceReaderFromByteStream` refuses a stream, the proxy
+hands that stream to `mgvf-asf-reader.dll`, the FFmpeg-based reader written for
+[Persona 5 Strikers](Persona-5-Strikers.md), and returns that reader in place
+of the refusal. No device, no vtable and no other call is touched. A stream
+Media Foundation opens never reaches the proxy, so where the codec is staged it
+still plays first.
+
+Measured on CrossOver Preview 27 through NotProton, D3DMetal, nothing staged.
+Media Foundation refused the first preview (`0xc00d36bb`), and the reader
+opened it: VC-1, 320x180, no audio, and no device manager, so the frames go out
+in system memory. The previews on the Customize screen play, and loop: each
+clip reaches its end, and the game seeks back to the start and plays it again.
+
+**Not measured yet:** RESIDENT EVIL 2 and 3 with this proxy, and stable 26.3
+without the staged codec.
 
 ## Two kinds of video, and only one of them works out of the box
 
