@@ -137,12 +137,12 @@ GAMES = [
      "Fixed", "RE-Engine-VC1"),
     ("RESIDENT EVIL 2", "RE Engine",
      "Crashes when a video plays",
-     "The same staged VC-1 codec, unchanged",
+     "The same reader as Devil May Cry 5, on its own build of the proxy",
      "D3DMetal", "12", MEASURED,
      "Fixed", "RE-Engine-VC1"),
     ("RESIDENT EVIL 3", "RE Engine",
      "Crashes when a video plays",
-     "The same staged VC-1 codec, unchanged",
+     "The same reader and proxy as RESIDENT EVIL 2",
      "D3DMetal", "12", MEASURED,
      "Fixed", "RE-Engine-VC1"),
     ("NINJA GAIDEN 4", "Koei Tecmo, in-house",
@@ -469,8 +469,10 @@ CODEC = {
     # the skill previews play. RESIDENT EVIL 2 and 3 stay on the staged codec
     # until they are run the same way.
     "Devil May Cry 5": NONE,
-    "RESIDENT EVIL 2": "`libgstlibav`",
-    "RESIDENT EVIL 3": "`libgstlibav`",
+    # Measured like Devil May Cry 5 on 2026-10-14: Preview 27, nothing staged,
+    # the videos play with their sound.
+    "RESIDENT EVIL 2": NONE,
+    "RESIDENT EVIL 3": NONE,   # measured as RESIDENT EVIL 2, 2026-10-14
     "NieR Replicant ver.1.22474487139": "`libgstlibav`",
     "NINJA GAIDEN 4": "`libgstmatroska`",
     "DYNASTY WARRIORS: ORIGINS": "`libgstmatroska`",
@@ -966,9 +968,9 @@ def hand_counts(paths):
 # anything reading the manifest.
 #
 # The executable is read off a real install rather than guessed, which is why
-# this table is short -- and now empty: Devil May Cry 5 was here until its fix
-# grew an installer (2026-10-14), and the two RESIDENT EVIL folders are empty
-# shells. The generator says out loud
+# this table is short -- and now empty: Devil May Cry 5 and both RESIDENT EVIL
+# titles left it on 2026-10-14, when their fix grew an installer that declares
+# their executables. The generator says out loud
 # which titles it could not carry, so the gap is a line of output rather than an
 # absence nobody notices.
 CODEC_ONLY_EXE = {

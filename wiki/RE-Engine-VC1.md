@@ -1,18 +1,18 @@
 # Devil May Cry 5, RESIDENT EVIL 2 and RESIDENT EVIL 3
 
-Three Capcom titles on the same engine, with the same fault and the same
-one-line answer: the staged codec. Devil May Cry 5 has a second answer since
-2026-10-14 that needs nothing of the engine; see the next section.
+Three Capcom titles on the same engine, with the same fault. The answer was
+the staged codec; since 2026-10-14 all three carry their own decoder in the
+game folder instead, and need nothing of the engine. See the next section.
 
 | | |
 | --- | --- |
 | Symptom | Crashes when a particular video plays. In Devil May Cry 5 it is the skill previews on the Customize screen |
 | Cause | The video is VC-1, and CrossOver ships no VC-1 decoder |
-| Fix | The staged codec, wired into the bottle. The app does this |
+| Fix | The fix's own VC-1 reader in the game folder (`install-re-vc1-fix.sh`); the staged codec still works and is used first where present |
 | Backend | D3DMetal, D3D12 |
-| CrossOver | Stable 26.3 |
+| CrossOver | Stable 26.3 with the codec staged; CrossOver Preview 27 through NotProton with nothing staged (2026-10-14) |
 
-## Devil May Cry 5 without the codec (2026-10-14)
+## Without the codec (2026-10-14)
 
 Its fix now goes in the game folder. `amd_ags_x64.dll`, which the game imports,
 is replaced by a proxy built from `runtime/mf-reader-fallback.c` that does one
@@ -29,8 +29,15 @@ opened it: VC-1, 320x180, no audio, and no device manager, so the frames go out
 in system memory. The previews on the Customize screen play, and loop: each
 clip reaches its end, and the game seeks back to the start and plays it again.
 
-**Not measured yet:** RESIDENT EVIL 2 and 3 with this proxy, and stable 26.3
-without the staged codec.
+**RESIDENT EVIL 2 and 3**, the same day and the same way: Media Foundation
+refused the video, the reader opened it (VC-1, 1920x1080, no audio inside the
+ASF, about one and one and a half minutes long), and the videos played with
+their sound. RESIDENT EVIL 2 and 3 ship the very same `amd_ags_x64.dll` (same sha256),
+so one build of the proxy serves both; Devil May Cry 5's AGS is an older
+version with other exports and has its own. `install-re-vc1-fix.sh` installs
+all three and picks the build by the executable it finds.
+
+**Not measured yet:** stable 26.3 without the staged codec.
 
 ## Two kinds of video, and only one of them works out of the box
 

@@ -1,26 +1,32 @@
 #!/usr/bin/env bash
 #
-# Install the Devil May Cry 5 video fix.
+# Install the RE Engine video fix: Devil May Cry 5, RESIDENT EVIL 2 and 3.
 #
-#     install-dmc5-fix.sh <game folder>            install
-#     install-dmc5-fix.sh <game folder> --status   report
-#     install-dmc5-fix.sh <game folder> --restore  undo
+#     install-re-vc1-fix.sh <game folder>            install
+#     install-re-vc1-fix.sh <game folder> --status   report
+#     install-re-vc1-fix.sh <game folder> --restore  undo
 #
-# The skill previews on the Customize screen are VC-1 in ASF, which no
+# Some of these games' videos are VC-1 in ASF -- Devil May Cry 5's skill
+# previews on the Customize screen, RESIDENT EVIL 2's cutscenes -- which no
 # CrossOver decodes. Without a decoder Media Foundation refuses the stream, the
 # game uses the reader it never got, and it crashes. The fix hands a refused
 # stream to mgvf-asf-reader.dll, a reader built on FFmpeg (asf-reader.c),
 # through mf-reader-fallback.c; a stream Media Foundation opens never reaches
 # it, so the staged codec, where present, still plays first.
 #
-# It rides on amd_ags_x64.dll, which the game imports. Measured on CrossOver
-# Preview 27 through NotProton, D3DMetal, nothing staged: the previews play.
+# It rides on amd_ags_x64.dll, which each game imports. Each ships its own AMD
+# AGS version with its own exports, so each has its own build of the proxy,
+# chosen by the executable found in the folder. Measured on CrossOver Preview
+# 27 through NotProton, D3DMetal, nothing staged (2026-10-14): Devil May Cry 5's
+# previews play, and RESIDENT EVIL 2's and 3's videos play with their sound.
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # MGVF-SCOPE: folder
 # MGVF-GAME: Devil May Cry 5 | DevilMayCry5.exe |
-# MGVF-WHY: Crashes when a skill preview plays: the video is VC-1, which the fix decodes itself where the engine cannot.
+# MGVF-GAME: RESIDENT EVIL 2 | re2.exe |
+# MGVF-GAME: RESIDENT EVIL 3 | re3.exe |
+# MGVF-WHY: Crashes when a VC-1 video plays; the fix decodes it itself where the engine cannot.
 
 set -euo pipefail
 
@@ -35,7 +41,6 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 
 LIVE="$GAME/amd_ags_x64.dll"
 REAL="$GAME/amd_ags_x64_real.dll"
-PROXY="$HERE/amd_ags_x64-dmc5.dll"
 READER="$HERE/mgvf-asf-reader.dll"
 READER_LICENCES="$HERE/mgvf-asf-reader-LICENCES.md"
 LIVE_READER="$GAME/mgvf-asf-reader.dll"
@@ -45,11 +50,15 @@ MARKER='mgvf-mf-fallback.log'
 
 is_ours() { [ -f "$1" ] && LC_ALL=C grep -qa "$MARKER" "$1"; }
 
-[ -f "$GAME/DevilMayCry5.exe" ] || {
-  echo "error: no DevilMayCry5.exe in $GAME" >&2
-  echo "       Pick the folder Devil May Cry 5 is installed in." >&2
+if [ -f "$GAME/DevilMayCry5.exe" ]; then PROXY="$HERE/amd_ags_x64-dmc5.dll"
+# RESIDENT EVIL 3 ships the very same amd_ags_x64.dll as RESIDENT EVIL 2
+# (same sha256, read off both installs), so one build serves both.
+elif [ -f "$GAME/re2.exe" ] || [ -f "$GAME/re3.exe" ]; then PROXY="$HERE/amd_ags_x64-re2.dll"
+else
+  echo "error: no DevilMayCry5.exe, re2.exe or re3.exe in $GAME" >&2
+  echo "       Pick the folder the game is installed in." >&2
   exit 1
-}
+fi
 
 case "$MODE" in
 --status)

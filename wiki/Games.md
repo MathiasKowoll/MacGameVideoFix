@@ -34,8 +34,8 @@ engine of ours are the ones where that was not enough.
 | [TMNT: Splintered Fate](TMNT-Splintered-Fate.md) | Rebirth, in-house | Opens a window, then closes silently | A guard on the D3D12 call that ends the process instead of failing | D3DMetal | 12 | 4.0b2 | Stock | 26.3, our winegstreamer | Fixed |
 | [Tormented Souls 2](Tormented-Souls-2.md) | Unreal Engine 5 | Fatal error before the first frame | 16:9 modes added to a list that offered none | D3DMetal | 12 | 4.0b2 | Stock | 26.3, our winegstreamer | Fixed |
 | [Devil May Cry 5](RE-Engine-VC1.md) | RE Engine | Crashes when a skill preview video plays | Its own VC-1 reader, handed what Media Foundation refuses | D3DMetal | 12 | not measured | Stock | 26.3, our winegstreamer | Fixed |
-| [RESIDENT EVIL 2](RE-Engine-VC1.md) | RE Engine | Crashes when a video plays | The same staged VC-1 codec, unchanged | D3DMetal | 12 | not measured | Stock | 26.3, our winegstreamer | Fixed |
-| [RESIDENT EVIL 3](RE-Engine-VC1.md) | RE Engine | Crashes when a video plays | The same staged VC-1 codec, unchanged | D3DMetal | 12 | not measured | Stock | 26.3, our winegstreamer | Fixed |
+| [RESIDENT EVIL 2](RE-Engine-VC1.md) | RE Engine | Crashes when a video plays | The same reader as Devil May Cry 5, on its own build of the proxy | D3DMetal | 12 | not measured | Stock | 26.3, our winegstreamer | Fixed |
+| [RESIDENT EVIL 3](RE-Engine-VC1.md) | RE Engine | Crashes when a video plays | The same reader and proxy as RESIDENT EVIL 2 | D3DMetal | 12 | not measured | Stock | 26.3, our winegstreamer | Fixed |
 | [NINJA GAIDEN 4](Ninja-Gaiden-4.md) | Koei Tecmo, in-house | Says the VP9 codec is missing, then exits | Staged Matroska demuxer, and the MFT gate answered | D3DMetal | 12 | **3.0**, or **4.0b3** with the fence repair this fix carries -- on 4.0b2 without it nothing is ever presented; 4.0b2 with it was not run | Stock | 26.3, our winegstreamer | Fixed |
 | [RESONANCE: A PLAGUE TALE LEGACY](Resonance-A-Plague-Tale-Legacy.md) | Asobo, in-house | Fatal error: Shader Model 6.7 is not supported | Shader model floor lowered in memory; HDR10 off in ENGINESETTINGS | D3DMetal | 12 | not measured | Stock | 26.3, our winegstreamer | Plays at the desktop resolution with HDR10 off -- its cutscenes have never been visible |
 | [CONTROL Resonant](Control-Resonant.md) | Northlight, Remedy in-house | Windows light up in flat violet, cyan and yellow | The window-interior shader kept from drawing; Metal 4 off | D3DMetal | 12 | 4.0b2 | Stock | 26.3, our winegstreamer | Plays with Metal 4 off; lit rooms behind windows show as dark glass |
@@ -287,9 +287,9 @@ to prefer our file at all.
 | [KINGDOM HEARTS HD 1.5+2.5 ReMIX](Kingdom-Hearts.md) | D3DMetal | 11 + 12 | not measured | `dinput8.dll` | `dinput8_real.dll` | `dwo-video-bridge.c` | — | — | yes |
 | [TMNT: Splintered Fate](TMNT-Splintered-Fate.md) | D3DMetal | 12 | 4.0b2 | `fmod.dll` | `fmod_real.dll` | `d3d12-guards.c` | — | — | — |
 | [Tormented Souls 2](Tormented-Souls-2.md) | D3DMetal | 12 | 4.0b2 | `OpenColorIO_2_3.dll` | `OpenColorIO_2_3_real.dll` | `d3d12-guards.c` | — | — | — |
-| [Devil May Cry 5](RE-Engine-VC1.md) | D3DMetal | 12 | not measured | `amd_ags_x64.dll` | `amd_ags_x64_real.dll` | `mf-reader-fallback.c` | — | — | — |
-| [RESIDENT EVIL 2](RE-Engine-VC1.md) | D3DMetal | 12 | not measured | — | — | — | `libgstlibav` | — | — |
-| [RESIDENT EVIL 3](RE-Engine-VC1.md) | D3DMetal | 12 | not measured | — | — | — | `libgstlibav` | — | — |
+| [Devil May Cry 5](RE-Engine-VC1.md) | D3DMetal | 12 | not measured | `amd_ags_x64.dll` | `amd_ags_x64_real.dll` | — | — | — | — |
+| [RESIDENT EVIL 2](RE-Engine-VC1.md) | D3DMetal | 12 | not measured | `amd_ags_x64.dll` | `amd_ags_x64_real.dll` | — | — | — | — |
+| [RESIDENT EVIL 3](RE-Engine-VC1.md) | D3DMetal | 12 | not measured | `amd_ags_x64.dll` | `amd_ags_x64_real.dll` | — | — | — | — |
 | [NINJA GAIDEN 4](Ninja-Gaiden-4.md) | D3DMetal | 12 | **3.0**, or **4.0b3** with the fence repair this fix carries -- on 4.0b2 without it nothing is ever presented; 4.0b2 with it was not run | `dstorage.dll` | `dstorage_real.dll` | `ng4-observe.c` | `libgstmatroska` | `BEAST_FORCE_NV12`, `BEAST_REFUSE_D3D_MANAGER`, `NG4_ANSWER_MFT`, `NG4_CAPS_LIKE_3`, `NG4_CPU_DECOMP`, `NG4_FAKE_OPTIONS17`, `NG4_FLIP_MODEL`, `NG4_FORCE_PATCH`, `NG4_FORCE_WINDOWED`, `NG4_NO_D3D11_PATCH`, `NG4_NO_TEARING`, `NG4_NO_WAITABLE`, `NG4_PAINT_TEST`, `NG4_PATCH_D3D12`, `NG4_REFUSE_DSTORAGE`, `NG4_SELECT_STREAM`, `NG4_SMALL_STAGING`, `NG4_WATCH_CAPS`, `NG4_WATCH_D3D12_RESOURCES`, `NG4_WATCH_FENCES`, `NG4_WATCH_MOVIE_COPY`, `NG4_WATCH_PRESENT`, `NG4_WITHHOLD_D3D_FROM_MFT` | — |
 | [RESONANCE: A PLAGUE TALE LEGACY](Resonance-A-Plague-Tale-Legacy.md) | D3DMetal | 12 | not measured | `NvCloth_x64.dll` | `NvCloth_x64_real.dll` | `shader-floor-fix.c` | — | — | — |
 | [CONTROL Resonant](Control-Resonant.md) | D3DMetal | 12 | 4.0b2 | `PxFoundation_x64.dll` | `PxFoundation_x64_real.dll` | `ctl-window-fix.c` | — | — | — |
@@ -301,7 +301,7 @@ to prefer our file at all.
 because it has nothing to do with video. **Kept as** is what the original is
 renamed to; where the carrier is a DLL Wine implements itself, that original is
 a copy taken from your own CrossOver and nothing is redistributed. **Bridge** is
-the source the shipped proxy was built from: 11 sources serve every title
+the source the shipped proxy was built from: 10 sources serve every title
 here, so a fault found in one is often already fixed in the others.
 
 **Registry** says whether Wine has to be told to prefer our DLL. 3 fixes
@@ -317,7 +317,7 @@ levers, not requirements: each one defaults to the setting the fix was measured
 with, and they exist so a failing title can be bisected without a rebuild.
 
 **Codec** is the plugin that has to be in front of CrossOver before the title
-can play. 5 titles need a decoder no CrossOver ships, 2 need a
+can play. 3 titles need a decoder no CrossOver ships, 2 need a
 demuxer, and telling those two cases apart is most of the work -- see
 [How the codec staging works](How-the-codec-staging-works.md). Stable 26.3
 ships no `matroska` plugin at all, so the demuxer rows say what has to be put

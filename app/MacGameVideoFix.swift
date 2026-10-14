@@ -215,6 +215,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
     case spiderMan2
     case godOfWar
     case devilMayCry5
+    case residentEvil2
+    case residentEvil3
 
     var id: String { rawValue }
 
@@ -244,6 +246,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .spiderMan2:         return "Marvel's Spider-Man 2"
         case .godOfWar:           return "God of War"
         case .devilMayCry5:       return "Devil May Cry 5"
+        case .residentEvil2:      return "RESIDENT EVIL 2"
+        case .residentEvil3:      return "RESIDENT EVIL 3"
         }
     }
 
@@ -272,6 +276,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .spiderMan2:         return "Characters stay in a T-pose"
         case .godOfWar:           return "White specks on characters in dim light"
         case .devilMayCry5:       return "Crashes when a skill preview plays"
+        case .residentEvil2:      return "Crashes when a video plays"
+        case .residentEvil3:      return "Crashes when a video plays"
         }
     }
 
@@ -303,6 +309,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .spiderMan2:         return "Spider-Man2.exe"
         case .godOfWar:           return "GoW.exe"
         case .devilMayCry5:       return "DevilMayCry5.exe"
+        case .residentEvil2:      return "re2.exe"
+        case .residentEvil3:      return "re3.exe"
         case .tormentedSouls2:    return "TormentedSouls2.exe"
         }
     }
@@ -343,6 +351,10 @@ enum SupportedGame: String, CaseIterable, Identifiable {
             return "the folder holding GoW.exe"
         case .devilMayCry5:
             return "the folder holding DevilMayCry5.exe"
+        case .residentEvil2:
+            return "the folder holding re2.exe"
+        case .residentEvil3:
+            return "the folder holding re3.exe"
         case .witcher3:
             return "the game folder, the one holding bin"
         default:               return "the game folder, the one with Engine inside"
@@ -387,6 +399,10 @@ enum SupportedGame: String, CaseIterable, Identifiable {
             return "…/steamapps/common/GodOfWar"
         case .devilMayCry5:
             return "…/steamapps/common/Devil May Cry 5"
+        case .residentEvil2:
+            return "…/steamapps/common/RESIDENT EVIL 2  BIOHAZARD RE2"
+        case .residentEvil3:
+            return "…/steamapps/common/RE3"
         }
     }
 
@@ -396,7 +412,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
              .nioh, .nioh2, .nioh3,
              .nierReplicant, .woLong,
              .kingdomHearts28, .kingdomHearts1525,
-             .devilMayCry5:                          return [.videoBridge]
+             .devilMayCry5, .residentEvil2,
+             .residentEvil3:                         return [.videoBridge]
         case .tmntSplinteredFate,
              .tormentedSouls2:                      return [.guardCall]
         // Not a bridge and not a guard: this one answers a gate the game asks
@@ -466,7 +483,7 @@ enum SupportedGame: String, CaseIterable, Identifiable {
         case .godOfWar:        return "install-gow-fix.sh"
         /* A refused video handed to the fix's own FFmpeg reader; no device,
          * no vtable, nothing else of the game touched. */
-        case .devilMayCry5:    return "install-dmc5-fix.sh"
+        case .devilMayCry5, .residentEvil2, .residentEvil3: return "install-re-vc1-fix.sh"
         default:               return "install-runtime-fix.sh"
         }
     }
@@ -554,7 +571,8 @@ enum SupportedGame: String, CaseIterable, Identifiable {
             || self == .tmntSplinteredFate || self == .tormentedSouls2
             || self == .ninjaGaiden4 || self == .resonance
             || self == .ninjaGaiden3 || self == .controlResonant || self == .witcher3
-            || self == .spiderMan2 || self == .godOfWar || self == .devilMayCry5 {
+            || self == .spiderMan2 || self == .godOfWar || self == .devilMayCry5
+            || self == .residentEvil2 || self == .residentEvil3 {
             guard let exe = executablePath else { return nil }
             var candidates = [url]
             if let subs = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
@@ -670,6 +688,14 @@ enum Title {
         for c in candidates
         where fm.fileExists(atPath: c.appendingPathComponent("DevilMayCry5.exe").path) {
             return .bridgeGame(c, .devilMayCry5)
+        }
+        for c in candidates
+        where fm.fileExists(atPath: c.appendingPathComponent("re2.exe").path) {
+            return .bridgeGame(c, .residentEvil2)
+        }
+        for c in candidates
+        where fm.fileExists(atPath: c.appendingPathComponent("re3.exe").path) {
+            return .bridgeGame(c, .residentEvil3)
         }
         if let g = GameFolder.locate(from: url) { return .unrealVP9(g) }
         return nil
@@ -3941,7 +3967,7 @@ extension SupportedGame {
              .nierReplicant, .woLong, .kingdomHearts28, .kingdomHearts1525,
              .tmntSplinteredFate, .tormentedSouls2, .ninjaGaiden4,
              .ninjaGaiden3, .resonance, .controlResonant, .witcher3, .spiderMan2,
-             .godOfWar, .devilMayCry5:
+             .godOfWar, .devilMayCry5, .residentEvil2, .residentEvil3:
             return FileManager.default.fileExists(
                 atPath: folder.appendingPathComponent(executablePath ?? exe).path)
         default:
