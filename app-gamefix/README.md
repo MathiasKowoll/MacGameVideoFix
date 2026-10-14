@@ -44,6 +44,8 @@ Quit a game before installing or removing its fix.
 | NINJA GAIDEN 4 | Says the VP9 codec is missing, then exits; on D3DMetal 4, nothing is ever drawn | D3DMetal 3 or 4.0b3, CrossOver Preview 27 |
 | Nioh 3 | "Failed to play movie" | D3DMetal |
 | Persona 5 Strikers | Video never starts; sound only | DXMT |
+| RESIDENT EVIL 2 | Crashes when a video plays | D3DMetal |
+| RESIDENT EVIL 3 | Crashes when a video plays | D3DMetal |
 | RESONANCE: A Plague Tale Legacy | "Shader Model 6.7 is not supported" | D3DMetal |
 | TMNT: Splintered Fate | Opens a window, then closes | D3DMetal |
 | The Witcher 3: Wild Hunt | Black screen at start; DLSS said to be unsupported | D3DMetal |
@@ -104,12 +106,13 @@ repair, in a diagnostic build, brought the game up on 4.0b3 with Metal 4 on and
 off, on a CrossOver carrying MacGameVideoFix's engine. D3DMetal 4.0b2 with the
 repair was not run.
 
-### Devil May Cry 5 decodes its own previews
+### Devil May Cry 5 and RESIDENT EVIL 2 and 3 decode their own videos
 
-The skill previews on its Customize screen are VC-1, the same codec as Persona
-5 Strikers' videos, and they use the same reader. Measured on 2026-10-14 on
-CrossOver Preview 27 through NotProton, with nothing else installed: the
-previews play.
+Some of their videos are VC-1: Devil May Cry 5's skill previews on the
+Customize screen, and the two RESIDENT EVIL games' cutscenes. That is the same
+codec as Persona 5 Strikers' videos, and these games use the same reader.
+Measured on 2026-10-14 on CrossOver Preview 27 through NotProton, with nothing
+else installed: the previews and the videos play, with their sound.
 
 ### Persona 5 Strikers decodes its own video
 
