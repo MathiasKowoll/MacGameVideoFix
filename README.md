@@ -1,5 +1,13 @@
 # MacGameVideoFix
 
+> **Archived on 2026-10-16.** Nothing new is made here: the engine work is
+> finished, and the fixes now live only in the games' own folders. The per-game
+> fixes, their sources, the table and this project's findings moved to
+> [MacGameFix](https://github.com/MathiasKowoll/MacGameFix), which installs
+> them for CrossOver as CodeWeavers ships it, CrossOver Preview and Steam Play
+> tools such as NotProton, keeps them applied and updates them. The releases
+> here stay available as they are.
+
 Makes Windows games show their cutscenes under CrossOver on Apple Silicon.
 
 > ### New in 5: METAL GEAR SOLID: Peace Walker
